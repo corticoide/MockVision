@@ -570,8 +570,8 @@ func dedupe(in []string) []string {
 	return out
 }
 
-// ListCameras returns every camera.
-func (s *Service) ListCameras(ctx context.Context) ([]CameraView, error) {
+// ListCameras returns the cameras that pass the filter, by name.
+func (s *Service) ListCameras(ctx context.Context, f CameraFilter) ([]CameraView, error) {
 	cams, err := s.store.R().ListCameras(ctx)
 	if err != nil {
 		return nil, err
@@ -582,7 +582,9 @@ func (s *Service) ListCameras(ctx context.Context) ([]CameraView, error) {
 		if err != nil {
 			continue // deleted meanwhile
 		}
-		out = append(out, *v)
+		if f.Match(v) {
+			out = append(out, *v)
+		}
 	}
 	return out, nil
 }
@@ -850,7 +852,8 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 
 // DeleteCamera stops a camera and removes it with its events.
 func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) error {
-	if _, err := s.store.R().GetCamera(ctx, id); err != nil {
+	cam, err := s.store.R().GetCamera(ctx, id)
+	if err != nil {
 		return store.NotFound(err)
 	}
 	lock := s.opLock(id)
@@ -869,7 +872,7 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 		return err
 	}
 	s.metrics.Remove(id)
-	s.audit(ctx, actor, "camera.delete", "camera", id, nil)
+	s.audit(ctx, actor, "camera.delete", "camera", id, map[string]string{"name": cam.Name})
 	s.pub.Publish("cameras", "deleted", map[string]string{"id": id})
 	return nil
 }

@@ -30,8 +30,11 @@ type Options struct {
 	Exe string
 	// ParentInterface overrides the default parent NIC of cameras.
 	ParentInterface string
-	Runtime         netctl.Runtime
-	Log             *slog.Logger
+	// Listen is the address of the panel and the API, shown on the
+	// dashboard (D63).
+	Listen  string
+	Runtime netctl.Runtime
+	Log     *slog.Logger
 }
 
 // Publisher pushes live updates to the panel (WebSocket topics).
@@ -137,6 +140,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.bootCameras(ctx); err != nil {
 		return err
 	}
+	s.measureInterface(ctx)
 	s.goLoop(func(ctx context.Context) { s.node.Run(ctx, 2*time.Second) })
 	s.goLoop(s.publishNodeMetrics)
 	s.goLoop(s.watchExits)
@@ -243,6 +247,6 @@ func (s *Service) applyRetention(ctx context.Context) {
 	if n, err := w.DeleteEventsBefore(ctx, eventsBefore); err == nil && n > 0 {
 		s.log.Info("retention: deleted events", "count", n)
 	}
-	_, _ = w.DeleteAuditBefore(ctx, now.AddDate(0, 0, -90).UnixMilli())
+	_, _ = w.DeleteAuditBefore(ctx, now.Add(-AuditRetention).UnixMilli())
 	_, _ = w.DeleteExpiredSessions(ctx, now.UnixMilli())
 }

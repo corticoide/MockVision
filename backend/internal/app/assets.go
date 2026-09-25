@@ -175,7 +175,7 @@ func (s *Service) DeleteAsset(ctx context.Context, actor Actor, id string) error
 		ext = ".png"
 	}
 	_ = os.Remove(s.lib.AssetPath(a.Sha256, ext))
-	s.audit(ctx, actor, "asset.delete", "asset", id, nil)
+	s.audit(ctx, actor, "asset.delete", "asset", id, map[string]string{"name": a.Filename})
 	return nil
 }
 

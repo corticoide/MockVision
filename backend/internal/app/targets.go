@@ -169,7 +169,8 @@ func (s *Service) UpdateTarget(ctx context.Context, actor Actor, id string, in T
 // DeleteTarget removes an unused target (RN-12: targets in use are
 // disabled instead).
 func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) error {
-	if _, err := s.store.R().GetTarget(ctx, id); err != nil {
+	t, err := s.store.R().GetTarget(ctx, id)
+	if err != nil {
 		return store.NotFound(err)
 	}
 	if cams, _ := s.store.R().CamerasUsingTarget(ctx, id); len(cams) > 0 {
@@ -181,7 +182,7 @@ func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) erro
 		}
 		return err
 	}
-	s.audit(ctx, actor, "target.delete", "target", id, nil)
+	s.audit(ctx, actor, "target.delete", "target", id, map[string]string{"name": t.Name})
 	return nil
 }
 

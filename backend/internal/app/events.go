@@ -119,10 +119,12 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-// EventFilter selects events.
+// EventFilter selects events. Delivery "failed" keeps the events a target
+// gave up on.
 type EventFilter struct {
 	CameraID string
 	Type     string
+	Delivery string
 	Cursor   string
 	Limit    int
 }
@@ -132,7 +134,7 @@ func (s *Service) ListEvents(ctx context.Context, f EventFilter) (Page[EventView
 	if f.Limit <= 0 || f.Limit > 200 {
 		f.Limit = 50
 	}
-	rows, err := s.store.R().ListEvents(ctx, db.ListEventsParams{Cursor: f.Cursor, CameraID: f.CameraID, Type: f.Type, Limit: int64(f.Limit + 1)})
+	rows, err := s.store.R().ListEvents(ctx, db.ListEventsParams{Cursor: f.Cursor, CameraID: f.CameraID, Type: f.Type, Delivery: f.Delivery, Limit: int64(f.Limit + 1)})
 	if err != nil {
 		return Page[EventView]{}, err
 	}

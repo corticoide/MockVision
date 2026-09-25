@@ -1,5 +1,6 @@
-// Package telemetry measures the node and its cameras. Node CPU and memory
-// are sampled from /proc; camera metrics arrive with their heartbeats. Both
+// Package telemetry measures the node and its cameras. Node CPU, memory and
+// the traffic of one network interface are sampled from /proc; camera
+// metrics arrive with their heartbeats. Both
 // are kept in memory for ten minutes, enough for the panel and for admission
 // decisions based on sustained usage (D91, D92).
 package telemetry
@@ -18,12 +19,16 @@ import (
 // Retention of in-memory samples.
 const Retention = 10 * time.Minute
 
-// NodeSample is one measurement of the node.
+// NodeSample is one measurement of the node. Network rates are those of
+// the interface the cameras hang from.
 type NodeSample struct {
-	At         time.Time `json:"at"`
-	CPUPercent float64   `json:"cpu_percent"`
-	MemTotal   uint64    `json:"mem_total"`
-	MemUsed    uint64    `json:"mem_used"`
+	At           time.Time `json:"at"`
+	CPUPercent   float64   `json:"cpu_percent"`
+	MemTotal     uint64    `json:"mem_total"`
+	MemUsed      uint64    `json:"mem_used"`
+	NetInterface string    `json:"net_interface"`
+	NetRxBps     float64   `json:"net_rx_bps"`
+	NetTxBps     float64   `json:"net_tx_bps"`
 }
 
 // NodeSampler samples the node periodically.
@@ -34,6 +39,14 @@ type NodeSampler struct {
 	samples   []NodeSample
 	lastIdle  uint64
 	lastTotal uint64
+	iface     string
+	lastNet   netCounters
+}
+
+type netCounters struct {
+	at     time.Time
+	iface  string
+	rx, tx uint64
 }
 
 // NewNodeSampler returns a sampler; call Run to start it.
@@ -45,6 +58,13 @@ func NewNodeSampler() *NodeSampler {
 
 // CPUCount is the number of CPUs.
 func (n *NodeSampler) CPUCount() int { return n.cpuCount }
+
+// SetInterface chooses the network interface whose traffic is measured.
+func (n *NodeSampler) SetInterface(name string) {
+	n.mu.Lock()
+	n.iface = name
+	n.mu.Unlock()
+}
 
 // Run samples every interval until ctx is done.
 func (n *NodeSampler) Run(ctx context.Context, interval time.Duration) {
@@ -73,6 +93,18 @@ func (n *NodeSampler) sample() {
 		n.lastIdle, n.lastTotal = idle, total
 	}
 	s.MemTotal, s.MemUsed = readMem()
+	if n.iface != "" {
+		s.NetInterface = n.iface
+		if rx, tx, ok := readNet(n.iface); ok {
+			cur := netCounters{at: s.At, iface: n.iface, rx: rx, tx: tx}
+			last := n.lastNet
+			if secs := cur.at.Sub(last.at).Seconds(); last.iface == cur.iface && secs > 0 && rx >= last.rx && tx >= last.tx {
+				s.NetRxBps = float64(rx-last.rx) / secs
+				s.NetTxBps = float64(tx-last.tx) / secs
+			}
+			n.lastNet = cur
+		}
+	}
 	n.samples = append(n.samples, s)
 	cut := 0
 	for cut < len(n.samples) && time.Since(n.samples[cut].At) > Retention {
@@ -143,6 +175,34 @@ func readCPU() (idle, total uint64, ok bool) {
 		total += x
 	}
 	return v[3] + v[4], total, true
+}
+
+// readNet reads the received and sent bytes of an interface from
+// /proc/net/dev.
+func readNet(iface string) (rx, tx uint64, ok bool) {
+	f, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return 0, 0, false
+	}
+	defer f.Close()
+	return parseNetDev(bufio.NewScanner(f), iface)
+}
+
+func parseNetDev(sc *bufio.Scanner, iface string) (rx, tx uint64, ok bool) {
+	for sc.Scan() {
+		name, rest, found := strings.Cut(sc.Text(), ":")
+		if !found || strings.TrimSpace(name) != iface {
+			continue
+		}
+		f := strings.Fields(rest)
+		if len(f) < 9 {
+			return 0, 0, false
+		}
+		rx, err1 := strconv.ParseUint(f[0], 10, 64)
+		tx, err2 := strconv.ParseUint(f[8], 10, 64)
+		return rx, tx, err1 == nil && err2 == nil
+	}
+	return 0, 0, false
 }
 
 // readMem returns total and used memory, used excluding reclaimable cache.

@@ -117,7 +117,7 @@ func serve(args []string, log *slog.Logger) int {
 
 	hub := api.NewHub()
 	svc, err := app.New(app.Options{
-		DataDir: *dataDir, FFmpeg: *ffmpeg, Exe: exe, ParentInterface: *parent, Runtime: rt, Log: log,
+		DataDir: *dataDir, FFmpeg: *ffmpeg, Exe: exe, ParentInterface: *parent, Listen: *listen, Runtime: rt, Log: log,
 	}, st, hub)
 	if err != nil {
 		log.Error("service", "error", err)

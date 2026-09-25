@@ -70,18 +70,6 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 	return err
 }
 
-const deleteAuditBefore = `-- name: DeleteAuditBefore :execrows
-DELETE FROM audit_log WHERE at < ?1
-`
-
-func (q *Queries) DeleteAuditBefore(ctx context.Context, before int64) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteAuditBefore, before)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at < ?1
 `
@@ -192,83 +180,6 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const insertAudit = `-- name: InsertAudit :exec
-INSERT INTO audit_log (id, at, actor_type, actor_id, action, entity_type, entity_id, origin_ip, diff_json)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-`
-
-type InsertAuditParams struct {
-	ID         string
-	At         int64
-	ActorType  string
-	ActorID    string
-	Action     string
-	EntityType string
-	EntityID   string
-	OriginIp   string
-	DiffJson   string
-}
-
-func (q *Queries) InsertAudit(ctx context.Context, arg InsertAuditParams) error {
-	_, err := q.db.ExecContext(ctx, insertAudit,
-		arg.ID,
-		arg.At,
-		arg.ActorType,
-		arg.ActorID,
-		arg.Action,
-		arg.EntityType,
-		arg.EntityID,
-		arg.OriginIp,
-		arg.DiffJson,
-	)
-	return err
-}
-
-const listAudit = `-- name: ListAudit :many
-SELECT id, at, actor_type, actor_id, "action", entity_type, entity_id, origin_ip, diff_json FROM audit_log
-WHERE (CAST(?1 AS TEXT) = '' OR id < CAST(?1 AS TEXT))
-ORDER BY id DESC
-LIMIT ?2
-`
-
-type ListAuditParams struct {
-	Cursor string
-	Limit  int64
-}
-
-func (q *Queries) ListAudit(ctx context.Context, arg ListAuditParams) ([]AuditLog, error) {
-	rows, err := q.db.QueryContext(ctx, listAudit, arg.Cursor, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AuditLog{}
-	for rows.Next() {
-		var i AuditLog
-		if err := rows.Scan(
-			&i.ID,
-			&i.At,
-			&i.ActorType,
-			&i.ActorID,
-			&i.Action,
-			&i.EntityType,
-			&i.EntityID,
-			&i.OriginIp,
-			&i.DiffJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listSettings = `-- name: ListSettings :many

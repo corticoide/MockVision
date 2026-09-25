@@ -34,6 +34,8 @@ JOIN cameras ON cameras.id = events.camera_id
 WHERE (CAST(@cursor AS TEXT) = '' OR events.id < CAST(@cursor AS TEXT))
   AND (CAST(@camera_id AS TEXT) = '' OR events.camera_id = CAST(@camera_id AS TEXT))
   AND (CAST(@type AS TEXT) = '' OR events.type = CAST(@type AS TEXT))
+  AND (CAST(@delivery AS TEXT) = '' OR EXISTS (
+        SELECT 1 FROM deliveries WHERE deliveries.event_id = events.id AND deliveries.status = CAST(@delivery AS TEXT)))
 ORDER BY events.id DESC
 LIMIT @limit;
 

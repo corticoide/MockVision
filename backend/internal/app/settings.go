@@ -93,6 +93,9 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 		return before, err
 	}
 	s.audit(ctx, actor, "settings.update", "settings", settingsKey, map[string]any{"before": before, "after": set})
+	if set.ParentInterface != before.ParentInterface {
+		s.measureInterface(ctx)
+	}
 	return set, nil
 }
 

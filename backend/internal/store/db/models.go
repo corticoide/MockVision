@@ -8,6 +8,19 @@ import (
 	"database/sql"
 )
 
+type ApiToken struct {
+	ID         string
+	UserID     string
+	Name       string
+	TokenHash  string
+	Prefix     string
+	ScopesJson string
+	ExpiresAt  sql.NullInt64
+	LastUsedAt sql.NullInt64
+	LastUsedIp string
+	CreatedAt  int64
+}
+
 type Asset struct {
 	ID        string
 	Sha256    string
@@ -31,6 +44,10 @@ type AuditLog struct {
 	EntityID   string
 	OriginIp   string
 	DiffJson   string
+	Origin     string
+	ActorName  string
+	TokenID    string
+	TokenName  string
 }
 
 type Camera struct {

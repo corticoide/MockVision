@@ -4,9 +4,13 @@ info:
   version: 0.1.0
   description: |
     REST API of a MockVision node, shared by the panel (session cookie) and
-    automation. Errors use problem+json (RFC 9457). State-changing requests
-    must send the `X-MockVision-Request` header. Live updates come through a
-    single WebSocket at `/api/v1/ws` (see the `x-websocket` section).
+    automation (API tokens sent as `Authorization: Bearer mvt_…`). Errors use
+    problem+json (RFC 9457). State-changing requests with the session cookie
+    must send the `X-MockVision-Request` header; requests with a token need
+    not. A token with the read scope may only make GET requests and open the
+    WebSocket; tokens are created and revoked from the panel only. Live
+    updates come through a single WebSocket at `/api/v1/ws` (see the
+    `x-websocket` section).
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -14,8 +18,11 @@ servers:
   - url: /api/v1
 security:
   - session: []
+  - token: []
 tags:
   - name: auth
+  - name: tokens
+  - name: audit
   - name: node
   - name: profiles
   - name: cameras
@@ -64,7 +71,7 @@ paths:
     get:
       tags: [auth]
       operationId: me
-      summary: Current user; 401 carries setup_required on a fresh node
+      summary: Current user, and the token of a request made with one; 401 carries setup_required on a fresh node
       responses:
         "200": { description: Session, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Problem" }
@@ -81,6 +88,23 @@ paths:
       operationId: getNodeMetrics
       responses:
         "200": { description: Metrics, content: { application/json: { schema: { $ref: "#/components/schemas/NodeMetrics" } } } }
+  /node/history:
+    get:
+      tags: [node]
+      operationId: getNodeHistory
+      summary: Node samples of the last ten minutes, every 2 s
+      parameters:
+        - { name: since, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+      responses:
+        "200":
+          description: Samples, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [samples]
+                properties:
+                  samples: { type: array, items: { $ref: "#/components/schemas/NodeSample" } }
   /settings:
     get:
       tags: [node]
@@ -155,10 +179,77 @@ paths:
       responses:
         "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileDetail" } } } }
 
+  /tokens:
+    get:
+      tags: [tokens]
+      operationId: listTokens
+      summary: API tokens of the current user (panel session only)
+      responses:
+        "200":
+          description: Tokens, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Token" } }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [tokens]
+      operationId: createToken
+      summary: Create an API token (panel session only); the secret is returned once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CreatedToken" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      tags: [tokens]
+      operationId: revokeToken
+      summary: Revoke an API token (panel session only)
+      responses:
+        "204": { description: Revoked }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /audit:
+    get:
+      tags: [audit]
+      operationId: listAudit
+      summary: Who changed what, when and from where (kept 90 days)
+      parameters:
+        - { name: origin, in: query, schema: { type: string, enum: [panel, api, camera, system] } }
+        - { name: entity_type, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: token_id, in: query, schema: { type: string } }
+        - { name: action, in: query, description: Exact action or prefix, such as camera, schema: { type: string } }
+        - { name: since, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+        - { name: until, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: Entries, newest first, content: { application/json: { schema: { $ref: "#/components/schemas/AuditPage" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /cameras:
     get:
       tags: [cameras]
       operationId: listCameras
+      parameters:
+        - { name: q, in: query, description: Text in the name, address, MAC, serial or tags, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: profile, in: query, description: Profile ID or ID@version, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
       responses:
         "200":
           description: Cameras
@@ -180,6 +271,19 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/actions/bulk:
+    post:
+      tags: [cameras]
+      operationId: bulkCameras
+      summary: Start, stop, restart, clone or delete several cameras; each gets its own result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BulkAction" }
+      responses:
+        "200": { description: Results, content: { application/json: { schema: { $ref: "#/components/schemas/BulkResult" } } } }
         "422": { $ref: "#/components/responses/Problem" }
   /cameras/{id}:
     parameters:
@@ -528,6 +632,7 @@ paths:
       parameters:
         - { name: camera_id, in: query, schema: { type: string } }
         - { name: type, in: query, schema: { type: string } }
+        - { name: delivery, in: query, description: Only events a target gave up on, schema: { type: string, enum: [failed] } }
         - { name: cursor, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
       responses:
@@ -551,7 +656,7 @@ x-websocket:
     is too old the server answers type "resync" and the client reloads that
     state through REST. Topics: node (metrics), cameras (created, updated,
     deleted, status), camera:<id> (status, config, client, gap, log),
-    events (event), profiles (installed).
+    events (event), profiles (installed), audit (entry).
 
 components:
   securitySchemes:
@@ -559,6 +664,10 @@ components:
       type: apiKey
       in: cookie
       name: mv_session
+    token:
+      type: http
+      scheme: bearer
+      description: API token created in the panel (Settings, API tokens)
   parameters:
     ID:
       name: id
@@ -609,7 +718,14 @@ components:
             id: { type: string }
             username: { type: string }
             role: { type: string }
-        expires_at: { type: string, format: date-time }
+        expires_at: { type: [string, "null"], format: date-time, description: Null for a token that does not expire }
+        token:
+          type: object
+          required: [id, name, scopes]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            scopes: { type: array, items: { type: string, enum: [read, write] } }
     Interface:
       type: object
       required: [name, mac, up, loopback, addrs, default]
@@ -623,14 +739,15 @@ components:
         gateway: { type: string }
     CameraCounts:
       type: object
-      required: [total, running, error]
+      required: [total, running, error, by_state]
       properties:
         total: { type: integer }
-        running: { type: integer }
+        running: { type: integer, description: Running and degraded }
         error: { type: integer }
+        by_state: { type: object, additionalProperties: { type: integer } }
     Node:
       type: object
-      required: [version, runtime, hostname, cpu_count, mem_total, default_interface, default_gateway, parent_interface, interfaces, cameras, started_at]
+      required: [version, runtime, hostname, cpu_count, mem_total, default_interface, default_gateway, parent_interface, interfaces, cameras, panel, started_at]
       properties:
         version: { type: string }
         runtime: { type: string, enum: [netns, local] }
@@ -642,6 +759,14 @@ components:
         parent_interface: { type: string }
         interfaces: { type: [array, "null"], items: { $ref: "#/components/schemas/Interface" } }
         cameras: { $ref: "#/components/schemas/CameraCounts" }
+        panel:
+          type: object
+          description: Where the panel and the API listen (D63)
+          required: [listen, all_interfaces, urls]
+          properties:
+            listen: { type: string }
+            all_interfaces: { type: boolean }
+            urls: { type: array, items: { type: string } }
         started_at: { type: string, format: date-time }
     Settings:
       type: object
@@ -662,13 +787,16 @@ components:
         events_retention_days: { type: integer }
     NodeMetrics:
       type: object
-      required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, cameras, camera_counts, db, limits]
+      required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
       properties:
         at: { type: string, format: date-time }
         cpu_percent: { type: number }
         cpu_sustained_percent: { type: number }
         mem_total: { type: integer }
         mem_used: { type: integer }
+        net_interface: { type: string, description: Interface the cameras hang from }
+        net_rx_bps: { type: number, description: Bytes per second received }
+        net_tx_bps: { type: number, description: Bytes per second sent }
         cameras: { type: object, additionalProperties: { $ref: "#/components/schemas/CameraMetrics" } }
         camera_counts: { $ref: "#/components/schemas/CameraCounts" }
         db:
@@ -678,6 +806,103 @@ components:
             write_statements: { type: integer }
             write_transactions: { type: integer }
         limits: { $ref: "#/components/schemas/Settings" }
+    NodeSample:
+      type: object
+      required: [at, cpu_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps]
+      properties:
+        at: { type: string, format: date-time }
+        cpu_percent: { type: number }
+        mem_total: { type: integer }
+        mem_used: { type: integer }
+        net_interface: { type: string }
+        net_rx_bps: { type: number }
+        net_tx_bps: { type: number }
+    Token:
+      type: object
+      required: [id, name, prefix, scopes, created_at, expires_at, last_used_at, last_used_ip, expired]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        prefix: { type: string, description: First characters of the secret, to recognize it }
+        scopes: { type: array, items: { type: string, enum: [read, write] } }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        last_used_at: { type: [string, "null"], format: date-time }
+        last_used_ip: { type: string }
+        expired: { type: boolean }
+    TokenInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 64 }
+        scopes: { type: array, items: { type: string, enum: [read, write] }, description: write implies read; none means read }
+        expires_in_days: { type: [integer, "null"], minimum: 1, maximum: 3650, description: Null for a token that lasts until revoked }
+    CreatedToken:
+      type: object
+      required: [token, secret]
+      properties:
+        token: { $ref: "#/components/schemas/Token" }
+        secret: { type: string, description: Shown only now; the node keeps its hash }
+    AuditEntry:
+      type: object
+      required: [id, at, actor, origin, origin_ip, token, action, entity, diff]
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        actor:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string, enum: [user, camera, system] }
+            id: { type: string }
+            name: { type: string }
+        origin: { type: string, enum: [panel, api, camera, system] }
+        origin_ip: { type: string }
+        token:
+          type: [object, "null"]
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        action: { type: string }
+        entity:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string }
+            id: { type: string }
+            name: { type: string }
+        diff: { type: object, additionalProperties: true }
+    AuditPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
+        next_cursor: { type: string }
+    BulkAction:
+      type: object
+      required: [action, ids]
+      properties:
+        action: { type: string, enum: [start, stop, restart, clone, delete] }
+        ids: { type: array, items: { type: string }, maxItems: 200 }
+        start: { type: boolean, description: Start each copy (clone only) }
+    BulkResult:
+      type: object
+      required: [action, succeeded, failed, results]
+      properties:
+        action: { type: string }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            required: [id, ok]
+            properties:
+              id: { type: string }
+              ok: { type: boolean }
+              camera: { $ref: "#/components/schemas/Camera" }
+              error: { $ref: "#/components/schemas/Problem" }
     Profile:
       type: object
       required: [id, profile_id, version, name, vendor, model, firmware, level, signature_status, archived, camera_count, created_at]

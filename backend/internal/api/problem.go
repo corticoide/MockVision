@@ -1,7 +1,7 @@
 // Package api serves the panel and the automation API: REST JSON under
 // /api/v1 described with OpenAPI, a multiplexed WebSocket for live state,
 // and the embedded React panel. The panel (session cookie) and automation
-// (Bearer tokens, planned) share the same endpoints.
+// (API tokens, sent as Bearer) share the same endpoints.
 package api
 
 import (
@@ -46,6 +46,15 @@ func writeProblem(w http.ResponseWriter, r *http.Request, p Problem) {
 
 // writeError maps domain and app errors to problems.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	p := s.problemFor(r, err)
+	if errors.Is(err, app.ErrInvalidToken) {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	}
+	writeProblem(w, r, p)
+}
+
+// problemFor maps an error to its problem document.
+func (s *Server) problemFor(r *http.Request, err error) Problem {
 	var (
 		verr   *domain.ValidationError
 		cerr   *domain.ConflictError
@@ -56,33 +65,35 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	)
 	switch {
 	case errors.As(err, &berr):
-		writeProblem(w, r, Problem{Type: problemType + "bad-request", Title: "Bad request", Status: http.StatusBadRequest, Detail: berr.msg})
+		return Problem{Type: problemType + "bad-request", Title: "Bad request", Status: http.StatusBadRequest, Detail: berr.msg}
 	case errors.As(err, &verr):
-		writeProblem(w, r, Problem{Type: problemType + "validation", Title: "Invalid input", Status: http.StatusUnprocessableEntity, Detail: verr.Error(), Errors: verr.Fields})
+		return Problem{Type: problemType + "validation", Title: "Invalid input", Status: http.StatusUnprocessableEntity, Detail: verr.Error(), Errors: verr.Fields}
 	case errors.As(err, &ierr):
 		rep := ierr.Report
-		writeProblem(w, r, Problem{Type: problemType + "package-rejected", Title: "Package rejected", Status: http.StatusUnprocessableEntity, Detail: ierr.Error(), Report: &rep})
+		return Problem{Type: problemType + "package-rejected", Title: "Package rejected", Status: http.StatusUnprocessableEntity, Detail: ierr.Error(), Report: &rep}
 	case errors.As(err, &rerr):
-		writeProblem(w, r, Problem{Type: problemType + "admission-rejected", Title: "Not enough capacity", Status: http.StatusConflict, Detail: rerr.Reason, Code: rerr.Code})
+		return Problem{Type: problemType + "admission-rejected", Title: "Not enough capacity", Status: http.StatusConflict, Detail: rerr.Reason, Code: rerr.Code}
 	case errors.As(err, &cerr):
 		p := Problem{Type: problemType + "conflict", Title: "Conflict", Status: http.StatusConflict, Detail: cerr.Message}
 		if cerr.Field != "" {
 			p.Errors = []domain.FieldError{{Field: cerr.Field, Message: cerr.Message}}
 		}
-		writeProblem(w, r, p)
+		return p
 	case errors.Is(err, domain.ErrNotFound):
-		writeProblem(w, r, Problem{Type: problemType + "not-found", Title: "Not found", Status: http.StatusNotFound})
+		return Problem{Type: problemType + "not-found", Title: "Not found", Status: http.StatusNotFound}
+	case errors.Is(err, app.ErrInvalidToken):
+		return Problem{Type: problemType + "invalid-token", Title: "Invalid API token", Status: http.StatusUnauthorized, Detail: err.Error()}
 	case errors.Is(err, app.ErrUnauthenticated):
-		writeProblem(w, r, Problem{Type: problemType + "unauthenticated", Title: "Authentication required", Status: http.StatusUnauthorized, Detail: "wrong username or password"})
+		return Problem{Type: problemType + "unauthenticated", Title: "Authentication required", Status: http.StatusUnauthorized, Detail: "wrong username or password"}
 	case errors.As(err, &locked):
-		writeProblem(w, r, Problem{Type: problemType + "locked", Title: "Too many attempts", Status: http.StatusTooManyRequests, Detail: locked.Error()})
+		return Problem{Type: problemType + "locked", Title: "Too many attempts", Status: http.StatusTooManyRequests, Detail: locked.Error()}
 	case errors.Is(err, app.ErrSetupDone):
-		writeProblem(w, r, Problem{Type: problemType + "setup-done", Title: "Setup already completed", Status: http.StatusConflict})
+		return Problem{Type: problemType + "setup-done", Title: "Setup already completed", Status: http.StatusConflict}
 	case errors.Is(err, context.DeadlineExceeded):
-		writeProblem(w, r, Problem{Type: problemType + "timeout", Title: "Timed out", Status: http.StatusGatewayTimeout})
+		return Problem{Type: problemType + "timeout", Title: "Timed out", Status: http.StatusGatewayTimeout}
 	default:
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
-		writeProblem(w, r, Problem{Type: problemType + "internal", Title: "Internal error", Status: http.StatusInternalServerError, Detail: "see the node logs"})
+		return Problem{Type: problemType + "internal", Title: "Internal error", Status: http.StatusInternalServerError, Detail: "see the node logs"}
 	}
 }
 

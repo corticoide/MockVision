@@ -260,14 +260,17 @@ JOIN cameras ON cameras.id = events.camera_id
 WHERE (CAST(?1 AS TEXT) = '' OR events.id < CAST(?1 AS TEXT))
   AND (CAST(?2 AS TEXT) = '' OR events.camera_id = CAST(?2 AS TEXT))
   AND (CAST(?3 AS TEXT) = '' OR events.type = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+        SELECT 1 FROM deliveries WHERE deliveries.event_id = events.id AND deliveries.status = CAST(?4 AS TEXT)))
 ORDER BY events.id DESC
-LIMIT ?4
+LIMIT ?5
 `
 
 type ListEventsParams struct {
 	Cursor   string
 	CameraID string
 	Type     string
+	Delivery string
 	Limit    int64
 }
 
@@ -287,6 +290,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 		arg.Cursor,
 		arg.CameraID,
 		arg.Type,
+		arg.Delivery,
 		arg.Limit,
 	)
 	if err != nil {

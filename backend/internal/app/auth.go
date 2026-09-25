@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,15 +27,42 @@ type Actor struct {
 	ID   string
 	Name string
 	IP   string
+	// Origin is where the change came from: panel, api, camera or system.
+	// Empty derives it from Type, with users on the panel.
+	Origin string
+	// Token is the API token of a request made with one.
+	Token *TokenInfo
+}
+
+// Origins of a change, as the audit log records them.
+const (
+	OriginPanel  = "panel"
+	OriginAPI    = "api"
+	OriginCamera = "camera"
+	OriginSystem = "system"
+)
+
+func (a Actor) origin() string {
+	switch {
+	case a.Origin != "":
+		return a.Origin
+	case a.Type == "camera":
+		return OriginCamera
+	case a.Type == "system":
+		return OriginSystem
+	}
+	return OriginPanel
 }
 
 // SystemActor is used for automatic operations such as the reconciler.
 var SystemActor = Actor{Type: "system", ID: "reconciler"}
 
-// Session is an authenticated panel session.
+// Session is an authenticated request: a panel session, or an API token
+// when Token is set.
 type Session struct {
 	User      domain.User
 	ExpiresAt time.Time
+	Token     *TokenInfo
 }
 
 // SessionTTL is the idle lifetime of a panel session.
@@ -264,25 +290,4 @@ func (g *loginGuard) success(key string) {
 	g.mu.Lock()
 	delete(g.entries, key)
 	g.mu.Unlock()
-}
-
-// audit records who changed what and from where.
-func (s *Service) audit(ctx context.Context, a Actor, action, entityType, entityID string, diff any) {
-	raw := []byte("{}")
-	if diff != nil {
-		if b, err := json.Marshal(diff); err == nil {
-			raw = b
-		}
-	}
-	actorID := a.ID
-	if actorID == "" {
-		actorID = a.Name
-	}
-	err := s.store.W().InsertAudit(ctx, db.InsertAuditParams{
-		ID: ulid.Make().String(), At: time.Now().UnixMilli(), ActorType: a.Type, ActorID: actorID,
-		Action: action, EntityType: entityType, EntityID: entityID, OriginIp: a.IP, DiffJson: string(raw),
-	})
-	if err != nil {
-		s.log.Warn("audit write failed", "action", action, "error", err)
-	}
 }
