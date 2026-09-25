@@ -92,9 +92,8 @@ type StartInput struct {
 	// keyed by SocketSpec.Name.
 	Listeners   map[string]net.Listener
 	PacketConns map[string]net.PacketConn
-	// Users are the camera's accounts.
-	Users []User
-	Host  Host
+	// Host gives access to the camera's services, its accounts among them.
+	Host Host
 }
 
 // Engine is the contract every engine implements.

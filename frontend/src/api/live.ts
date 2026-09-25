@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import type { Camera, EventItem, EventPage, NodeMetrics } from "./client";
 import { keys } from "./queries";
 
@@ -49,6 +49,19 @@ export class LiveClient {
 
   getStatus = () => this.status;
 
+  subscribeTopic(topic: string) {
+    this.send({ op: "subscribe", topics: [topic], since: {} });
+  }
+
+  unsubscribeTopic(topic: string) {
+    this.seqs.delete(topic);
+    this.send({ op: "unsubscribe", topics: [topic] });
+  }
+
+  private send(op: object) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(op));
+  }
+
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -67,7 +80,7 @@ export class LiveClient {
     ws.onopen = () => {
       this.retry = 0;
       this.setStatus("open");
-      ws.send(JSON.stringify({ op: "subscribe", topics, since: Object.fromEntries(this.seqs) }));
+      ws.send(JSON.stringify({ op: "subscribe", topics: [...topics, ...extraTopics.keys()], since: Object.fromEntries(this.seqs) }));
     };
     ws.onmessage = (ev) => {
       try {
@@ -114,10 +127,19 @@ export class LiveClient {
       case "profiles":
         this.qc.invalidateQueries({ queryKey: keys.profiles });
         break;
+      default:
+        if (m.topic.startsWith("camera:") && m.type === "config") {
+          // A client of the emulated API or the panel changed parameters.
+          this.qc.invalidateQueries({ queryKey: keys.cameraConfig(m.topic.slice("camera:".length)) });
+        }
     }
   }
 
   private resync(topic: string) {
+    if (topic.startsWith("camera:")) {
+      this.qc.invalidateQueries({ queryKey: keys.cameraConfig(topic.slice("camera:".length)) });
+      return;
+    }
     switch (topic) {
       case "cameras":
         this.qc.invalidateQueries({ queryKey: keys.cameras });
@@ -198,6 +220,30 @@ export function startLive(qc: QueryClient) {
 export function stopLive() {
   client?.stop();
   client = null;
+}
+
+// Topics pages asked for, such as camera:<id>, with how many ask. They
+// outlive the client, so a reconnection subscribes to them again.
+const extraTopics = new Map<string, number>();
+
+function watchTopic(topic: string) {
+  const n = (extraTopics.get(topic) ?? 0) + 1;
+  extraTopics.set(topic, n);
+  if (n === 1) client?.subscribeTopic(topic);
+  return () => {
+    const left = (extraTopics.get(topic) ?? 1) - 1;
+    if (left > 0) {
+      extraTopics.set(topic, left);
+      return;
+    }
+    extraTopics.delete(topic);
+    client?.unsubscribeTopic(topic);
+  };
+}
+
+/** Follows the topic of one camera while the component is mounted. */
+export function useCameraTopic(id: string) {
+  useEffect(() => watchTopic(`camera:${id}`), [id]);
 }
 
 const closed = () => "closed" as Status;

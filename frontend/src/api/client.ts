@@ -19,6 +19,11 @@ export type Settings = Schemas["Settings"];
 export type Problem = Schemas["Problem"];
 export type CreateCamera = Schemas["CreateCamera"];
 export type Param = Schemas["Param"];
+export type Protocol = Schemas["Protocol"];
+export type NetworkInput = Schemas["NetworkInput"];
+export type UpdateCamera = Schemas["UpdateCamera"];
+export type CameraUserInput = Schemas["CameraUserInput"];
+export type CloneCamera = Schemas["CloneCamera"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.

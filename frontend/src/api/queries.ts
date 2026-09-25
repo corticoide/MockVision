@@ -1,14 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { navigate } from "@/lib/router";
 import {
   api,
   ApiError,
   type Asset,
   type Camera,
+  type CameraUserInput,
+  type CloneCamera,
   type CreateCamera,
   type EventPage,
   type ImportResult,
   type Settings,
   type TargetInput,
+  type UpdateCamera,
   unwrap,
   upload,
 } from "./client";
@@ -66,9 +70,14 @@ export function useLogout() {
     mutationFn: async () => {
       await api.POST("/auth/logout");
     },
-    onSuccess: () => {
-      qc.clear();
-      qc.invalidateQueries({ queryKey: keys.me });
+    // Even if the request fails the session is unusable: go back to the
+    // login and drop everything cached for the previous session. The me
+    // query is set, not cleared, so the mounted app sees the change.
+    onSettled: () => {
+      qc.cancelQueries();
+      qc.setQueryData<MeState>(keys.me, { status: "login" });
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== keys.me[0] });
+      navigate("/");
     },
   });
 }
@@ -157,11 +166,70 @@ export function useDeleteCamera() {
   });
 }
 
+/** One camera, from the live list: the WebSocket keeps it current. */
+export function useCamera(id: string) {
+  const list = useCameras();
+  return { ...list, data: list.data?.find((c) => c.id === id) };
+}
+
 export function useUpdateCamera() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { id: string; body: { name?: string; autostart?: boolean; target_ids?: string[] } }) =>
+    mutationFn: async (v: { id: string; body: UpdateCamera }) =>
       unwrap(await api.PATCH("/cameras/{id}", { params: { path: { id: v.id } }, body: v.body })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
+  });
+}
+
+export function useSetCameraUsers(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (users: CameraUserInput[]) =>
+      unwrap(await api.PUT("/cameras/{id}/users", { params: { path: { id } }, body: { users } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
+  });
+}
+
+export function useSetCameraProtocols(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (protocols: { instance: string; enabled?: boolean; port?: number }[]) =>
+      unwrap(await api.PUT("/cameras/{id}/protocols", { params: { path: { id } }, body: { protocols } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
+  });
+}
+
+export function useUpdateStream(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { stream: string; asset_id?: string; resolution?: string; fps?: number }) => {
+      const { stream, ...body } = v;
+      return unwrap(await api.PATCH("/cameras/{id}/streams/{stream}", { params: { path: { id, stream } }, body }));
+    },
+    onSuccess: (camera) => {
+      patchCameraCache(qc, camera);
+      qc.invalidateQueries({ queryKey: keys.cameraConfig(id) });
+    },
+  });
+}
+
+export function useResetCamera(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (scope: "settings" | "full") =>
+      unwrap(await api.POST("/cameras/{id}/actions/factory-reset", { params: { path: { id } }, body: { scope } })),
+    onSuccess: (camera) => {
+      patchCameraCache(qc, camera);
+      qc.invalidateQueries({ queryKey: keys.cameraConfig(id) });
+    },
+  });
+}
+
+export function useCloneCamera(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: CloneCamera) =>
+      unwrap(await api.POST("/cameras/{id}/actions/clone", { params: { path: { id } }, body })),
     onSuccess: (camera) => patchCameraCache(qc, camera),
   });
 }

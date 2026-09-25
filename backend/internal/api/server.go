@@ -99,6 +99,11 @@ func (s *Server) Handler() http.Handler {
 	auth("PATCH /api/v1/cameras/{id}", s.handleUpdateCamera)
 	auth("DELETE /api/v1/cameras/{id}", s.handleDeleteCamera)
 	auth("POST /api/v1/cameras/{id}/actions/{action}", s.handleCameraAction)
+	auth("POST /api/v1/cameras/{id}/actions/factory-reset", s.handleResetCamera)
+	auth("POST /api/v1/cameras/{id}/actions/clone", s.handleCloneCamera)
+	auth("PUT /api/v1/cameras/{id}/users", s.handleSetCameraUsers)
+	auth("PUT /api/v1/cameras/{id}/protocols", s.handleSetCameraProtocols)
+	auth("PATCH /api/v1/cameras/{id}/streams/{stream}", s.handleUpdateCameraStream)
 	auth("GET /api/v1/cameras/{id}/status", s.handleCameraStatus)
 	auth("GET /api/v1/cameras/{id}/config", s.handleGetConfig)
 	auth("PATCH /api/v1/cameras/{id}/config", s.handlePatchConfig)
@@ -204,7 +209,11 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Browsers ignore COOP on plain HTTP and log an error for it; the
+		// panel is often opened by IP on a lab network.
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		}
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		next.ServeHTTP(w, r)

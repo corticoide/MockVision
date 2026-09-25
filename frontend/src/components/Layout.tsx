@@ -2,9 +2,11 @@ import { Activity, Boxes, Camera, Cpu, Image, LogOut, MemoryStick, Send, Setting
 import type { ReactNode } from "react";
 import { useLiveStatus } from "@/api/live";
 import { useLogout, useNode, useNodeMetrics } from "@/api/queries";
+import { useT } from "@/lib/i18n";
 import { Link, usePath } from "@/lib/router";
 import { cn, formatBytes, formatPercent } from "@/lib/utils";
 import { Badge } from "./badges";
+import { LanguageSelect } from "./LanguageSelect";
 import { Button } from "./ui/button";
 
 const nav = [
@@ -27,6 +29,7 @@ export function Logo() {
 
 export function Layout({ username, children }: { username: string; children: ReactNode }) {
   const path = usePath();
+  const t = useT();
   return (
     <div className="flex h-full">
       <aside className="flex w-52 shrink-0 flex-col border-r border-border bg-surface-1">
@@ -35,7 +38,7 @@ export function Layout({ username, children }: { username: string; children: Rea
         </div>
         <nav className="flex flex-col gap-0.5 p-2">
           {nav.map((item) => {
-            const active = path === item.href || (path === "/" && item.href === "/cameras");
+            const active = path === item.href || path.startsWith(`${item.href}/`) || (path === "/" && item.href === "/cameras");
             return (
               <Link
                 key={item.href}
@@ -46,7 +49,7 @@ export function Layout({ username, children }: { username: string; children: Rea
                 )}
               >
                 {item.icon}
-                {item.label}
+                {t(item.label)}
               </Link>
             );
           })}
@@ -65,6 +68,7 @@ export function Layout({ username, children }: { username: string; children: Rea
 
 function NodeFooter() {
   const { data: node } = useNode();
+  const t = useT();
   if (!node) return null;
   return (
     <div className="flex flex-col gap-1">
@@ -72,7 +76,7 @@ function NodeFooter() {
         {node.hostname} · v{node.version}
       </span>
       <span>
-        {node.runtime === "local" ? "local mode (127.0.0.1)" : `parent ${node.parent_interface || "—"}`}
+        {node.runtime === "local" ? t("local mode (127.0.0.1)") : t("parent {iface}", { iface: node.parent_interface || "—" })}
       </span>
     </div>
   );
@@ -83,35 +87,37 @@ function TopBar({ username }: { username: string }) {
   const { data: node } = useNode();
   const live = useLiveStatus();
   const logout = useLogout();
+  const t = useT();
   const memPct = m && m.mem_total ? (m.mem_used / m.mem_total) * 100 : undefined;
   return (
     <header className="flex h-12 shrink-0 items-center gap-5 border-b border-border bg-surface-1 px-5 text-[13px]">
-      <Metric icon={<Cpu />} label="CPU" value={formatPercent(m?.cpu_percent)} warn={(m?.cpu_sustained_percent ?? 0) > (m?.limits.max_cpu_percent ?? 80)} />
+      <Metric icon={<Cpu />} label={t("CPU")} value={formatPercent(m?.cpu_percent)} warn={(m?.cpu_sustained_percent ?? 0) > (m?.limits.max_cpu_percent ?? 80)} />
       <Metric
         icon={<MemoryStick />}
-        label="RAM"
+        label={t("RAM")}
         value={m ? `${formatBytes(m.mem_used)} / ${formatBytes(m.mem_total)}` : "—"}
         warn={(memPct ?? 0) > (m?.limits.max_ram_percent ?? 85)}
       />
       <Metric
         icon={<Camera />}
-        label="Cameras"
-        value={m ? `${m.camera_counts.running} running / ${m.camera_counts.total}` : "—"}
+        label={t("Cameras")}
+        value={m ? t("{running} running / {total}", { running: m.camera_counts.running, total: m.camera_counts.total }) : "—"}
       />
-      {node?.runtime === "local" && <Badge tone="warn">local mode</Badge>}
+      {node?.runtime === "local" && <Badge tone="warn">{t("local mode")}</Badge>}
       <div className="ml-auto flex items-center gap-3">
         {live === "open" ? (
           <Badge tone="ok" icon={<Wifi />}>
-            Live
+            {t("Live")}
           </Badge>
         ) : (
           <Badge tone="warn" icon={<WifiOff />}>
-            {live === "connecting" ? "Connecting" : "Offline"}
+            {live === "connecting" ? t("Connecting") : t("Offline")}
           </Badge>
         )}
+        <LanguageSelect />
         <span className="text-muted">{username}</span>
         <Button variant="ghost" size="sm" onClick={() => logout.mutate()}>
-          <LogOut /> Log out
+          <LogOut /> {t("Log out")}
         </Button>
       </div>
     </header>

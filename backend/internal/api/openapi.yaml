@@ -215,6 +215,123 @@ paths:
       responses:
         "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/factory-reset:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [cameras]
+      operationId: resetCamera
+      description: >
+        Restores the camera to its profile (RN-10): parameters, accounts and
+        protocols; with scope full, also the profile's factory address. The
+        picture is kept. A running camera reboots.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              properties:
+                scope: { type: string, enum: [settings, full] }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/clone:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [cameras]
+      operationId: cloneCamera
+      description: >
+        Creates a camera with the same profile, parameters, accounts,
+        protocols, picture and targets, with its own ID, serial, MAC and
+        address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloneCamera" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/users:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      tags: [cameras]
+      operationId: setCameraUsers
+      description: >
+        Replaces the camera's accounts (RN-11: at least one admin). An empty
+        password keeps the account's current one. Applied at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [users]
+              properties:
+                users: { type: array, items: { $ref: "#/components/schemas/CameraUserInput" } }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/protocols:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      tags: [cameras]
+      operationId: setCameraProtocols
+      description: >
+        Enables, disables or moves protocols of the camera's profile (RN-04).
+        A running camera applies them when it restarts (RN-09).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocols]
+              properties:
+                protocols:
+                  type: array
+                  items:
+                    type: object
+                    required: [instance]
+                    properties:
+                      instance: { type: string }
+                      enabled: { type: boolean }
+                      port: { type: integer, minimum: 0, maximum: 65535 }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/streams/{stream}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: stream, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [cameras]
+      operationId: updateCameraStream
+      description: >
+        Changes the picture, resolution or frame rate of a stream. The stream
+        is encoded again and a running camera switches to it without
+        restarting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                asset_id: { type: string }
+                resolution: { type: string }
+                fps: { type: integer }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /cameras/{id}/status:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -662,7 +779,7 @@ components:
         role: { type: string }
     CameraStatus:
       type: object
-      required: [state, reason, started_at, last_heartbeat, retries]
+      required: [state, reason, started_at, last_heartbeat, retries, pending_restart]
       properties:
         state: { type: string, enum: [stopped, provisioning, starting, running, degraded, restarting, stopping, error] }
         reason: { type: string }
@@ -671,6 +788,20 @@ components:
         netns: { type: string }
         pid: { type: integer }
         retries: { type: integer }
+        pending_restart:
+          description: Saved changes a running camera applies when it restarts (RN-09).
+          type: array
+          items: { type: string, enum: [network, protocols] }
+    Protocol:
+      type: object
+      required: [instance, engine, role, enabled, port, default_port]
+      properties:
+        instance: { type: string }
+        engine: { type: string }
+        role: { type: string, enum: [server, client] }
+        enabled: { type: boolean }
+        port: { type: integer }
+        default_port: { type: integer }
     Endpoint:
       type: object
       required: [instance, engine, protocol, port, url]
@@ -720,7 +851,7 @@ components:
         dns: { type: array, items: { type: string } }
     Camera:
       type: object
-      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, streams, users, targets, metrics, created_at, updated_at]
+      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, metrics, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -741,6 +872,7 @@ components:
         network: { $ref: "#/components/schemas/Network" }
         status: { $ref: "#/components/schemas/CameraStatus" }
         endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
+        protocols: { type: array, items: { $ref: "#/components/schemas/Protocol" } }
         streams: { type: array, items: { $ref: "#/components/schemas/Stream" } }
         users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
         targets:
@@ -762,24 +894,8 @@ components:
         name: { type: string }
         profile_id: { type: string }
         profile_version: { type: string }
-        network:
-          type: object
-          properties:
-            parent: { type: string }
-            mac: { type: string }
-            vendor_oui: { type: boolean }
-            ip: { type: string }
-            netmask: { type: string }
-            gateway: { type: string }
-        users:
-          type: array
-          items:
-            type: object
-            required: [username, password]
-            properties:
-              username: { type: string }
-              password: { type: string, writeOnly: true }
-              role: { type: string, enum: [admin, operator, viewer] }
+        network: { $ref: "#/components/schemas/NetworkInput" }
+        users: { type: array, items: { $ref: "#/components/schemas/CameraUserInput" } }
         stream:
           type: object
           properties:
@@ -797,6 +913,38 @@ components:
         autostart: { type: boolean }
         tags: { type: array, items: { type: string } }
         target_ids: { type: array, items: { type: string } }
+        network:
+          description: The whole network identity; a running camera applies it when it restarts (RN-09).
+          allOf: [{ $ref: "#/components/schemas/NetworkInput" }]
+    NetworkInput:
+      type: object
+      description: >
+        Empty fields take the node's defaults. When editing, an empty MAC
+        keeps the current one and default_mac goes back to the one derived
+        from the camera ID. No DNS servers means the node's.
+      properties:
+        parent: { type: string }
+        mac: { type: string }
+        default_mac: { type: boolean }
+        vendor_oui: { type: boolean }
+        ip: { type: string }
+        netmask: { type: string }
+        gateway: { type: string }
+        dns: { type: array, items: { type: string }, maxItems: 3 }
+    CameraUserInput:
+      type: object
+      required: [username]
+      properties:
+        username: { type: string }
+        password: { type: string, writeOnly: true, description: Required for a new account; empty keeps the current one. }
+        role: { type: string, enum: [admin, operator, viewer] }
+    CloneCamera:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        network: { $ref: "#/components/schemas/NetworkInput" }
+        start: { type: boolean }
     Param:
       type: object
       required: [key, type, value, default, effective, origin, updated_at]

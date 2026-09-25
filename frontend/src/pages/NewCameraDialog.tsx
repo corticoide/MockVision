@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
+import { useT } from "@/lib/i18n";
 import { navigate } from "@/lib/router";
 
 export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
   const { data: node } = useNode();
   const { data: profiles } = useProfiles();
   const { data: assets } = useAssets();
@@ -71,7 +73,7 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
     };
     create.mutate(body, {
       onSuccess: (cam) => {
-        toast(`Camera ${cam.name} created${start ? "; starting" : ""}`, "ok");
+        toast(start ? t("Camera {name} created; starting", { name: cam.name }) : t("Camera {name} created", { name: cam.name }), "ok");
         setName("");
         setIp("");
         setPassword("");
@@ -89,31 +91,31 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
     <Dialog
       open={open}
       onClose={onClose}
-      title="New camera"
-      description="The camera appears on the LAN with its own IP and MAC and behaves as its profile describes."
+      title={t("New camera")}
+      description={t("The camera appears on the LAN with its own IP and MAC and behaves as its profile describes.")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" type="submit" form="new-camera" disabled={create.isPending || !ref || !name.trim()}>
-            {create.isPending ? "Creating…" : "Create camera"}
+            {create.isPending ? t("Creating…") : t("Create camera")}
           </Button>
         </>
       }
     >
       {noProfiles ? (
         <Notice tone="warn">
-          No profiles installed yet.{" "}
+          {t("No profiles installed yet.")}{" "}
           <button className="cursor-pointer underline" onClick={() => navigate("/profiles")}>
-            Import a profile
+            {t("Import a profile")}
           </button>{" "}
-          first, for example <span className="font-mono">profiles/milesight-demo.yaml</span>.
+          {t("first, for example")} <span className="font-mono">profiles/milesight-demo.yaml</span>.
         </Notice>
       ) : (
         <form id="new-camera" onSubmit={submit} className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <Field label="Name" error={fieldErrors["name"]} className="col-span-2">
+          <Field label={t("Name")} error={fieldErrors["name"]} className="col-span-2">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Gate 1" required autoFocus />
           </Field>
-          <Field label="Profile" className="col-span-2">
+          <Field label={t("Profile")} className="col-span-2">
             <Select value={profileKey} onChange={(e) => setProfileKey(e.target.value)}>
               {available.map((p) => (
                 <option key={p.id} value={`${p.profile_id}@${p.version}`}>
@@ -125,36 +127,36 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
 
           {local ? (
             <div className="col-span-2">
-              <Notice tone="info">Local mode: the camera answers on 127.0.0.1 with its own ports; no IP or MAC on the LAN.</Notice>
+              <Notice tone="info">{t("Local mode: the camera answers on 127.0.0.1 with its own ports; no IP or MAC on the LAN.")}</Notice>
             </div>
           ) : (
             <>
-              <Field label="IP address" error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? `Factory IP: ${profile.factory_ip}` : undefined}>
+              <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>
                 <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" required className="font-mono" />
               </Field>
-              <Field label="Netmask" error={fieldErrors["network.netmask"]}>
+              <Field label={t("Netmask")} error={fieldErrors["network.netmask"]}>
                 <Input value={netmask} onChange={(e) => setNetmask(e.target.value)} className="font-mono" />
               </Field>
-              <Field label="Gateway" error={fieldErrors["network.gateway"]} hint="Empty: the node's gateway when it is in the subnet.">
+              <Field label={t("Gateway")} error={fieldErrors["network.gateway"]} hint={t("Empty: the node's gateway when it is in the subnet.")}>
                 <Input value={gateway} onChange={(e) => setGateway(e.target.value)} className="font-mono" />
               </Field>
               <div />
             </>
           )}
 
-          <Field label="Resolution" error={fieldErrors["stream.resolution"]}>
+          <Field label={t("Resolution")} error={fieldErrors["stream.resolution"]}>
             <Select value={resolution} onChange={(e) => setResolution(e.target.value)}>
               {stream?.resolutions.map((r) => (
                 <option key={r} value={r}>
                   {r}
-                  {r === stream.default.resolution ? " (default)" : ""}
+                  {r === stream.default.resolution ? t(" (default)") : ""}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="Image" error={fieldErrors["stream.asset_id"]} hint="The stream loops this picture, encoded once.">
+          <Field label={t("Image")} error={fieldErrors["stream.asset_id"]} hint={t("The stream loops this picture, encoded once.")}>
             <Select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
-              <option value="">Test pattern</option>
+              <option value="">{t("Test pattern")}</option>
               {assets
                 ?.filter((a) => !a.builtin)
                 .map((a) => (
@@ -165,14 +167,14 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
             </Select>
           </Field>
 
-          <Field label="Camera user" error={fieldErrors["users[0].username"]}>
+          <Field label={t("Camera user")} error={fieldErrors["users[0].username"]}>
             <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
           </Field>
-          <Field label="Password" error={fieldErrors["users[0].password"]} hint="Empty: the profile's factory account.">
+          <Field label={t("Password")} error={fieldErrors["users[0].password"]} hint={t("Empty: the profile's factory account.")}>
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </Field>
 
-          <Field label="Event targets" group className="col-span-2" hint={targets?.length ? undefined : "No targets yet; add them in Targets."}>
+          <Field label={t("Event targets")} group className="col-span-2" hint={targets?.length ? undefined : t("No targets yet; add them in Targets.")}>
             <div className="flex flex-wrap gap-x-4 gap-y-1 py-1">
               {targets?.map((t) => (
                 <Checkbox
@@ -186,8 +188,8 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
           </Field>
 
           <div className="col-span-2 flex gap-6">
-            <Checkbox label="Start with the node (autostart)" checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />
-            <Checkbox label="Start now" checked={start} onChange={(e) => setStart(e.target.checked)} />
+            <Checkbox label={t("Start with the node (autostart)")} checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />
+            <Checkbox label={t("Start now")} checked={start} onChange={(e) => setStart(e.target.checked)} />
           </div>
 
           {create.error && (
