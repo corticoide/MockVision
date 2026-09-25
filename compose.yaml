@@ -1,0 +1,42 @@
+# MockVision node: `docker compose up -d`, then open http://<host>:8080.
+#
+# The cameras join the LAN of this host with their own IP and MAC, so the
+# container shares the host network. It is not privileged: it gets only
+# what the network helper needs, and the main service and every camera
+# drop all of it when they start.
+services:
+  mockvision:
+    image: mockvision:latest
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /run # named network namespaces, for `docker compose exec mockvision ip netns`
+      - /tmp
+    volumes:
+      - mockvision-data:/data
+    cap_drop: [ALL]
+    cap_add:
+      - NET_ADMIN # macvlan interfaces and network namespaces
+      - NET_RAW # ARP probe and announcement
+      - SYS_ADMIN # create, name and enter network namespaces
+      - NET_BIND_SERVICE # open ports 80 and 554 inside a camera's namespace
+      - SETUID # start the service and the cameras as their own users
+      - SETGID
+      - SETPCAP # clear the capability bounding set of those processes
+      - CHOWN # hand a fresh data volume to the service user
+      - KILL # stop camera processes
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MOCKVISION_LISTEN: ${MOCKVISION_LISTEN:-:8080}
+      # Interface the cameras attach to; empty: the default route's.
+      MOCKVISION_PARENT_IF: ${MOCKVISION_PARENT_IF:-}
+
+volumes:
+  mockvision-data:
