@@ -328,19 +328,20 @@ func (e *Engine) authorize(conn *gortsplib.ServerConn, req *base.Request) bool {
 	if e.cfg.Auth.Scheme == "none" {
 		return true
 	}
+	// Accounts are read on every request: an edited password applies at
+	// once.
+	accounts := e.in.Host.Accounts()
 	var h headers.Authorization
 	if err := h.Unmarshal(req.Header["Authorization"]); err == nil {
-		for _, u := range e.in.Users {
-			if u.Username == h.Username {
-				return conn.VerifyCredentials(req, u.Username, u.Password)
-			}
+		if u, ok := accounts.Lookup(h.Username); ok {
+			return conn.VerifyCredentials(req, u.Username, u.Password)
 		}
 	}
 	// VerifyCredentials also creates the connection's nonce, which the
 	// 401 challenge carries; call it even when the request has no
 	// credentials so the challenge is valid.
-	if len(e.in.Users) > 0 {
-		conn.VerifyCredentials(req, e.in.Users[0].Username, "\x00")
+	if users := accounts.List(); len(users) > 0 {
+		conn.VerifyCredentials(req, users[0].Username, "\x00")
 	}
 	return false
 }

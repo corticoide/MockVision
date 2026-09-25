@@ -59,7 +59,7 @@ type Runtime struct {
 	templates *tmpl.Compiler
 	tel       *telemetry
 	identity  engine.Identity
-	users     []engine.User
+	accounts  accountStore
 
 	mu         sync.Mutex
 	running    []*runningEngine
@@ -90,6 +90,9 @@ func NewRuntime(opts Options) *Runtime {
 	rt.tel = newTelemetry(rt)
 	return rt
 }
+
+// Accounts implements engine.Host.
+func (r *Runtime) Accounts() engine.Accounts { return &r.accounts }
 
 // State implements engine.Host.
 func (r *Runtime) State() engine.State { return r.state }
@@ -246,7 +249,10 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	}
 	r.model = profile.NewModel(doc)
 	r.identity = cfg.Identity
-	r.users = cfg.Users
+	r.accounts.set(cfg.Users)
+	if len(cfg.DNS) > 0 {
+		net.DefaultResolver = resolverFor(cfg.DNS)
+	}
 	r.state = newStateStore(r.model, cfg.State, func(changes []engine.Change) {
 		if err := r.conn.Notify(ipc.TypeStateChanged, ipc.StateChanged{Changes: changes}); err != nil {
 			r.log.Warn("cannot report state change", "error", err)
@@ -302,7 +308,6 @@ func (r *Runtime) startEngine(ctx context.Context, instance string, section []by
 		Port:        ec.Port,
 		Listeners:   map[string]net.Listener{},
 		PacketConns: map[string]net.PacketConn{},
-		Users:       r.users,
 		Host:        r,
 	}
 	re := &runningEngine{instance: instance, eng: eng}
@@ -393,7 +398,7 @@ func (r *Runtime) reload(rl *ipc.Reload) error {
 		r.events.setTargets(rl.Targets)
 	}
 	if rl.Users != nil {
-		r.users = rl.Users
+		r.accounts.set(rl.Users)
 	}
 	if rl.Streams != nil {
 		if err := r.media.replace(rl.Streams); err != nil {

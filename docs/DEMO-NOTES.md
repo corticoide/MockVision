@@ -131,9 +131,9 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 - No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
   runs under a CSP without `unsafe-inline`. The design tokens (colors,
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
-- Camera parameters have an API (`GET`/`PATCH /cameras/{id}/config`) but no
-  editor in the panel yet; neither does camera editing beyond start, stop,
-  delete and the trigger.
+- Camera detail tabs for rules, triggers, faults and logs come with their
+  features of the v1 plan; the detail page has General, Network, Protocols,
+  Media, Users, Configuration and Events.
 - The event log shows the latest 100 events; the API pages with a cursor.
 
 ### Distribution

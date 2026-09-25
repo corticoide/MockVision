@@ -41,6 +41,19 @@ type StatusView struct {
 	Netns         string     `json:"netns,omitempty"`
 	PID           int        `json:"pid,omitempty"`
 	Retries       int        `json:"retries"`
+	// PendingRestart lists saved changes a running camera applies only
+	// when it restarts (RN-09): network, protocols.
+	PendingRestart []string `json:"pending_restart"`
+}
+
+// ProtocolView is an engine instance of the camera's profile (RN-04).
+type ProtocolView struct {
+	Instance    string `json:"instance"`
+	Engine      string `json:"engine"`
+	Role        string `json:"role"`
+	Enabled     bool   `json:"enabled"`
+	Port        int    `json:"port"`
+	DefaultPort int    `json:"default_port"`
 }
 
 // EndpointView is where a camera serves a protocol.
@@ -106,6 +119,7 @@ type CameraView struct {
 	Network      NetworkView    `json:"network"`
 	Status       StatusView     `json:"status"`
 	Endpoints    []EndpointView `json:"endpoints"`
+	Protocols    []ProtocolView `json:"protocols"`
 	Streams      []StreamView   `json:"streams"`
 	Users        []UserView     `json:"users"`
 	Targets      []TargetRef    `json:"targets"`

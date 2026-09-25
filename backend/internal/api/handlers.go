@@ -306,7 +306,7 @@ func (s *Server) handleCameraAction(w http.ResponseWriter, r *http.Request) {
 		v, err = s.svc.RestartCamera(ctx, actor(r), id)
 	default:
 		writeProblem(w, r, Problem{Type: problemType + "not-found", Title: "Unknown action", Status: http.StatusNotFound,
-			Detail: "available actions: start, stop, restart"})
+			Detail: "available actions: start, stop, restart, factory-reset, clone"})
 		return
 	}
 	if err != nil {
@@ -314,6 +314,84 @@ func (s *Server) handleCameraAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, v)
+}
+
+func (s *Server) handleResetCamera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Scope string `json:"scope"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	v, err := s.svc.ResetCamera(ctx, actor(r), r.PathValue("id"), body.Scope)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, v)
+}
+
+func (s *Server) handleCloneCamera(w http.ResponseWriter, r *http.Request) {
+	var in app.CloneCameraInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.CloneCamera(r.Context(), actor(r), r.PathValue("id"), in)
+	if err != nil && v == nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+func (s *Server) handleSetCameraUsers(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Users []app.UserInput `json:"users"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.SetCameraUsers(r.Context(), actor(r), r.PathValue("id"), body.Users)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleSetCameraProtocols(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Protocols []app.ProtocolInput `json:"protocols"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.SetCameraProtocols(r.Context(), actor(r), r.PathValue("id"), body.Protocols)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleUpdateCameraStream(w http.ResponseWriter, r *http.Request) {
+	var in app.StreamUpdate
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.UpdateCameraStream(r.Context(), actor(r), r.PathValue("id"), r.PathValue("stream"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) handleCameraStatus(w http.ResponseWriter, r *http.Request) {

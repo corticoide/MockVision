@@ -119,7 +119,14 @@ func (e *Engine) compile(raw json.RawMessage) (*compiledConfig, error) {
 		return nil, err
 	}
 	cc := &compiledConfig{cfg: c}
-	users := func() []engine.User { return e.in.Users }
+	// Accounts are read on every request: an edited password applies at
+	// once.
+	users := func() []engine.User {
+		if e.in.Host == nil {
+			return nil
+		}
+		return e.in.Host.Accounts().List()
+	}
 	cc.auth = newAuthenticator(c.Auth.Scheme, c.Auth.Realm, users)
 	for _, r := range c.Routes {
 		cr := &compiledRoute{route: r, segments: splitPath(r.Match.Path), query: map[string]matcher{}, headers: map[string]matcher{}}

@@ -39,14 +39,17 @@ type CreateCameraInput struct {
 }
 
 // NetworkInput is the requested network identity; empty fields get the
-// node's defaults.
+// node's defaults. When editing a camera an empty MAC keeps the current
+// one; DefaultMAC goes back to the one derived from the camera ID.
 type NetworkInput struct {
-	Parent    string `json:"parent"`
-	MAC       string `json:"mac"`
-	VendorOUI bool   `json:"vendor_oui"`
-	IP        string `json:"ip"`
-	Netmask   string `json:"netmask"`
-	Gateway   string `json:"gateway"`
+	Parent     string   `json:"parent"`
+	MAC        string   `json:"mac"`
+	DefaultMAC bool     `json:"default_mac"`
+	VendorOUI  bool     `json:"vendor_oui"`
+	IP         string   `json:"ip"`
+	Netmask    string   `json:"netmask"`
+	Gateway    string   `json:"gateway"`
+	DNS        []string `json:"dns"`
 }
 
 // UserInput is a camera account to create.
@@ -63,12 +66,15 @@ type StreamInput struct {
 	FPS        int    `json:"fps"`
 }
 
-// UpdateCameraInput changes a camera; nil fields stay as they are.
+// UpdateCameraInput changes a camera; nil fields stay as they are. The
+// network replaces the whole identity and reaches a running camera when it
+// restarts (RN-09).
 type UpdateCameraInput struct {
-	Name      *string   `json:"name"`
-	Autostart *bool     `json:"autostart"`
-	Tags      *[]string `json:"tags"`
-	TargetIDs *[]string `json:"target_ids"`
+	Name      *string       `json:"name"`
+	Autostart *bool         `json:"autostart"`
+	Tags      *[]string     `json:"tags"`
+	TargetIDs *[]string     `json:"target_ids"`
+	Network   *NetworkInput `json:"network"`
 }
 
 // cameraBundle is everything stored about a camera.
@@ -368,7 +374,12 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 		oui, _ = domain.ParseOUI(doc.Identity.OUI)
 	}
 	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String()}
-	if in.MAC != "" {
+	dns, err := parseDNS(in.DNS)
+	if err != nil {
+		return out, err
+	}
+	out.dns = dns
+	if in.MAC != "" && !in.DefaultMAC {
 		hw, err := domain.ParseMAC(in.MAC)
 		if err != nil {
 			return out, domain.Invalid("network.mac", "%v", err)
@@ -449,19 +460,53 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 }
 
 func (s *Service) checkUnique(ctx context.Context, name string, n resolvedNetwork) error {
-	q := s.store.R()
-	if _, err := q.CameraIDByName(ctx, name); err == nil {
+	if _, err := s.store.R().CameraIDByName(ctx, name); err == nil {
 		return domain.Conflict("name", "a camera named %q already exists", name)
 	}
+	return s.checkUniqueNetwork(ctx, "", n)
+}
+
+// checkUniqueNetwork enforces RN-05 for IP and MAC, ignoring the camera
+// being edited.
+func (s *Service) checkUniqueNetwork(ctx context.Context, self string, n resolvedNetwork) error {
+	q := s.store.R()
 	if n.ip != "" {
-		if other, err := q.CameraIDByIP(ctx, n.ip); err == nil {
-			return domain.Conflict("network.ip", "IP %s is already used by camera %s", n.ip, other)
+		if other, err := q.CameraIDByIP(ctx, n.ip); err == nil && other != self {
+			name := other
+			if c, err := q.GetCamera(ctx, other); err == nil {
+				name = c.Name
+			}
+			return domain.Conflict("network.ip", "IP %s is already used by camera %s", n.ip, name)
 		}
 	}
-	if _, err := q.CameraIDByMAC(ctx, n.mac); err == nil {
+	if other, err := q.CameraIDByMAC(ctx, n.mac); err == nil && other != self {
 		return domain.Conflict("network.mac", "MAC %s is already used by another camera", n.mac)
 	}
 	return nil
+}
+
+// parseDNS validates the DNS servers of a camera; none means the node's.
+func parseDNS(in []string) ([]string, error) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, raw := range in {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			return nil, domain.Invalid("network.dns", "%q is not an IP address", raw)
+		}
+		if !seen[addr.String()] {
+			seen[addr.String()] = true
+			out = append(out, addr.String())
+		}
+	}
+	if len(out) > 3 {
+		return nil, domain.Invalid("network.dns", "at most 3 servers")
+	}
+	return out, nil
 }
 
 // instancePort is the default port of an engine instance: the port in its
@@ -615,6 +660,11 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		endpoints = s.expectedEndpoints(b)
 	}
 	v.Endpoints = endpoints
+	v.Status.PendingRestart = []string{}
+	if ss != nil {
+		v.Status.PendingRestart = pendingRestart(ss.applied, restartKeys(b))
+	}
+	v.Protocols = s.protocolViews(b)
 	for _, u := range b.users {
 		v.Users = append(v.Users, UserView{Username: u.Username, Role: u.Role})
 	}
@@ -742,9 +792,32 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 			}
 		}
 	}
+	var netw *resolvedNetwork
+	if in.Network != nil {
+		nin := *in.Network
+		if nin.MAC == "" && !nin.DefaultMAC && !nin.VendorOUI {
+			nin.MAC = b.net.Mac
+		}
+		n, err := s.resolveNetwork(ctx, id, b.doc, nin)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkUniqueNetwork(ctx, id, n); err != nil {
+			return nil, err
+		}
+		netw = &n
+	}
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
 		if err := q.UpdateCameraMeta(ctx, db.UpdateCameraMetaParams{ID: id, Name: name, Autostart: store.Int(autostart), TagsJson: tags, UpdatedAt: time.Now().UnixMilli()}); err != nil {
 			return err
+		}
+		if netw != nil {
+			dns, _ := json.Marshal(nonNil(netw.dns))
+			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
+				CameraID: id, ParentIf: netw.parent, Mac: netw.mac, Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
+			}); err != nil {
+				return err
+			}
 		}
 		if in.TargetIDs != nil {
 			if err := q.DeleteCameraTargets(ctx, id); err != nil {
@@ -760,7 +833,7 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 	})
 	if err != nil {
 		if store.IsUnique(err) {
-			return nil, domain.Conflict("name", "a camera named %q already exists", name)
+			return nil, domain.Conflict("name", "a camera with this name, IP or MAC already exists")
 		}
 		return nil, err
 	}

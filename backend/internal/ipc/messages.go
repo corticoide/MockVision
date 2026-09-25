@@ -80,6 +80,8 @@ type Configure struct {
 	Users    []engine.User   `json:"users"`
 	Streams  []Stream        `json:"streams"`
 	Targets  []Target        `json:"targets"`
+	// DNS servers of the camera; empty means the node's.
+	DNS []string `json:"dns,omitempty"`
 }
 
 // Reload replaces parts of the configuration; nil fields stay as they are.

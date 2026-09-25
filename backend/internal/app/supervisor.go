@@ -43,6 +43,9 @@ type session struct {
 	ip        string
 	endpoints []ipc.Endpoint
 	c         *ipc.Conn
+	// applied are the restart-only settings the process was launched
+	// with; the view compares them with the stored ones.
+	applied map[string]string
 
 	stopCh   chan string
 	stopOnce sync.Once
@@ -165,7 +168,7 @@ func actorName(a Actor) string {
 
 func (s *Service) startSession(b *cameraBundle) *session {
 	ss := &session{
-		s: s, id: b.cam.ID, name: b.cam.Name, state: domain.StateStopped,
+		s: s, id: b.cam.ID, name: b.cam.Name, state: domain.StateStopped, applied: restartKeys(b),
 		stopCh: make(chan string, 1), done: make(chan struct{}),
 		hello: make(chan ipc.Hello, 1), ready: make(chan ipc.Ready, 1), failed: make(chan string, 1),
 	}
@@ -620,6 +623,7 @@ func (s *Service) buildConfigure(b *cameraBundle, streams []ipc.Stream, ip strin
 		State:   b.values(),
 		Streams: streams,
 	}
+	_ = json.Unmarshal([]byte(b.net.DnsJson), &cfg.DNS)
 	for _, p := range b.protos {
 		cfg.Engines = append(cfg.Engines, ipc.EngineConfig{Instance: p.EngineKey, Enabled: store.Bool(p.Enabled), Port: int(p.Port)})
 	}

@@ -6,7 +6,8 @@
 # `mockvision run` and checks, from the client: ping and MAC (M1), RTSP with
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
-# and camera processes, clean stop, and cameras coming back after a restart.
+# and camera processes, editing a running camera (accounts, stream and
+# address), clean stop, and cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
@@ -28,6 +29,7 @@ CLIENT_NS=mve2e-client
 CLIENT_IP=10.77.0.2
 CAM_IP=10.77.0.10
 CAM2_IP=10.77.0.11
+CAM3_IP=10.77.0.12
 PORT=${E2E_PORT:-18090}
 API=http://127.0.0.1:$PORT/api/v1
 RUN_PID=
@@ -237,6 +239,28 @@ ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
 ok "event $EID delivered, latency $(echo "$ev" | json 'd["latency_ms"]') ms"
 
+step "v1 editing: accounts and stream apply without a restart"
+probe() { # password -> codec,width,height
+	client ffprobe -v error -rtsp_transport tcp -select_streams v:0 \
+		-show_entries stream=codec_name,width,height -of csv=p=0 "rtsp://admin:$1@$CAM_IP:554/main" 2>/dev/null
+}
+api PUT "/cameras/$CID/users" -H 'Content-Type: application/json' \
+	-d '{"users":[{"username":"admin","password":"e2e-new-pw","role":"admin"},{"username":"viewer","password":"e2e-view","role":"viewer"}]}' |
+	json 'len(d["users"])' | grep -qx 2 || fail "accounts not saved"
+[ "$(probe e2e-new-pw)" = "h264,640,360" ] || fail "RTSP refused the new password"
+probe e2e-cam-pw >/dev/null && fail "RTSP still accepts the old password"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u viewer:e2e-view "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 200 ] || fail "the new account got $code"
+ok "new password and new account work at once; the old password is refused"
+api PATCH "/cameras/$CID/streams/main" -H 'Content-Type: application/json' -d '{"resolution":"1280x720"}' >/dev/null
+for _ in $(seq 1 120); do
+	[ "$(probe e2e-new-pw)" = "h264,1280,720" ] && break
+	sleep 0.5
+done
+[ "$(probe e2e-new-pw)" = "h264,1280,720" ] || fail "the stream did not switch to 1280x720"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "the camera restarted"
+ok "ffprobe reads 1280x720 from the same camera process (pid $PID)"
+
 step "the main service and the camera hold no capabilities"
 check_privileges() { # pid, label
 	local status caps uid
@@ -265,6 +289,22 @@ resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gat
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
+
+step "v1 editing: a new address applies at the restart (RN-09)"
+pending=$(api PATCH "/cameras/$CID" -H 'Content-Type: application/json' \
+	-d "{\"network\":{\"ip\":\"$CAM3_IP\",\"netmask\":\"255.255.255.0\"}}" | json '",".join(d["status"]["pending_restart"])')
+[ "$pending" = network ] || fail "pending restart: $pending"
+client ping -c 1 -W 2 "$CAM_IP" >/dev/null || fail "the camera left its address before the restart"
+ok "saved; the camera keeps $CAM_IP until it restarts"
+api POST "/cameras/$CID/actions/restart" >/dev/null
+wait_state "$CID" running 60
+client ping -c 2 -W 2 "$CAM3_IP" >/dev/null || fail "no answer on the new address $CAM3_IP"
+client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the old address still answers"
+NEIGH=$(client ip neigh show "$CAM3_IP" | awk '{print $5}')
+[ "$NEIGH" = "$MAC" ] || fail "new address answers with $NEIGH, want $MAC"
+[ -z "$(api GET "/cameras/$CID" | json '",".join(d["status"]["pending_restart"])')" ] || fail "still pending after the restart"
+ok "after the restart the camera answers on $CAM3_IP with its MAC $MAC"
+CAM_IP=$CAM3_IP
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

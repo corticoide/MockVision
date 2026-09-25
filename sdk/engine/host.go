@@ -12,6 +12,9 @@ import (
 // reach the same services over gRPC, limited by the permissions the user
 // approved.
 type Host interface {
+	// Accounts are the camera's users. They can change while the camera
+	// runs, so engines look them up on every request.
+	Accounts() Accounts
 	State() State
 	Events() Events
 	Media() Media
@@ -19,6 +22,15 @@ type Host interface {
 	// Files is the camera's simulated SD card; nil when the camera has none.
 	Files() Files
 	Telemetry() Telemetry
+}
+
+// Accounts are the camera's user accounts (D11): at least one
+// administrator, each with a role.
+type Accounts interface {
+	// List returns every account, sorted by username.
+	List() []User
+	// Lookup returns the account with that username.
+	Lookup(username string) (User, bool)
 }
 
 // Origin says who changed a parameter; the audit log keeps it (RN-08).
