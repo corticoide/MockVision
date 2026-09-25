@@ -1,0 +1,11 @@
+.git
+.github
+bin
+data
+dist
+docs
+**/node_modules
+frontend/dist
+*.sqlite*
+*.test
+coverage.out

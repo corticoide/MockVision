@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/*
+ * MockVision design tokens (D94). Dark by default: near-black backgrounds,
+ * graphite greys and the bordó as the only brand color, used sparingly.
+ * Themes override these variables; components only use the tokens.
+ */
+:root {
+  --bg: #0e0f11;
+  --surface-1: #16181b;
+  --surface-2: #1d2024;
+  --border: #2a2e33;
+  --text: #e6e7e9;
+  --text-muted: #a3a8af;
+  --brand: #7a1f2b;
+  --brand-hover: #8e2533;
+  --ok: #3fa66b;
+  --warn: #d9a441;
+  --error: #e5484d;
+  --info: #6e8ba3;
+  --radius: 4px;
+  --row-height: 32px;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-error: var(--error);
+  --color-info: var(--info);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Addresses, directions and payloads are shown as typed: no ligatures. */
+  --font-mono--font-feature-settings: "liga" 0, "calt" 0;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    border-color: var(--border);
+  }
+  ::selection {
+    background: var(--brand);
+    color: var(--text);
+  }
+  :focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 1px;
+  }
+  dialog::backdrop {
+    background: rgb(0 0 0 / 0.6);
+  }
+}

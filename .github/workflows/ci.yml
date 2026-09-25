@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Build, unit, integration and e2e tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Panel
+        run: make frontend
+      - name: Unit tests
+        run: make test
+      - name: Binary
+        run: make backend
+      - name: Integration tests (network namespaces, as root)
+        run: make test-integration
+      - name: End-to-end (isolated virtual LAN, as root)
+        run: make e2e
+
+  compose:
+    name: End-to-end with docker compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install FFmpeg (the test client uses ffprobe)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Build the image and run the acceptance criteria against it
+        run: make e2e-compose

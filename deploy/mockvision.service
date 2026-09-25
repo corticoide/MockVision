@@ -1,0 +1,43 @@
+# MockVision node as a systemd service, without Docker.
+#
+#   install -m 0755 bin/mockvision /usr/local/bin/mockvision
+#   useradd --system --no-create-home --shell /usr/sbin/nologin mockvision
+#   useradd --system --no-create-home --shell /usr/sbin/nologin mockvision-cam
+#   install -m 0644 deploy/mockvision.service /etc/systemd/system/
+#   systemctl enable --now mockvision
+#
+# FFmpeg must be installed. Settings such as MOCKVISION_PARENT_IF go in
+# /etc/mockvision/env.
+
+[Unit]
+Description=MockVision node (simulated IP cameras)
+Documentation=https://github.com/corticoide/MockVision
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mockvision run
+Environment=MOCKVISION_DATA=/var/lib/mockvision
+Environment=MOCKVISION_LISTEN=:8080
+EnvironmentFile=-/etc/mockvision/env
+StateDirectory=mockvision
+# SIGTERM goes to the helper only: it stops the service, which stops the
+# cameras and removes their namespaces.
+KillMode=mixed
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+
+# The network helper keeps only these capabilities; the main service and
+# the cameras drop all of them. The host's mount namespace is kept on
+# purpose, so `ip netns` on the host lists the cameras' namespaces.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_CHOWN CAP_KILL
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

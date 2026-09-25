@@ -1,0 +1,19 @@
+# Build output
+/bin/
+/dist/
+/frontend/node_modules/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+
+# Local data and databases
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Tooling
+coverage.out
+*.test
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,929 @@
+openapi: 3.1.0
+info:
+  title: MockVision API
+  version: 0.1.0
+  description: |
+    REST API of a MockVision node, shared by the panel (session cookie) and
+    automation. Errors use problem+json (RFC 9457). State-changing requests
+    must send the `X-MockVision-Request` header. Live updates come through a
+    single WebSocket at `/api/v1/ws` (see the `x-websocket` section).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: /api/v1
+security:
+  - session: []
+tags:
+  - name: auth
+  - name: node
+  - name: profiles
+  - name: cameras
+  - name: assets
+  - name: targets
+  - name: events
+
+paths:
+  /auth/setup:
+    post:
+      tags: [auth]
+      operationId: setup
+      summary: Create the first administrator (first run only)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "201": { description: Created and logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200": { description: Logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      security: []
+      responses:
+        "204": { description: Logged out }
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: me
+      summary: Current user; 401 carries setup_required on a fresh node
+      responses:
+        "200": { description: Session, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /node:
+    get:
+      tags: [node]
+      operationId: getNode
+      responses:
+        "200": { description: Node, content: { application/json: { schema: { $ref: "#/components/schemas/Node" } } } }
+  /node/metrics:
+    get:
+      tags: [node]
+      operationId: getNodeMetrics
+      responses:
+        "200": { description: Metrics, content: { application/json: { schema: { $ref: "#/components/schemas/NodeMetrics" } } } }
+  /settings:
+    get:
+      tags: [node]
+      operationId: getSettings
+      responses:
+        "200": { description: Settings, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+    patch:
+      tags: [node]
+      operationId: patchSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsPatch" }
+      responses:
+        "200": { description: Settings, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /packages:
+    post:
+      tags: [profiles]
+      operationId: importPackage
+      summary: Import a .mvpkg package or a loose profile.yaml (draft)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { description: Already installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "201": { description: Installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /profiles:
+    get:
+      tags: [profiles]
+      operationId: listProfiles
+      responses:
+        "200":
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Profile" } }
+  /profiles/{vendor}/{model}/versions/{version}:
+    parameters:
+      - { name: vendor, in: path, required: true, schema: { type: string } }
+      - { name: model, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileDetail" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /profiles/{vendor}/{model}/versions/{version}/actions/{action}:
+    parameters:
+      - { name: vendor, in: path, required: true, schema: { type: string } }
+      - { name: model, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [archive, unarchive] } }
+    post:
+      tags: [profiles]
+      operationId: profileAction
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileDetail" } } } }
+
+  /cameras:
+    get:
+      tags: [cameras]
+      operationId: listCameras
+      responses:
+        "200":
+          description: Cameras
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Camera" } }
+    post:
+      tags: [cameras]
+      operationId: createCamera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCamera" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [cameras]
+      operationId: getCamera
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [cameras]
+      operationId: updateCamera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCamera" }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+    delete:
+      tags: [cameras]
+      operationId: deleteCamera
+      responses:
+        "204": { description: Deleted }
+  /cameras/{id}/actions/{action}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
+    post:
+      tags: [cameras]
+      operationId: cameraAction
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [cameras]
+      operationId: getCameraStatus
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, endpoints, metrics]
+                properties:
+                  status: { $ref: "#/components/schemas/CameraStatus" }
+                  endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
+                  metrics: { oneOf: [{ $ref: "#/components/schemas/CameraMetrics" }, { type: "null" }] }
+  /cameras/{id}/config:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [cameras]
+      operationId: getCameraConfig
+      responses:
+        "200": { description: Parameters, content: { application/json: { schema: { $ref: "#/components/schemas/ParamList" } } } }
+    patch:
+      tags: [cameras]
+      operationId: patchCameraConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Parameters, content: { application/json: { schema: { $ref: "#/components/schemas/ParamList" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/metrics:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: since, in: query, schema: { type: integer, description: Unix milliseconds } }
+    get:
+      tags: [cameras]
+      operationId: getCameraMetrics
+      responses:
+        "200":
+          description: Samples
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [samples]
+                properties:
+                  samples: { type: array, items: { $ref: "#/components/schemas/CameraMetrics" } }
+  /cameras/{id}/snapshot:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [cameras]
+      operationId: getSnapshot
+      responses:
+        "200": { description: JPEG, content: { image/jpeg: { schema: { type: string, format: binary } } } }
+  /cameras/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [events]
+      operationId: triggerEvent
+      summary: Manual trigger; the camera serializes and delivers the event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Trigger" }
+      responses:
+        "201": { description: Emitted, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /assets:
+    get:
+      tags: [assets]
+      operationId: listAssets
+      responses:
+        "200":
+          description: Assets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Asset" } }
+    post:
+      tags: [assets]
+      operationId: uploadAsset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Stored, content: { application/json: { schema: { $ref: "#/components/schemas/Asset" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /assets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      tags: [assets]
+      operationId: deleteAsset
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Problem" }
+  /assets/{id}/content:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [assets]
+      operationId: getAssetContent
+      responses:
+        "200": { description: Image, content: { image/*: { schema: { type: string, format: binary } } } }
+
+  /targets:
+    get:
+      tags: [targets]
+      operationId: listTargets
+      responses:
+        "200":
+          description: Targets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Target" } }
+    post:
+      tags: [targets]
+      operationId: createTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TargetInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Target" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /targets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [targets]
+      operationId: getTarget
+      responses:
+        "200": { description: Target, content: { application/json: { schema: { $ref: "#/components/schemas/Target" } } } }
+    patch:
+      tags: [targets]
+      operationId: updateTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TargetInput" }
+      responses:
+        "200": { description: Target, content: { application/json: { schema: { $ref: "#/components/schemas/Target" } } } }
+    delete:
+      tags: [targets]
+      operationId: deleteTarget
+      responses:
+        "204": { description: Deleted }
+        "409": { $ref: "#/components/responses/Problem" }
+  /targets/{id}/actions/test:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [targets]
+      operationId: testTarget
+      responses:
+        "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/TargetTest" } } } }
+
+  /events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      parameters:
+        - { name: camera_id, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: Events, content: { application/json: { schema: { $ref: "#/components/schemas/EventPage" } } } }
+  /events/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [events]
+      operationId: getEvent
+      responses:
+        "200": { description: Event, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+
+x-websocket:
+  path: /api/v1/ws
+  description: |
+    One read-only connection multiplexed by topic. Send
+    {"op":"subscribe","topics":["cameras","events"],"since":{"cameras":41}}
+    and receive {"topic","seq","type","at","data"}. Every topic numbers its
+    messages; after a reconnection send the last seq seen per topic. When it
+    is too old the server answers type "resync" and the client reloads that
+    state through REST. Topics: node (metrics), cameras (created, updated,
+    deleted, status), camera:<id> (status, config, client, gap, log),
+    events (event), profiles (installed).
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: mv_session
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Problem:
+      description: Problem
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+        report: { $ref: "#/components/schemas/ImportReport" }
+        setup_required: { type: boolean }
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string }
+    Me:
+      type: object
+      required: [user, expires_at]
+      properties:
+        user:
+          type: object
+          required: [id, username, role]
+          properties:
+            id: { type: string }
+            username: { type: string }
+            role: { type: string }
+        expires_at: { type: string, format: date-time }
+    Interface:
+      type: object
+      required: [name, mac, up, loopback, addrs, default]
+      properties:
+        name: { type: string }
+        mac: { type: string }
+        up: { type: boolean }
+        loopback: { type: boolean }
+        addrs: { type: [array, "null"], items: { type: string } }
+        default: { type: boolean }
+        gateway: { type: string }
+    CameraCounts:
+      type: object
+      required: [total, running, error]
+      properties:
+        total: { type: integer }
+        running: { type: integer }
+        error: { type: integer }
+    Node:
+      type: object
+      required: [version, runtime, hostname, cpu_count, mem_total, default_interface, default_gateway, parent_interface, interfaces, cameras, started_at]
+      properties:
+        version: { type: string }
+        runtime: { type: string, enum: [netns, local] }
+        hostname: { type: string }
+        cpu_count: { type: integer }
+        mem_total: { type: integer }
+        default_interface: { type: string }
+        default_gateway: { type: string }
+        parent_interface: { type: string }
+        interfaces: { type: [array, "null"], items: { $ref: "#/components/schemas/Interface" } }
+        cameras: { $ref: "#/components/schemas/CameraCounts" }
+        started_at: { type: string, format: date-time }
+    Settings:
+      type: object
+      required: [max_cameras, max_ram_percent, max_cpu_percent, parent_interface, events_retention_days]
+      properties:
+        max_cameras: { type: integer }
+        max_ram_percent: { type: number }
+        max_cpu_percent: { type: number }
+        parent_interface: { type: string }
+        events_retention_days: { type: integer }
+    SettingsPatch:
+      type: object
+      properties:
+        max_cameras: { type: integer }
+        max_ram_percent: { type: number }
+        max_cpu_percent: { type: number }
+        parent_interface: { type: string }
+        events_retention_days: { type: integer }
+    NodeMetrics:
+      type: object
+      required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, cameras, camera_counts, db, limits]
+      properties:
+        at: { type: string, format: date-time }
+        cpu_percent: { type: number }
+        cpu_sustained_percent: { type: number }
+        mem_total: { type: integer }
+        mem_used: { type: integer }
+        cameras: { type: object, additionalProperties: { $ref: "#/components/schemas/CameraMetrics" } }
+        camera_counts: { $ref: "#/components/schemas/CameraCounts" }
+        db:
+          type: object
+          required: [write_statements, write_transactions]
+          properties:
+            write_statements: { type: integer }
+            write_transactions: { type: integer }
+        limits: { $ref: "#/components/schemas/Settings" }
+    Profile:
+      type: object
+      required: [id, profile_id, version, name, vendor, model, firmware, level, signature_status, archived, camera_count, created_at]
+      properties:
+        id: { type: string }
+        profile_id: { type: string }
+        version: { type: string }
+        name: { type: string }
+        vendor: { type: string }
+        model: { type: string }
+        firmware: { type: array, items: { type: string } }
+        level: { type: string, enum: [draft, documented, captured, verified] }
+        signature_status: { type: string }
+        archived: { type: boolean }
+        camera_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        coverage: { type: object, additionalProperties: { type: string } }
+    ProfileStream:
+      type: object
+      required: [name, codecs, resolutions, fps_min, fps_max, default]
+      properties:
+        name: { type: string }
+        codecs: { type: array, items: { type: string } }
+        resolutions: { type: array, items: { type: string } }
+        fps_min: { type: integer }
+        fps_max: { type: integer }
+        default:
+          type: object
+          required: [codec, resolution, fps, bitrate, gop]
+          properties:
+            codec: { type: string }
+            resolution: { type: string }
+            fps: { type: integer }
+            bitrate: { type: integer }
+            gop: { type: integer }
+    ProfileDetail:
+      allOf:
+        - $ref: "#/components/schemas/Profile"
+        - type: object
+          required: [streams, engines, events, factory_users, params]
+          properties:
+            streams: { type: array, items: { $ref: "#/components/schemas/ProfileStream" } }
+            engines:
+              type: array
+              items:
+                type: object
+                required: [instance, engine]
+                properties:
+                  instance: { type: string }
+                  engine: { type: string }
+                  port: { type: integer }
+            events: { type: array, items: { type: string } }
+            factory_users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
+            factory_ip: { type: string }
+            params: { type: array, items: { $ref: "#/components/schemas/Param" } }
+    ImportProblem:
+      type: object
+      required: [step, severity, message]
+      properties:
+        step: { type: string }
+        severity: { type: string, enum: [error, warning] }
+        file: { type: string }
+        line: { type: integer }
+        pointer: { type: string }
+        message: { type: string }
+    ImportReport:
+      type: object
+      required: [kind, id, version, sha256, signature, steps, problems]
+      properties:
+        kind: { type: string }
+        id: { type: string }
+        version: { type: string }
+        sha256: { type: string }
+        signature: { type: string }
+        level: { type: string }
+        coverage: { type: object, additionalProperties: { type: string } }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [name, status]
+            properties:
+              name: { type: string }
+              status: { type: string, enum: [passed, failed, skipped] }
+              note: { type: string }
+        problems: { type: array, items: { $ref: "#/components/schemas/ImportProblem" } }
+    ImportResult:
+      type: object
+      required: [profile, report, created]
+      properties:
+        profile: { $ref: "#/components/schemas/Profile" }
+        report: { $ref: "#/components/schemas/ImportReport" }
+        created: { type: boolean }
+    CameraUser:
+      type: object
+      required: [username, role]
+      properties:
+        username: { type: string }
+        role: { type: string }
+    CameraStatus:
+      type: object
+      required: [state, reason, started_at, last_heartbeat, retries]
+      properties:
+        state: { type: string, enum: [stopped, provisioning, starting, running, degraded, restarting, stopping, error] }
+        reason: { type: string }
+        started_at: { type: [string, "null"], format: date-time }
+        last_heartbeat: { type: [string, "null"], format: date-time }
+        netns: { type: string }
+        pid: { type: integer }
+        retries: { type: integer }
+    Endpoint:
+      type: object
+      required: [instance, engine, protocol, port, url]
+      properties:
+        instance: { type: string }
+        engine: { type: string }
+        protocol: { type: string }
+        port: { type: integer }
+        url: { type: string }
+    Stream:
+      type: object
+      required: [name, codec, resolution, fps, gop, bitrate, asset_id, rendition_status]
+      properties:
+        name: { type: string }
+        codec: { type: string }
+        resolution: { type: string }
+        fps: { type: integer }
+        gop: { type: integer }
+        bitrate: { type: integer }
+        asset_id: { type: string }
+        rendition_id: { type: string }
+        rendition_status: { type: string, enum: [pending, ready, failed, missing] }
+        rendition_error: { type: string }
+    CameraMetrics:
+      type: object
+      required: [at, cpu_percent, rss_bytes, clients, bytes_in, bytes_out, requests]
+      properties:
+        at: { type: string, format: date-time }
+        cpu_percent: { type: number }
+        rss_bytes: { type: integer }
+        clients: { type: integer }
+        bytes_in: { type: integer }
+        bytes_out: { type: integer }
+        requests: { type: integer }
+    Network:
+      type: object
+      required: [mode, parent, mac, ip_mode, ip, netmask, prefix, gateway, dns]
+      properties:
+        mode: { type: string }
+        parent: { type: string }
+        mac: { type: string }
+        ip_mode: { type: string }
+        ip: { type: string }
+        netmask: { type: string }
+        prefix: { type: integer }
+        gateway: { type: string }
+        dns: { type: array, items: { type: string } }
+    Camera:
+      type: object
+      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, streams, users, targets, metrics, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        profile:
+          type: object
+          required: [id, version, name, vendor, model, level]
+          properties:
+            id: { type: string }
+            version: { type: string }
+            name: { type: string }
+            vendor: { type: string }
+            model: { type: string }
+            level: { type: string }
+        serial: { type: string }
+        desired_state: { type: string, enum: [running, stopped] }
+        autostart: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        network: { $ref: "#/components/schemas/Network" }
+        status: { $ref: "#/components/schemas/CameraStatus" }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
+        streams: { type: array, items: { $ref: "#/components/schemas/Stream" } }
+        users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
+        targets:
+          type: array
+          items:
+            type: object
+            required: [id, name, event_types]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              event_types: { type: array, items: { type: string } }
+        metrics: { oneOf: [{ $ref: "#/components/schemas/CameraMetrics" }, { type: "null" }] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateCamera:
+      type: object
+      required: [name, profile_id, profile_version]
+      properties:
+        name: { type: string }
+        profile_id: { type: string }
+        profile_version: { type: string }
+        network:
+          type: object
+          properties:
+            parent: { type: string }
+            mac: { type: string }
+            vendor_oui: { type: boolean }
+            ip: { type: string }
+            netmask: { type: string }
+            gateway: { type: string }
+        users:
+          type: array
+          items:
+            type: object
+            required: [username, password]
+            properties:
+              username: { type: string }
+              password: { type: string, writeOnly: true }
+              role: { type: string, enum: [admin, operator, viewer] }
+        stream:
+          type: object
+          properties:
+            asset_id: { type: string }
+            resolution: { type: string }
+            fps: { type: integer }
+        target_ids: { type: array, items: { type: string } }
+        autostart: { type: boolean }
+        start: { type: boolean }
+        tags: { type: array, items: { type: string } }
+    UpdateCamera:
+      type: object
+      properties:
+        name: { type: string }
+        autostart: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        target_ids: { type: array, items: { type: string } }
+    Param:
+      type: object
+      required: [key, type, value, default, effective, origin, updated_at]
+      properties:
+        key: { type: string }
+        type: { type: string, enum: [string, int, float, bool, enum] }
+        value: {}
+        default: {}
+        values: { type: array, items: {} }
+        min: { type: number }
+        max: { type: number }
+        bind: { type: string }
+        effective: { type: boolean }
+        description: { type: string }
+        origin: { type: string }
+        updated_at: { type: string, format: date-time }
+    ParamList:
+      type: object
+      required: [params]
+      properties:
+        params: { type: array, items: { $ref: "#/components/schemas/Param" } }
+    Asset:
+      type: object
+      required: [id, filename, mime, width, height, size, sha256, builtin, camera_count, created_at]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        mime: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        size: { type: integer }
+        sha256: { type: string }
+        builtin: { type: boolean }
+        camera_count: { type: integer }
+        created_at: { type: string, format: date-time }
+    Target:
+      type: object
+      required: [id, name, type, url, method, headers, username, has_password, enabled, camera_count, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [http] }
+        url: { type: string }
+        method: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+        username: { type: string }
+        has_password: { type: boolean }
+        enabled: { type: boolean }
+        camera_count: { type: integer }
+        created_at: { type: string, format: date-time }
+    TargetInput:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [http] }
+        url: { type: string }
+        method: { type: string, enum: [GET, POST, PUT] }
+        headers: { type: object, additionalProperties: { type: string } }
+        username: { type: string }
+        password: { type: string, writeOnly: true }
+        enabled: { type: boolean }
+    TargetTest:
+      type: object
+      required: [ok, latency_ms]
+      properties:
+        ok: { type: boolean }
+        http_status: { type: integer }
+        latency_ms: { type: integer }
+        error: { type: string }
+    Trigger:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, examples: [line_crossing] }
+        direction: { type: string, enum: ["A->B", "B->A", none] }
+        object:
+          type: object
+          required: [class]
+          properties:
+            class: { type: string }
+            color: { type: string }
+            confidence: { type: number }
+        plate:
+          type: object
+          required: [text]
+          properties:
+            text: { type: string }
+            format: { type: string }
+            color: { type: string }
+        speed:
+          type: object
+          required: [value, unit]
+          properties:
+            value: { type: number }
+            unit: { type: string }
+            limit: { type: number }
+        custom: { type: object, additionalProperties: true }
+    Delivery:
+      type: object
+      required: [id, event_id, target_id, target_name, attempt, at, status, latency_ms]
+      properties:
+        id: { type: string }
+        event_id: { type: string }
+        target_id: { type: string }
+        target_name: { type: string }
+        attempt: { type: integer }
+        at: { type: string, format: date-time }
+        status: { type: string, enum: [ok, retry, failed] }
+        http_status: { type: integer }
+        latency_ms: { type: integer }
+        error: { type: string }
+    Event:
+      type: object
+      required: [id, camera_id, camera_name, type, at, data, deliveries, delivery_status, latency_ms]
+      properties:
+        id: { type: string }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        type: { type: string }
+        at: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true }
+        deliveries: { type: array, items: { $ref: "#/components/schemas/Delivery" } }
+        delivery_status: { type: string, enum: [ok, failed, pending, none] }
+        latency_ms: { type: [integer, "null"] }
+    EventPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Event" } }
+        next_cursor: { type: string }

@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/corticoide/mockvision/main/profiles/schema/profile.schema.json",
+  "title": "MockVision profile",
+  "description": "Describes how a camera model and firmware behaves: identity, native parameters, streams, protocol engines and events. Schema version 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile", "identity", "media", "engines"],
+  "properties": {
+    "schema": {
+      "description": "Profile schema version.",
+      "const": 1
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "vendor", "model"],
+      "properties": {
+        "id": {
+          "description": "vendor/model identifier. Required for a loose profile.yaml; in a package it must match the manifest.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,62}/[a-z0-9][a-z0-9._-]{0,62}$"
+        },
+        "version": {
+          "description": "Semantic version of the profile content.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "vendor": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "firmware": {
+          "description": "Firmware versions covered by the profile.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        },
+        "extends": {
+          "description": "Installed parent profile, for example milesight/base@^1.",
+          "type": "string"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "factory"],
+      "properties": {
+        "serial": {
+          "description": "Serial number mask: 9 is a digit, A an uppercase letter, X an uppercase hex digit, a backslash escapes the next character.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "oui": {
+          "description": "Suggested vendor OUI for the camera MAC (optional).",
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){2}$"
+        },
+        "factory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["users"],
+          "properties": {
+            "network": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "ip": { "type": "string", "format": "ipv4" },
+                "mask": { "type": "string", "format": "ipv4" },
+                "gateway": { "type": "string", "format": "ipv4" }
+              }
+            },
+            "users": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["username", "password", "role"],
+                "properties": {
+                  "username": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "password": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "role": { "enum": ["admin", "operator", "viewer"] }
+                }
+              }
+            }
+          }
+        },
+        "device": {
+          "description": "Device data exposed to templates, such as firmware or hardware versions.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "state": {
+      "description": "Native parameters, named as the vendor names them.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.\\[\\]-]{1,128}$" },
+      "additionalProperties": { "$ref": "#/$defs/param" }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streams"],
+      "properties": {
+        "streams": {
+          "type": "object",
+          "required": ["main"],
+          "propertyNames": { "enum": ["main", "sub", "third"] },
+          "additionalProperties": { "$ref": "#/$defs/stream" }
+        }
+      }
+    },
+    "engines": {
+      "description": "Engine instances keyed by instance name. Each engine validates its own section.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["engine"],
+        "properties": {
+          "engine": {
+            "description": "Engine name and version range, for example http-api@^1.",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}@[0-9^~<>=., *xX|-]+$"
+          }
+        }
+      }
+    },
+    "events": {
+      "description": "Events the camera can emit, keyed by canonical type.",
+      "type": "object",
+      "propertyNames": { "pattern": "^([a-z_]+|custom:[a-z0-9_.-]{1,64})$" },
+      "additionalProperties": { "$ref": "#/$defs/event" }
+    },
+    "vca": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": { "enum": ["line", "region"] }
+        },
+        "object_classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "plate_format": {
+          "description": "Plate data format, for example text or text+color.",
+          "type": "string"
+        }
+      }
+    },
+    "coverage": {
+      "description": "What the author declares covered; the importer checks it.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(ms|s|m)$"
+    },
+    "param": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["string", "int", "float", "bool", "enum"] },
+        "default": {},
+        "values": { "type": "array", "minItems": 1 },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "max_length": { "type": "integer", "minimum": 1 },
+        "bind": {
+          "description": "Canonical key the parameter drives. Without it the parameter is declarative.",
+          "type": "string"
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codecs", "resolutions", "default"],
+      "properties": {
+        "codecs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["h264", "h265", "mjpeg"] }
+        },
+        "resolutions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$" }
+        },
+        "fps": { "$ref": "#/$defs/range" },
+        "bitrate": { "$ref": "#/$defs/range" },
+        "default": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["codec", "resolution", "fps"],
+          "properties": {
+            "codec": { "enum": ["h264", "h265", "mjpeg"] },
+            "resolution": { "type": "string" },
+            "fps": { "type": "integer", "minimum": 1, "maximum": 60 },
+            "bitrate": { "type": "integer", "minimum": 16, "maximum": 100000 },
+            "gop": { "type": "integer", "minimum": 1, "maximum": 600 }
+          }
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vendor_name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "min_interval": { "$ref": "#/$defs/duration" },
+        "transports": {
+          "type": "object",
+          "properties": {
+            "http_push": { "$ref": "#/$defs/http_push" }
+          },
+          "additionalProperties": { "type": "object" }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeout": { "$ref": "#/$defs/duration" },
+            "retries": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "backoff": { "$ref": "#/$defs/duration" }
+          }
+        }
+      }
+    },
+    "http_push": {
+      "description": "Event notification by HTTP. Exactly one of template (file in the package) or body (inline template).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT"] },
+        "content_type": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "template": { "type": "string" },
+        "body": { "type": "string" },
+        "path": { "type": "string" },
+        "image": { "type": "boolean" }
+      },
+      "oneOf": [
+        { "required": ["template"] },
+        { "required": ["body"] }
+      ]
+    }
+  }
+}
