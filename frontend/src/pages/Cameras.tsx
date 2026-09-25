@@ -1,8 +1,9 @@
-import { Camera as CameraIcon, ChevronDown, ChevronRight, Copy, Play, Plus, Square, Trash2, Zap } from "lucide-react";
+import { Camera as CameraIcon, ChevronDown, ChevronRight, Play, Plus, Square, Trash2, Zap } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { type Camera, errorMessage } from "@/api/client";
 import { useCameraAction, useCameras, useDeleteCamera, useNodeMetrics, useTrigger } from "@/api/queries";
 import { Badge, LevelBadge, Mono, StateBadge } from "@/components/badges";
+import { CopyButton } from "@/components/CopyButton";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice, PageHeader } from "@/components/ui/card";
@@ -199,16 +200,8 @@ function CameraDetails({ camera }: { camera: Camera }) {
             {camera.endpoints.map((e) => (
               <div key={e.instance} className="flex items-center gap-2">
                 <Badge tone="info">{e.protocol.toUpperCase()}</Badge>
-                <Mono>{e.url}</Mono>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  title="Copy"
-                  aria-label="Copy URL"
-                  onClick={() => navigator.clipboard?.writeText(e.url).then(() => toast("Copied", "ok"))}
-                >
-                  <Copy />
-                </Button>
+                <Mono className="select-all">{e.url}</Mono>
+                <CopyButton text={e.url} label="Copy URL" />
               </div>
             ))}
             <p className="text-xs text-muted">

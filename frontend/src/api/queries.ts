@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { navigate } from "@/lib/router";
 import {
   api,
   ApiError,
@@ -66,9 +67,14 @@ export function useLogout() {
     mutationFn: async () => {
       await api.POST("/auth/logout");
     },
-    onSuccess: () => {
-      qc.clear();
-      qc.invalidateQueries({ queryKey: keys.me });
+    // Even if the request fails the session is unusable: go back to the
+    // login and drop everything cached for the previous session. The me
+    // query is set, not cleared, so the mounted app sees the change.
+    onSettled: () => {
+      qc.cancelQueries();
+      qc.setQueryData<MeState>(keys.me, { status: "login" });
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== keys.me[0] });
+      navigate("/");
     },
   });
 }
