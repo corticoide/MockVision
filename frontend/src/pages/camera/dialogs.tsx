@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input } from "@/components/ui/form";
+import { useT } from "@/lib/i18n";
 import { navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { isRunning } from "./parts";
@@ -15,6 +16,7 @@ import { isRunning } from "./parts";
 export function CloneDialog({ camera, open, onClose }: { camera: Camera; open: boolean; onClose: () => void }) {
   const { data: node } = useNode();
   const clone = useCloneCamera(camera.id);
+  const t = useT();
   const local = node?.runtime === "local";
   const [name, setName] = useState("");
   const [ip, setIp] = useState("");
@@ -41,7 +43,7 @@ export function CloneDialog({ camera, open, onClose }: { camera: Camera; open: b
       },
       {
         onSuccess: (copy) => {
-          toast(`Camera ${copy.name} created from ${camera.name}`, "ok");
+          toast(t("Camera {name} created from {src}", { name: copy.name, src: camera.name }), "ok");
           onClose();
           navigate(`/cameras/${copy.id}`);
         },
@@ -56,28 +58,28 @@ export function CloneDialog({ camera, open, onClose }: { camera: Camera; open: b
     <Dialog
       open={open}
       onClose={onClose}
-      title={`Clone ${camera.name}`}
-      description="Same profile, parameters, accounts, protocols, picture and targets; its own ID, serial and MAC."
+      title={t("Clone {name}", { name: camera.name })}
+      description={t("Same profile, parameters, accounts, protocols, picture and targets; its own ID, serial and MAC.")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" type="submit" form="clone-camera" disabled={clone.isPending || !name.trim() || (!local && !ip.trim())}>
-            {clone.isPending ? "Cloning…" : "Clone camera"}
+            {clone.isPending ? t("Cloning…") : t("Clone camera")}
           </Button>
         </>
       }
     >
       <form id="clone-camera" onSubmit={submit} className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <Field label="Name" error={errors["name"]} className="col-span-2">
+        <Field label={t("Name")} error={errors["name"]} className="col-span-2">
           <Input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
         </Field>
         {!local && (
-          <Field label="IP address" error={errors["network.ip"]} hint={`Same netmask and gateway as ${camera.name}.`} className="col-span-2">
+          <Field label={t("IP address")} error={errors["network.ip"]} hint={t("Same netmask and gateway as {name}.", { name: camera.name })} className="col-span-2">
             <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.51" className="font-mono" required />
           </Field>
         )}
         <div className="col-span-2">
-          <Checkbox label="Start it now" checked={start} onChange={(e) => setStart(e.target.checked)} />
+          <Checkbox label={t("Start it now")} checked={start} onChange={(e) => setStart(e.target.checked)} />
         </div>
         {clone.error && !Object.keys(errors).length && (
           <div className="col-span-2">
@@ -94,6 +96,7 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
   const { data: profile } = useProfile({ id: camera.profile.id, version: camera.profile.version });
   const { data: node } = useNode();
   const reset = useResetCamera(camera.id);
+  const t = useT();
   const [scope, setScope] = useState<"settings" | "full">("settings");
   const local = node?.runtime === "local";
 
@@ -109,15 +112,17 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
   const options = [
     {
       id: "settings" as const,
-      title: "Restore settings",
-      text: "Parameters, accounts and protocols go back to the profile's defaults. The network identity stays.",
+      title: t("Restore settings"),
+      text: t("Parameters, accounts and protocols go back to the profile's defaults. The network identity stays."),
     },
     {
       id: "full" as const,
-      title: "Factory reset",
+      title: t("Factory reset"),
       text: local
-        ? "Everything above, plus the MAC derived from the camera ID."
-        : `Everything above, plus the profile's factory address${factoryIP ? ` ${factoryIP}` : ""} and the default MAC.`,
+        ? t("Everything above, plus the MAC derived from the camera ID.")
+        : factoryIP
+          ? t("Everything above, plus the profile's factory address {ip} and the default MAC.", { ip: factoryIP })
+          : t("Everything above, plus the profile's factory address and the default MAC."),
     },
   ];
 
@@ -125,29 +130,29 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
     <Dialog
       open={open}
       onClose={onClose}
-      title={`Restore ${camera.name}`}
-      description="Like the reset button of the real device. The picture is kept."
+      title={t("Restore {name}", { name: camera.name })}
+      description={t("Like the reset button of the real device. The picture is kept.")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button
             variant="danger"
             disabled={reset.isPending}
             onClick={() =>
               reset.mutate(scope, {
                 onSuccess: () => {
-                  toast(isRunning(camera) ? `${camera.name} restored; it reboots` : `${camera.name} restored`, "ok");
+                  toast(isRunning(camera) ? t("{name} restored; it reboots", { name: camera.name }) : t("{name} restored", { name: camera.name }), "ok");
                   onClose();
                 },
               })
             }
           >
-            {reset.isPending ? "Restoring…" : scope === "full" ? "Factory reset" : "Restore settings"}
+            {reset.isPending ? t("Restoring…") : scope === "full" ? t("Factory reset") : t("Restore settings")}
           </Button>
         </>
       }
     >
-      <div role="radiogroup" aria-label="Restore level" className="flex flex-col gap-2">
+      <div role="radiogroup" aria-label={t("Restore level")} className="flex flex-col gap-2">
         {options.map((o) => (
           <label
             key={o.id}
@@ -166,12 +171,12 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
       </div>
       {isRunning(camera) && (
         <p className="mt-3 text-xs text-muted">
-          The camera is running: it reboots to apply the reset, as the real one does.
+          {t("The camera is running: it reboots to apply the reset, as the real one does.")}
         </p>
       )}
       {scope === "full" && !local && !factoryIP && (
         <div className="mt-3">
-          <Notice tone="warn">The profile declares no factory address, so a factory reset is refused.</Notice>
+          <Notice tone="warn">{t("The profile declares no factory address, so a factory reset is refused.")}</Notice>
         </div>
       )}
       {reset.error && (
@@ -181,7 +186,7 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
       )}
       {scope === "full" && factoryIP && !local && (
         <p className="mt-3 text-xs text-muted">
-          New address: <Mono>{factoryIP}</Mono>. Another camera cannot be using it.
+          {t("New address:")} <Mono>{factoryIP}</Mono>. {t("Another camera cannot be using it.")}
         </p>
       )}
     </Dialog>

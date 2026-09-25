@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
@@ -20,6 +21,7 @@ interface DialogProps {
  */
 export function Dialog({ open, onClose, title, description, children, footer, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  const t = useT();
 
   useEffect(() => {
     const d = ref.current;
@@ -51,7 +53,7 @@ export function Dialog({ open, onClose, title, description, children, footer, cl
               <h2 className="text-sm font-semibold">{title}</h2>
               {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label={t("Close")}>
               <X />
             </Button>
           </div>

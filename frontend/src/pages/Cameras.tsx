@@ -7,6 +7,7 @@ import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice, PageHeader } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { useT } from "@/lib/i18n";
 import { Link } from "@/lib/router";
 import { formatBytes, formatPercent } from "@/lib/utils";
 import { CloneDialog } from "./camera/dialogs";
@@ -17,38 +18,39 @@ export function CamerasPage() {
   const { data: metrics } = useNodeMetrics();
   const [creating, setCreating] = useState(false);
   const [cloning, setCloning] = useState<Camera | null>(null);
+  const t = useT();
 
   return (
     <>
       <PageHeader
-        title="Cameras"
-        description="Simulated IP cameras on this node. Each one answers on the LAN as its profile describes."
+        title={t("Cameras")}
+        description={t("Simulated IP cameras on this node. Each one answers on the LAN as its profile describes.")}
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
-            <Plus /> New camera
+            <Plus /> {t("New camera")}
           </Button>
         }
       />
       {error && <Notice tone="error">{errorMessage(error)}</Notice>}
       <Card>
         {isLoading ? (
-          <Empty title="Loading cameras…" />
+          <Empty title={t("Loading cameras…")} />
         ) : !cameras?.length ? (
-          <Empty icon={<CameraIcon />} title="No cameras yet">
-            Import a profile, then create a camera with a free IP address of your LAN.
+          <Empty icon={<CameraIcon />} title={t("No cameras yet")}>
+            {t("Import a profile, then create a camera with a free IP address of your LAN.")}
           </Empty>
         ) : (
           <Table>
             <THead>
               <tr>
-                <TH>Name</TH>
-                <TH>Profile</TH>
-                <TH>Address</TH>
-                <TH>State</TH>
+                <TH>{t("Name")}</TH>
+                <TH>{t("Profile")}</TH>
+                <TH>{t("Address")}</TH>
+                <TH>{t("State")}</TH>
                 <TH className="text-right">CPU</TH>
                 <TH className="text-right">RAM</TH>
-                <TH className="text-right">Clients</TH>
-                <TH className="text-right">Actions</TH>
+                <TH className="text-right">{t("Clients")}</TH>
+                <TH className="text-right">{t("Actions")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -77,8 +79,8 @@ export function CamerasPage() {
                       <div className="flex items-center gap-2">
                         <StateBadge state={c.status.state} reason={c.status.reason} />
                         {c.status.pending_restart.length > 0 && (
-                          <Badge tone="warn" icon={<RotateCw />} title={`Saved ${c.status.pending_restart.join(" and ")} changes apply after a restart`}>
-                            restart pending
+                          <Badge tone="warn" icon={<RotateCw />} title={t("Saved {what} changes apply after a restart", { what: c.status.pending_restart.join(" and ") })}>
+                            {t("restart pending")}
                           </Badge>
                         )}
                         {c.status.state === "error" && (
@@ -117,6 +119,7 @@ function RowActions({ camera, onClone }: { camera: Camera; onClone: () => void }
   const action = useCameraAction();
   const trigger = useTrigger();
   const del = useDeleteCamera();
+  const t = useT();
   const state = camera.status.state;
   const running = state === "running" || state === "degraded";
   const busy = ["provisioning", "starting", "stopping", "restarting"].includes(state) || action.isPending;
@@ -134,39 +137,39 @@ function RowActions({ camera, onClone }: { camera: Camera; onClone: () => void }
         size="sm"
         variant="secondary"
         disabled={!running || trigger.isPending}
-        title="Send a line-crossing event to the camera's targets"
+        title={t("Send a line-crossing event to the camera's targets")}
         onClick={() =>
           trigger.mutate(
             { id: camera.id, type: "line_crossing" },
             {
-              onSuccess: () => toast(`Line crossing sent from ${camera.name}`, "ok"),
+              onSuccess: () => toast(t("Line crossing sent from {name}", { name: camera.name }), "ok"),
               onError: (err) => toast(errorMessage(err), "error"),
             },
           )
         }
       >
-        <Zap /> Line crossing
+        <Zap /> {t("Line crossing")}
       </Button>
       {canStart ? (
-        <Button size="icon" variant="ghost" disabled={busy} onClick={() => run("start")} title="Start" aria-label={`Start ${camera.name}`}>
+        <Button size="icon" variant="ghost" disabled={busy} onClick={() => run("start")} title={t("Start")} aria-label={t("Start {name}", { name: camera.name })}>
           <Play />
         </Button>
       ) : (
-        <Button size="icon" variant="ghost" disabled={busy || !running} onClick={() => run("stop")} title="Stop" aria-label={`Stop ${camera.name}`}>
+        <Button size="icon" variant="ghost" disabled={busy || !running} onClick={() => run("stop")} title={t("Stop")} aria-label={t("Stop {name}", { name: camera.name })}>
           <Square />
         </Button>
       )}
-      <Button size="icon" variant="ghost" onClick={onClone} title="Clone" aria-label={`Clone ${camera.name}`}>
+      <Button size="icon" variant="ghost" onClick={onClone} title={t("Clone")} aria-label={t("Clone {name}", { name: camera.name })}>
         <CopyPlus />
       </Button>
       <Button
         size="icon"
         variant="ghost"
-        title="Delete"
-        aria-label={`Delete ${camera.name}`}
+        title={t("Delete")}
+        aria-label={t("Delete {name}", { name: camera.name })}
         disabled={del.isPending}
         onClick={() => {
-          if (confirm(`Delete camera ${camera.name} and its events?`)) {
+          if (confirm(t("Delete camera {name} and its events?", { name: camera.name }))) {
             del.mutate(camera.id, { onError: (err) => toast(errorMessage(err), "error") });
           }
         }}

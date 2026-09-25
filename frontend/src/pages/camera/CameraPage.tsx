@@ -9,6 +9,7 @@ import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice } from "@/components/ui/card";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
+import { useT } from "@/lib/i18n";
 import { Link, navigate } from "@/lib/router";
 import { ConfigTab } from "./ConfigTab";
 import { CloneDialog, ResetDialog } from "./dialogs";
@@ -31,15 +32,16 @@ const sections = [
 
 export function CameraPage({ id, tab }: { id: string; tab?: string }) {
   const { data: camera, isLoading, error } = useCamera(id);
+  const t = useT();
   useCameraTopic(id);
 
   if (error) return <Notice tone="error">{errorMessage(error)}</Notice>;
-  if (isLoading) return <Empty title="Loading camera…" />;
+  if (isLoading) return <Empty title={t("Loading camera…")} />;
   if (!camera) {
     return (
       <Card>
-        <Empty title="Camera not found">
-          It may have been deleted. <Link href="/cameras" className="underline">Back to the cameras</Link>.
+        <Empty title={t("Camera not found")}>
+          {t("It may have been deleted.")} <Link href="/cameras" className="underline">{t("Back to the cameras")}</Link>.
         </Empty>
       </Card>
     );
@@ -59,8 +61,8 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         </div>
       )}
       <Tabs
-        label="Camera sections"
-        items={sections.map((s) => ({ ...s, badge: (pending as string[]).includes(s.id) }))}
+        label={t("Camera sections")}
+        items={sections.map((s) => ({ id: s.id, label: t(s.label), badge: (pending as string[]).includes(s.id) }))}
         value={current}
         onChange={go}
       />
@@ -81,6 +83,7 @@ function Header({ camera }: { camera: Camera }) {
   const action = useCameraAction();
   const trigger = useTrigger();
   const del = useDeleteCamera();
+  const t = useT();
   const [cloning, setCloning] = useState(false);
   const [resetting, setResetting] = useState(false);
   const state = camera.status.state;
@@ -94,7 +97,7 @@ function Header({ camera }: { camera: Camera }) {
   return (
     <div className="mb-4">
       <Link href="/cameras" className="mb-2 inline-flex items-center gap-1 text-xs text-muted hover:text-text [&_svg]:size-3.5">
-        <ArrowLeft /> Cameras
+        <ArrowLeft /> {t("Cameras")}
       </Link>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -116,55 +119,55 @@ function Header({ camera }: { camera: Camera }) {
             size="sm"
             variant="secondary"
             disabled={!running || trigger.isPending}
-            title="Send a line-crossing event to the camera's targets"
+            title={t("Send a line-crossing event to the camera's targets")}
             onClick={() =>
               trigger.mutate(
                 { id: camera.id, type: "line_crossing" },
                 {
-                  onSuccess: () => toast(`Line crossing sent from ${camera.name}`, "ok"),
+                  onSuccess: () => toast(t("Line crossing sent from {name}", { name: camera.name }), "ok"),
                   onError: (err) => toast(errorMessage(err), "error"),
                 },
               )
             }
           >
-            <Zap /> Line crossing
+            <Zap /> {t("Line crossing")}
           </Button>
           {canStart ? (
             <Button size="sm" variant="primary" disabled={busy} onClick={() => run("start")}>
-              <Play /> Start
+              <Play /> {t("Start")}
             </Button>
           ) : (
             <>
               <Button size="sm" disabled={busy || !running} onClick={() => run("restart")}>
-                <RotateCw /> Restart
+                <RotateCw /> {t("Restart")}
               </Button>
               <Button size="sm" disabled={busy || !running} onClick={() => run("stop")}>
-                <Square /> Stop
+                <Square /> {t("Stop")}
               </Button>
             </>
           )}
           <Button size="sm" onClick={() => setCloning(true)}>
-            <CopyPlus /> Clone
+            <CopyPlus /> {t("Clone")}
           </Button>
           <Button size="sm" onClick={() => setResetting(true)}>
-            <RotateCcw /> Restore
+            <RotateCcw /> {t("Restore")}
           </Button>
           <Button
             size="sm"
             variant="danger"
             disabled={del.isPending}
             onClick={() => {
-              if (!confirm(`Delete camera ${camera.name} and its events?`)) return;
+              if (!confirm(t("Delete camera {name} and its events?", { name: camera.name }))) return;
               del.mutate(camera.id, {
                 onSuccess: () => {
-                  toast(`Camera ${camera.name} deleted`, "ok");
+                  toast(t("Camera {name} deleted", { name: camera.name }), "ok");
                   navigate("/cameras");
                 },
                 onError: (err) => toast(errorMessage(err), "error"),
               });
             }}
           >
-            <Trash2 /> Delete
+            <Trash2 /> {t("Delete")}
           </Button>
         </div>
       </div>
@@ -176,13 +179,14 @@ function Header({ camera }: { camera: Camera }) {
 
 function PendingRestart({ camera }: { camera: Camera }) {
   const action = useCameraAction();
-  const what = camera.status.pending_restart.map((p) => (p === "network" ? "network" : "protocols")).join(" and ");
+  const t = useT();
+  const what = camera.status.pending_restart.map((p) => (p === "network" ? t("network") : t("protocols"))).join(t(" and "));
   return (
     <div className="mb-3">
       <Notice tone="warn">
         <div className="flex items-center justify-between gap-4">
           <span>
-            Saved changes to the {what} apply when the camera restarts (RN-09); it keeps running with the previous ones.
+            {t("Saved changes to the {what} apply when the camera restarts (RN-09); it keeps running with the previous ones.", { what })}
           </span>
           <Button
             size="sm"
@@ -191,13 +195,13 @@ function PendingRestart({ camera }: { camera: Camera }) {
               action.mutate(
                 { id: camera.id, action: "restart" },
                 {
-                  onSuccess: () => toast(`${camera.name} is restarting`, "ok"),
+                  onSuccess: () => toast(t("{name} is restarting", { name: camera.name }), "ok"),
                   onError: (err) => toast(errorMessage(err), "error"),
                 },
               )
             }
           >
-            <RotateCw /> Restart now
+            <RotateCw /> {t("Restart now")}
           </Button>
         </div>
       </Notice>
@@ -207,14 +211,15 @@ function PendingRestart({ camera }: { camera: Camera }) {
 
 function EventsTab({ camera }: { camera: Camera }) {
   const { data, isLoading, error } = useEvents(camera.id);
+  const t = useT();
   const events = data?.items ?? [];
   if (error) return <Notice tone="error">{errorMessage(error)}</Notice>;
   return (
     <Card>
       {isLoading ? (
-        <Empty title="Loading events…" />
+        <Empty title={t("Loading events…")} />
       ) : events.length === 0 ? (
-        <Empty title="No events from this camera yet">Press “Line crossing” while the camera runs.</Empty>
+        <Empty title={t("No events from this camera yet")}>{t('Press "Line crossing" while the camera runs.')}</Empty>
       ) : (
         <EventTable events={events} showCamera={false} />
       )}

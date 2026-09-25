@@ -6,6 +6,7 @@ import { useMe } from "@/api/queries";
 import { Layout, Logo } from "@/components/Layout";
 import { Toaster } from "@/components/toast";
 import { Notice } from "@/components/ui/card";
+import { useT } from "@/lib/i18n";
 import { usePath } from "@/lib/router";
 import { AssetsPage } from "@/pages/Assets";
 import { CameraPage } from "@/pages/camera/CameraPage";
@@ -29,6 +30,7 @@ const pages: Record<string, ComponentType> = {
 export function App() {
   const qc = useQueryClient();
   const me = useMe();
+  const t = useT();
   const authenticated = me.data?.status === "authenticated";
 
   // The WebSocket lives as long as the session.
@@ -48,7 +50,7 @@ export function App() {
   } else if (me.error) {
     content = (
       <div className="flex h-full items-center justify-center p-6">
-        <Notice tone="error">Cannot reach the node: {errorMessage(me.error)}</Notice>
+        <Notice tone="error">{t("Cannot reach the node: {msg}", { msg: errorMessage(me.error) })}</Notice>
       </div>
     );
   } else if (me.data?.status === "authenticated") {
@@ -70,10 +72,11 @@ export function App() {
 }
 
 function Routes() {
+  const t = useT();
   const path = usePath().replace(/\/+$/, "") || "/";
   const camera = /^\/cameras\/([^/]+)(?:\/([^/]+))?$/.exec(path);
   if (camera) return <CameraPage id={decodeURIComponent(camera[1])} tab={camera[2]} />;
   const Page = pages[path];
-  if (!Page) return <Notice tone="warn">Page not found: {path}</Notice>;
+  if (!Page) return <Notice tone="warn">{t("Page not found: {path}", { path })}</Notice>;
   return <Page />;
 }

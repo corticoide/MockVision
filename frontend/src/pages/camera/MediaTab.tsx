@@ -6,6 +6,7 @@ import { toast } from "@/components/toast";
 import { Card } from "@/components/ui/card";
 import { Field, Input, Select } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
+import { useT } from "@/lib/i18n";
 import { Link } from "@/lib/router";
 import { formatBytes } from "@/lib/utils";
 import { Info, SaveBar, SectionTitle, SnapshotPreview } from "./parts";
@@ -21,6 +22,7 @@ export function MediaTab({ camera }: { camera: Camera }) {
   const { data: profile } = useProfile({ id: camera.profile.id, version: camera.profile.version });
   const { data: assets } = useAssets();
   const update = useUpdateStream(camera.id);
+  const t = useT();
   const stream = camera.streams[0];
   const spec = profile?.streams.find((s) => s.name === stream?.name);
   const bound = (field: string) => profile?.params.some((p) => p.bind === `media.${stream?.name}.${field}`) ?? false;
@@ -30,7 +32,7 @@ export function MediaTab({ camera }: { camera: Camera }) {
   const { asset, resolution, fps } = form.draft;
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  if (!stream) return <Card className="p-4 text-muted">The camera has no stream.</Card>;
+  if (!stream) return <Card className="p-4 text-muted">{t("The camera has no stream.")}</Card>;
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -45,7 +47,7 @@ export function MediaTab({ camera }: { camera: Camera }) {
       {
         onSuccess: (saved) => {
           form.resetTo(savedOf(saved));
-          toast("Stream saved; it is encoded again and the camera switches to it", "ok");
+          toast(t("Stream saved; it is encoded again and the camera switches to it"), "ok");
         },
         onError: (err) => {
           if (err instanceof ApiError) setErrors(err.fieldErrors());
@@ -61,37 +63,37 @@ export function MediaTab({ camera }: { camera: Camera }) {
     <div className="grid grid-cols-[minmax(0,1fr)_340px] items-start gap-4">
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-2">
-          <SectionTitle>Stream {stream.name}</SectionTitle>
-          <Badge tone={renditionTone[stream.rendition_status]}>{stream.rendition_status}</Badge>
+          <SectionTitle>{t("Stream {name}", { name: stream.name })}</SectionTitle>
+          <Badge tone={renditionTone[stream.rendition_status]}>{t(stream.rendition_status)}</Badge>
         </div>
         <form id="camera-media" onSubmit={submit} className="grid grid-cols-3 gap-x-4 gap-y-3">
-          <Field label="Image" error={errors["asset_id"]} hint={<Link href="/assets" className="underline">Manage images</Link>}>
+          <Field label={t("Image")} error={errors["asset_id"]} hint={<Link href="/assets" className="underline">{t("Manage images")}</Link>}>
             <Select value={asset} onChange={(e) => form.set({ asset: e.target.value })}>
               {assets?.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.builtin ? "Test pattern" : a.filename} ({a.width}×{a.height})
+                  {a.builtin ? t("Test pattern") : a.filename} ({a.width}×{a.height})
                 </option>
               ))}
             </Select>
           </Field>
           <Field
-            label="Resolution"
+            label={t("Resolution")}
             error={errors["resolution"]}
-            hint={bound("resolution") ? "Also changes the profile parameter bound to it." : "Fixed by the profile."}
+            hint={bound("resolution") ? t("Also changes the profile parameter bound to it.") : t("Fixed by the profile.")}
           >
             <Select value={resolution} onChange={(e) => form.set({ resolution: e.target.value })} disabled={!bound("resolution")}>
               {(spec?.resolutions ?? [stream.resolution]).map((r) => (
                 <option key={r} value={r}>
                   {r}
-                  {r === spec?.default.resolution ? " (default)" : ""}
+                  {r === spec?.default.resolution ? t(" (default)") : ""}
                 </option>
               ))}
             </Select>
           </Field>
           <Field
-            label="Frame rate (fps)"
+            label={t("Frame rate (fps)")}
             error={errors["fps"]}
-            hint={bound("fps") ? `Between ${spec?.fps_min ?? 1} and ${spec?.fps_max ?? 30}.` : "Fixed by the profile."}
+            hint={bound("fps") ? t("Between {min} and {max}.", { min: spec?.fps_min ?? 1, max: spec?.fps_max ?? 30 }) : t("Fixed by the profile.")}
           >
             <Input
               type="number"
@@ -105,10 +107,10 @@ export function MediaTab({ camera }: { camera: Camera }) {
           </Field>
         </form>
         <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-2 text-[13px]">
-          <Info label="Codec" value={stream.codec.toUpperCase()} />
-          <Info label="Bitrate" value={<Mono>{stream.bitrate} kbit/s</Mono>} />
+          <Info label={t("Codec")} value={stream.codec.toUpperCase()} />
+          <Info label={t("Bitrate")} value={<Mono>{stream.bitrate} kbit/s</Mono>} />
           <Info label="GOP" value={<Mono>{stream.gop} frames</Mono>} />
-          <Info label="Image" value={current ? `${current.filename} · ${formatBytes(current.size)}` : "—"} />
+          <Info label={t("Image")} value={current ? `${current.filename} · ${formatBytes(current.size)}` : "—"} />
         </div>
         {stream.rendition_error && <p className="mt-2 text-xs text-error">{stream.rendition_error}</p>}
         <SaveBar
@@ -119,11 +121,11 @@ export function MediaTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note="Applied without restarting: the picture is encoded once and the camera switches to it (RN-09)."
+          note={t("Applied without restarting: the picture is encoded once and the camera switches to it (RN-09).")}
         />
       </Card>
       <Card className="p-4">
-        <SectionTitle>Snapshot</SectionTitle>
+        <SectionTitle>{t("Snapshot")}</SectionTitle>
         <SnapshotPreview camera={camera} />
       </Card>
     </div>

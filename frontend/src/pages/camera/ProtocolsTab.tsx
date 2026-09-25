@@ -7,6 +7,7 @@ import { Card, Notice } from "@/components/ui/card";
 import { Checkbox, Input } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useDraft } from "@/lib/draft";
+import { useT } from "@/lib/i18n";
 import { isRunning, SaveBar } from "./parts";
 
 interface Row {
@@ -20,6 +21,7 @@ const savedOf = (camera: Camera): Row[] =>
 
 export function ProtocolsTab({ camera }: { camera: Camera }) {
   const save = useSetCameraProtocols(camera.id);
+  const t = useT();
   const form = useDraft(savedOf(camera));
   const rows = form.draft;
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -38,7 +40,7 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
       {
         onSuccess: (saved) => {
           form.resetTo(savedOf(saved));
-          toast(isRunning(camera) ? "Protocols saved; they apply when the camera restarts" : "Protocols saved", "ok");
+          toast(isRunning(camera) ? t("Protocols saved; they apply when the camera restarts") : t("Protocols saved"), "ok");
         },
         onError: (err) => {
           if (err instanceof ApiError) setErrors(err.fieldErrors());
@@ -54,12 +56,12 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
         <Table>
           <THead>
             <tr>
-              <TH>Protocol</TH>
-              <TH>Engine</TH>
-              <TH>Role</TH>
-              <TH>Enabled</TH>
-              <TH>Port</TH>
-              <TH>Profile default</TH>
+              <TH>{t("Protocol")}</TH>
+              <TH>{t("Engine")}</TH>
+              <TH>{t("Role")}</TH>
+              <TH>{t("Enabled")}</TH>
+              <TH>{t("Port")}</TH>
+              <TH>{t("Profile default")}</TH>
             </tr>
           </THead>
           <TBody>
@@ -73,11 +75,11 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
                     <Mono>{p.engine}</Mono>
                   </TD>
                   <TD>
-                    <Badge tone={p.role === "server" ? "info" : "muted"}>{p.role === "server" ? "serves clients" : "sends out"}</Badge>
+                    <Badge tone={p.role === "server" ? "info" : "muted"}>{p.role === "server" ? t("serves clients") : t("sends out")}</Badge>
                   </TD>
                   <TD>
                     <Checkbox
-                      label={row.enabled ? "Yes" : "No"}
+                      label={row.enabled ? t("Yes") : t("No")}
                       checked={row.enabled}
                       onChange={(e) => set(i, { enabled: e.target.checked })}
                     />
@@ -92,7 +94,7 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
                           value={row.port}
                           onChange={(e) => set(i, { port: e.target.value })}
                           className="h-7 w-24 font-mono"
-                          aria-label={`Port of ${p.instance}`}
+                          aria-label={t("Port of {name}", { name: p.instance })}
                           disabled={!row.enabled}
                         />
                         {error && <span className="text-xs text-error">{error}</span>}
@@ -124,7 +126,7 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note="The protocols come from the profile (RN-04). Changes apply when the camera restarts."
+          note={t("The protocols come from the profile (RN-04). Changes apply when the camera restarts.")}
         />
       </div>
     </Card>

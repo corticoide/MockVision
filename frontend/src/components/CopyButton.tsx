@@ -2,6 +2,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n";
 
 /**
  * Copies text to the clipboard. The Clipboard API only exists in secure
@@ -39,27 +40,29 @@ export async function copyText(text: string): Promise<boolean> {
   return ok;
 }
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+export function CopyButton({ text, label }: { text: string; label?: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
+  const buttonLabel = label ?? t("Copy");
   useEffect(() => {
     if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
   }, [copied]);
 
   return (
     <Button
       size="icon"
       variant="ghost"
-      title={copied ? "Copied" : label}
-      aria-label={label}
+      title={copied ? t("Copied") : buttonLabel}
+      aria-label={buttonLabel}
       className={copied ? "text-ok hover:text-ok" : undefined}
       onClick={async () => {
         if (await copyText(text)) {
           setCopied(true);
-          toast("Copied to the clipboard", "ok");
+          toast(t("Copied to the clipboard"), "ok");
         } else {
-          toast("The browser did not allow copying; select the text and copy it by hand", "error");
+          toast(t("The browser did not allow copying; select the text and copy it by hand"), "error");
         }
       }}
     >

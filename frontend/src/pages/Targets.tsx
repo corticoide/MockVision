@@ -9,40 +9,42 @@ import { Card, Empty, Notice, PageHeader } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { useT } from "@/lib/i18n";
 
 export function TargetsPage() {
   const { data: targets, isLoading, error } = useTargets();
   const [creating, setCreating] = useState(false);
+  const t = useT();
 
   return (
     <>
       <PageHeader
-        title="Targets"
-        description="Receivers of the camera events: a VMS, an NVR or any HTTP endpoint. Link them to cameras when creating them."
+        title={t("Targets")}
+        description={t("Receivers of the camera events: a VMS, an NVR or any HTTP endpoint. Link them to cameras when creating them.")}
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
-            <Plus /> New target
+            <Plus /> {t("New target")}
           </Button>
         }
       />
       {error && <Notice tone="error">{errorMessage(error)}</Notice>}
       <Card>
         {isLoading ? (
-          <Empty title="Loading targets…" />
+          <Empty title={t("Loading targets…")} />
         ) : !targets?.length ? (
-          <Empty icon={<Send />} title="No targets">
-            Add the URL where the cameras should send their events.
+          <Empty icon={<Send />} title={t("No targets")}>
+            {t("Add the URL where the cameras should send their events.")}
           </Empty>
         ) : (
           <Table>
             <THead>
               <tr>
-                <TH>Name</TH>
-                <TH>Request</TH>
-                <TH>Auth</TH>
-                <TH>Enabled</TH>
-                <TH className="text-right">Cameras</TH>
-                <TH className="text-right">Actions</TH>
+                <TH>{t("Name")}</TH>
+                <TH>{t("Request")}</TH>
+                <TH>{t("Auth")}</TH>
+                <TH>{t("Enabled")}</TH>
+                <TH className="text-right">{t("Cameras")}</TH>
+                <TH className="text-right">{t("Actions")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -58,55 +60,56 @@ export function TargetsPage() {
   );
 }
 
-function TargetRow({ target: t }: { target: Target }) {
+function TargetRow({ target }: { target: Target }) {
   const test = useTestTarget();
   const update = useUpdateTarget();
   const del = useDeleteTarget();
+  const t = useT();
 
   const runTest = () =>
-    test.mutate(t.id, {
+    test.mutate(target.id, {
       onSuccess: (r) =>
         r.ok
-          ? toast(`${t.name}: HTTP ${r.http_status} in ${r.latency_ms} ms`, "ok")
-          : toast(`${t.name}: ${r.error ?? "failed"} (${r.latency_ms} ms)`, "error"),
+          ? toast(t("{name}: HTTP {status} in {ms} ms", { name: target.name, status: r.http_status ?? 0, ms: r.latency_ms }), "ok")
+          : toast(t("{name}: {error} ({ms} ms)", { name: target.name, error: r.error ?? t("failed"), ms: r.latency_ms }), "error"),
       onError: (err) => toast(errorMessage(err), "error"),
     });
 
   return (
     <TR>
-      <TD className="font-medium">{t.name}</TD>
+      <TD className="font-medium">{target.name}</TD>
       <TD>
         <Mono>
-          {t.method} {t.url}
+          {target.method} {target.url}
         </Mono>
       </TD>
-      <TD className="text-muted">{t.username ? `Basic (${t.username})` : "none"}</TD>
+      <TD className="text-muted">{target.username ? t("Basic ({user})", { user: target.username }) : t("none")}</TD>
       <TD>
         <Checkbox
-          label={t.enabled ? "Yes" : "No"}
-          checked={t.enabled}
+          label={target.enabled ? t("Yes") : t("No")}
+          checked={target.enabled}
           disabled={update.isPending}
           onChange={(e) =>
-            update.mutate({ id: t.id, body: { enabled: e.target.checked } }, { onError: (err) => toast(errorMessage(err), "error") })
+            update.mutate({ id: target.id, body: { enabled: e.target.checked } }, { onError: (err) => toast(errorMessage(err), "error") })
           }
         />
       </TD>
       <TD className="text-right">
-        <Mono>{t.camera_count}</Mono>
+        <Mono>{target.camera_count}</Mono>
       </TD>
       <TD>
         <div className="flex items-center justify-end gap-1">
-          <Button size="sm" variant="secondary" onClick={runTest} disabled={test.isPending} title="Send a test request from the node">
-            <FlaskConical /> {test.isPending ? "Testing…" : "Test"}
+          <Button size="sm" variant="secondary" onClick={runTest} disabled={test.isPending} title={t("Send a test request from the node")}>
+            <FlaskConical /> {test.isPending ? t("Testing…") : t("Test")}
           </Button>
           <Button
             size="icon"
             variant="ghost"
-            title={t.camera_count > 0 ? "In use by cameras" : "Delete"}
-            aria-label="Delete"
-            disabled={del.isPending || t.camera_count > 0}
+            title={target.camera_count > 0 ? t("In use by cameras") : t("Delete")}
+            aria-label={t("Delete")}
+            disabled={del.isPending || target.camera_count > 0}
             onClick={() => {
-              if (confirm(`Delete target ${t.name}?`)) del.mutate(t.id, { onError: (err) => toast(errorMessage(err), "error") });
+              if (confirm(t("Delete target {name}?", { name: target.name }))) del.mutate(target.id, { onError: (err) => toast(errorMessage(err), "error") });
             }}
           >
             <Trash2 />
@@ -130,6 +133,7 @@ function parseHeaders(text: string): Record<string, string> | undefined {
 
 function NewTargetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateTarget();
+  const t = useT();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [method, setMethod] = useState<"POST" | "PUT" | "GET">("POST");
@@ -152,8 +156,8 @@ function NewTargetDialog({ open, onClose }: { open: boolean; onClose: () => void
         headers: parseHeaders(headers),
       },
       {
-        onSuccess: (t) => {
-          toast(`Target ${t.name} created`, "ok");
+        onSuccess: (created) => {
+          toast(t("Target {name} created", { name: created.name }), "ok");
           setName("");
           setUrl("");
           setUsername("");
@@ -172,30 +176,30 @@ function NewTargetDialog({ open, onClose }: { open: boolean; onClose: () => void
     <Dialog
       open={open}
       onClose={onClose}
-      title="New target"
-      description="Cameras deliver their events here with the payload of their profile."
+      title={t("New target")}
+      description={t("Cameras deliver their events here with the payload of their profile.")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" type="submit" form="new-target" disabled={create.isPending || !name.trim() || !url.trim()}>
-            {create.isPending ? "Creating…" : "Create target"}
+            {create.isPending ? t("Creating…") : t("Create target")}
           </Button>
         </>
       }
     >
       <form id="new-target" onSubmit={submit} className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <Field label="Name" error={fieldErrors["name"]} className="col-span-2">
+        <Field label={t("Name")} error={fieldErrors["name"]} className="col-span-2">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="VMS lab" required autoFocus />
         </Field>
         <div className="col-span-2 grid grid-cols-[110px_minmax(0,1fr)] gap-x-4">
-          <Field label="Method" error={fieldErrors["method"]}>
+          <Field label={t("Method")} error={fieldErrors["method"]}>
             <Select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
               <option>POST</option>
               <option>PUT</option>
               <option>GET</option>
             </Select>
           </Field>
-          <Field label="URL" error={fieldErrors["url"]}>
+          <Field label={t("URL")} error={fieldErrors["url"]}>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -205,13 +209,13 @@ function NewTargetDialog({ open, onClose }: { open: boolean; onClose: () => void
             />
           </Field>
         </div>
-        <Field label="Username">
+        <Field label={t("Username")}>
           <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
         </Field>
-        <Field label="Password" hint="Stored encrypted; Basic authentication.">
+        <Field label={t("Password")} hint={t("Stored encrypted; Basic authentication.")}>
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
         </Field>
-        <Field label="Headers" error={fieldErrors["headers"]} hint="One per line: Name: value" className="col-span-2">
+        <Field label={t("Headers")} error={fieldErrors["headers"]} hint={t("One per line: Name: value")} className="col-span-2">
           <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} className="font-mono" rows={3} />
         </Field>
         {create.error && (

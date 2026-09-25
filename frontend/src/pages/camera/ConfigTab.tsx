@@ -6,6 +6,7 @@ import { toast } from "@/components/toast";
 import { Card, Empty, Notice } from "@/components/ui/card";
 import { Checkbox, Input, Select } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { type Translate, useT } from "@/lib/i18n";
 import { cn, formatTime } from "@/lib/utils";
 import { SaveBar } from "./parts";
 
@@ -35,21 +36,22 @@ function fromDraft(p: Param, d: string | boolean): unknown {
   }
 }
 
-function originLabel(origin: string) {
-  if (origin === "profile") return "profile default";
-  if (origin.startsWith("client:")) return `client ${origin.slice(7)}`;
+function originLabel(t: Translate, origin: string) {
+  if (origin === "profile") return t("profile default");
+  if (origin.startsWith("client:")) return t("client {id}", { id: origin.slice(7) });
   return origin;
 }
 
 export function ConfigTab({ camera }: { camera: Camera }) {
   const { data: params, isLoading, error } = useCameraConfig(camera.id);
   const patch = usePatchConfig(camera.id);
+  const t = useT();
   const [draft, setDraft] = useState<Draft>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   if (error) return <Notice tone="error">{errorMessage(error)}</Notice>;
-  if (isLoading || !params) return <Card><Empty title="Loading parameters…" /></Card>;
-  if (params.length === 0) return <Card><Empty title="The profile declares no parameters" /></Card>;
+  if (isLoading || !params) return <Card><Empty title={t("Loading parameters…")} /></Card>;
+  if (params.length === 0) return <Card><Empty title={t("The profile declares no parameters")} /></Card>;
 
   const changed = params.filter((p) => p.key in draft && draft[p.key] !== toDraft(p));
 
@@ -61,7 +63,7 @@ export function ConfigTab({ camera }: { camera: Camera }) {
     patch.mutate(values, {
       onSuccess: () => {
         setDraft({});
-        toast(`${changed.length} parameter${changed.length === 1 ? "" : "s"} saved`, "ok");
+        toast(t(changed.length === 1 ? "{n} parameter saved" : "{n} parameters saved", { n: changed.length }), "ok");
       },
       onError: (err) => {
         if (err instanceof ApiError) setErrors(err.fieldErrors());
@@ -76,11 +78,11 @@ export function ConfigTab({ camera }: { camera: Camera }) {
         <Table>
           <THead>
             <tr>
-              <TH>Parameter</TH>
-              <TH>Value</TH>
-              <TH>Default</TH>
-              <TH>Effect</TH>
-              <TH>Last change</TH>
+              <TH>{t("Parameter")}</TH>
+              <TH>{t("Value")}</TH>
+              <TH>{t("Default")}</TH>
+              <TH>{t("Effect")}</TH>
+              <TH>{t("Last change")}</TH>
             </tr>
           </THead>
           <TBody>
@@ -103,17 +105,17 @@ export function ConfigTab({ camera }: { camera: Camera }) {
                   </TD>
                   <TD>
                     {p.effective ? (
-                      <Badge tone="info" title={`Bound to ${p.bind}`}>
-                        effective
+                      <Badge tone="info" title={t("Bound to {bind}", { bind: p.bind ?? "" })}>
+                        {t("effective")}
                       </Badge>
                     ) : (
-                      <Badge tone="muted" title="Stored and returned; no effect on the simulation">
-                        declarative
+                      <Badge tone="muted" title={t("Stored and returned; no effect on the simulation")}>
+                        {t("declarative")}
                       </Badge>
                     )}
                   </TD>
                   <TD className="text-xs text-muted">
-                    {originLabel(p.origin)}
+                    {originLabel(t, p.origin)}
                     {p.origin !== "profile" && <> · {formatTime(p.updated_at)}</>}
                   </TD>
                 </TR>
@@ -131,7 +133,7 @@ export function ConfigTab({ camera }: { camera: Camera }) {
             setDraft({});
             setErrors({});
           }}
-          note="Applied at once. The last change wins, from the panel or a client of the emulated API (RN-08)."
+          note={t("Applied at once. The last change wins, from the panel or a client of the emulated API (RN-08).")}
         />
       </div>
     </Card>
@@ -139,10 +141,11 @@ export function ConfigTab({ camera }: { camera: Camera }) {
 }
 
 function ParamEditor({ param: p, value, onChange }: { param: Param; value: string | boolean; onChange: (v: string | boolean) => void }) {
-  const label = `Value of ${p.key}`;
+  const t = useT();
+  const label = t("Value of {key}", { key: p.key });
   switch (p.type) {
     case "bool":
-      return <Checkbox label={value ? "On" : "Off"} checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} aria-label={label} />;
+      return <Checkbox label={value ? t("On") : t("Off")} checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} aria-label={label} />;
     case "enum":
       return (
         <Select value={String(value)} onChange={(e) => onChange(e.target.value)} className="h-7 w-48" aria-label={label}>

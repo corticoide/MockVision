@@ -5,6 +5,32 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// Locale for number and date formatting. i18n keeps it in sync with the panel
+// language via setFormatLocale; it defaults to English until then.
+let formatLocale = "en";
+let timeFormat = buildTimeFormat(formatLocale);
+let dateTimeFormat = buildDateTimeFormat(formatLocale);
+
+function buildTimeFormat(locale: string) {
+  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function buildDateTimeFormat(locale: string) {
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+export function setFormatLocale(locale: string) {
+  if (locale === formatLocale) return;
+  formatLocale = locale;
+  timeFormat = buildTimeFormat(locale);
+  dateTimeFormat = buildDateTimeFormat(locale);
+}
+
 export function formatBytes(n: number | null | undefined): string {
   if (n == null) return "—";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -14,26 +40,16 @@ export function formatBytes(n: number | null | undefined): string {
     v /= 1024;
     i++;
   }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  const digits = i === 0 ? 0 : 1;
+  const value = new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+  return `${value} ${units[i]}`;
 }
 
 export function formatPercent(n: number | null | undefined, digits = 1): string {
   if (n == null) return "—";
-  return `${n.toFixed(digits)}%`;
+  const value = new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
+  return `${value}%`;
 }
-
-const timeFormat = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
 
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "—";

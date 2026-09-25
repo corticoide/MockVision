@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CameraState } from "@/api/client";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type Tone = "ok" | "warn" | "error" | "info" | "muted";
@@ -51,10 +52,11 @@ const states: Record<CameraState, { tone: Tone; label: string; icon: ReactNode }
 };
 
 export function StateBadge({ state, reason }: { state: CameraState; reason?: string }) {
+  const t = useT();
   const s = states[state] ?? states.stopped;
   return (
     <Badge tone={s.tone} icon={s.icon} title={reason || undefined}>
-      {s.label}
+      {t(s.label)}
     </Badge>
   );
 }
@@ -67,38 +69,40 @@ const levels: Record<string, { tone: Tone; label: string }> = {
 };
 
 export function LevelBadge({ level }: { level: string }) {
+  const t = useT();
   const l = levels[level] ?? { tone: "muted" as Tone, label: level };
   return (
     <Badge tone={l.tone} icon={<CircleDot />}>
-      {l.label}
+      {t(l.label)}
     </Badge>
   );
 }
 
 export function DeliveryBadge({ status }: { status: string }) {
+  const t = useT();
   switch (status) {
     case "ok":
       return (
         <Badge tone="ok" icon={<CheckCircle2 />}>
-          Delivered
+          {t("Delivered")}
         </Badge>
       );
     case "failed":
       return (
         <Badge tone="error" icon={<XCircle />}>
-          Failed
+          {t("Failed")}
         </Badge>
       );
     case "pending":
       return (
         <Badge tone="info" icon={<Clock />}>
-          Pending
+          {t("Pending")}
         </Badge>
       );
     default:
       return (
         <Badge tone="muted" icon={<CircleSlash />}>
-          No target
+          {t("No target")}
         </Badge>
       );
   }

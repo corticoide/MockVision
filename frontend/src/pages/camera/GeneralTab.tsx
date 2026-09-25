@@ -6,6 +6,7 @@ import { toast } from "@/components/toast";
 import { Card } from "@/components/ui/card";
 import { Checkbox, Field, Input } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
+import { useT } from "@/lib/i18n";
 import { Link } from "@/lib/router";
 import { formatBytes, formatPercent, formatTime, sinceText } from "@/lib/utils";
 import { EndpointList, Info, isRunning, SaveBar, SectionTitle, SnapshotPreview } from "./parts";
@@ -26,6 +27,7 @@ const savedOf = (camera: Camera) => ({
 export function GeneralTab({ camera }: { camera: Camera }) {
   const { data: targets } = useTargets();
   const update = useUpdateCamera();
+  const t = useT();
   const form = useDraft(savedOf(camera));
   const { name, tags, autostart, targetIds } = form.draft;
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -38,7 +40,7 @@ export function GeneralTab({ camera }: { camera: Camera }) {
       {
         onSuccess: (saved) => {
           form.resetTo(savedOf(saved));
-          toast("Camera saved", "ok");
+          toast(t("Camera saved"), "ok");
         },
         onError: (err) => {
           if (err instanceof ApiError) setErrors(err.fieldErrors());
@@ -53,47 +55,47 @@ export function GeneralTab({ camera }: { camera: Camera }) {
       <div className="flex flex-col gap-4">
         <Card className="p-4">
           <form id="camera-general" onSubmit={submit} className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Field label="Name" error={errors["name"]}>
+            <Field label={t("Name")} error={errors["name"]}>
               <Input value={name} onChange={(e) => form.set({ name: e.target.value })} required />
             </Field>
-            <Field label="Tags" hint="Comma separated, for filtering." error={errors["tags"]}>
+            <Field label={t("Tags")} hint={t("Comma separated, for filtering.")} error={errors["tags"]}>
               <Input value={tags} onChange={(e) => form.set({ tags: e.target.value })} placeholder="gate, north" />
             </Field>
             <div className="col-span-2">
               <Checkbox
-                label="Start with the node (autostart)"
+                label={t("Start with the node (autostart)")}
                 checked={autostart}
                 onChange={(e) => form.set({ autostart: e.target.checked })}
               />
             </div>
             <Field
-              label="Event targets"
+              label={t("Event targets")}
               group
               className="col-span-2"
               error={errors["target_ids"]}
               hint={
                 targets?.length ? (
-                  "Changes reach a running camera at once."
+                  t("Changes reach a running camera at once.")
                 ) : (
                   <>
-                    No targets yet; add them in <Link href="/targets" className="underline">Targets</Link>.
+                    {t("No targets yet; add them in")} <Link href="/targets" className="underline">{t("Targets")}</Link>.
                   </>
                 )
               }
             >
               <div className="flex flex-wrap gap-x-4 gap-y-1 py-1">
-                {targets?.map((t) => (
+                {targets?.map((target) => (
                   <Checkbox
-                    key={t.id}
+                    key={target.id}
                     label={
                       <>
-                        {t.name} <Mono className="text-muted">{t.url}</Mono>
-                        {!t.enabled && <span className="text-warn"> (disabled)</span>}
+                        {target.name} <Mono className="text-muted">{target.url}</Mono>
+                        {!target.enabled && <span className="text-warn">{t(" (disabled)")}</span>}
                       </>
                     }
-                    checked={targetIds.includes(t.id)}
+                    checked={targetIds.includes(target.id)}
                     onChange={(e) =>
-                      form.set({ targetIds: (e.target.checked ? [...targetIds, t.id] : targetIds.filter((x) => x !== t.id)).sort() })
+                      form.set({ targetIds: (e.target.checked ? [...targetIds, target.id] : targetIds.filter((x) => x !== target.id)).sort() })
                     }
                   />
                 ))}
@@ -111,16 +113,16 @@ export function GeneralTab({ camera }: { camera: Camera }) {
           />
         </Card>
         <Card className="p-4">
-          <SectionTitle>Endpoints</SectionTitle>
+          <SectionTitle>{t("Endpoints")}</SectionTitle>
           <EndpointList camera={camera} />
           <p className="mt-2 text-xs text-muted">
-            Accounts: {camera.users.map((u) => `${u.username} (${u.role})`).join(", ")} · Digest authentication
+            {t("Accounts")}: {camera.users.map((u) => `${u.username} (${u.role})`).join(", ")} · {t("Digest authentication")}
           </p>
         </Card>
         <StatusCard camera={camera} />
       </div>
       <Card className="p-4">
-        <SectionTitle>Snapshot</SectionTitle>
+        <SectionTitle>{t("Snapshot")}</SectionTitle>
         <SnapshotPreview camera={camera} />
       </Card>
     </div>

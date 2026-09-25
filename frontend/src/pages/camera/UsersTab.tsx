@@ -8,6 +8,7 @@ import { Card, Notice } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useDraft } from "@/lib/draft";
+import { useT } from "@/lib/i18n";
 import { SaveBar } from "./parts";
 
 type Role = "admin" | "operator" | "viewer";
@@ -24,6 +25,7 @@ const savedOf = (camera: Camera): Row[] =>
 
 export function UsersTab({ camera }: { camera: Camera }) {
   const save = useSetCameraUsers(camera.id);
+  const t = useT();
   const form = useDraft(savedOf(camera));
   const rows = form.draft;
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -38,7 +40,7 @@ export function UsersTab({ camera }: { camera: Camera }) {
       {
         onSuccess: (saved) => {
           form.resetTo(savedOf(saved));
-          toast("Accounts saved; the camera uses them at once", "ok");
+          toast(t("Accounts saved; the camera uses them at once"), "ok");
         },
         onError: (err) => {
           if (err instanceof ApiError) setErrors(err.fieldErrors());
@@ -54,9 +56,9 @@ export function UsersTab({ camera }: { camera: Camera }) {
         <Table>
           <THead>
             <tr>
-              <TH>Username</TH>
-              <TH>Role</TH>
-              <TH>Password</TH>
+              <TH>{t("Username")}</TH>
+              <TH>{t("Role")}</TH>
+              <TH>{t("Password")}</TH>
               <TH className="w-10" />
             </tr>
           </THead>
@@ -75,7 +77,7 @@ export function UsersTab({ camera }: { camera: Camera }) {
                         value={r.username}
                         onChange={(e) => set(i, { username: e.target.value })}
                         placeholder="operator"
-                        aria-label="Username"
+                        aria-label={t("Username")}
                         className="h-7 w-48 font-mono"
                         autoComplete="off"
                         required
@@ -84,7 +86,7 @@ export function UsersTab({ camera }: { camera: Camera }) {
                     {userError && <div className="text-xs text-error">{userError}</div>}
                   </TD>
                   <TD>
-                    <Select value={r.role} onChange={(e) => set(i, { role: e.target.value as Role })} className="h-7 w-36" aria-label={`Role of ${r.username || "the new account"}`}>
+                    <Select value={r.role} onChange={(e) => set(i, { role: e.target.value as Role })} className="h-7 w-36" aria-label={t("Role of {name}", { name: r.username || t("the new account") })}>
                       <option value="admin">admin</option>
                       <option value="operator">operator</option>
                       <option value="viewer">viewer</option>
@@ -96,8 +98,8 @@ export function UsersTab({ camera }: { camera: Camera }) {
                       type="password"
                       value={r.password}
                       onChange={(e) => set(i, { password: e.target.value })}
-                      placeholder={r.existing ? "unchanged" : "required"}
-                      aria-label={`Password of ${r.username || "the new account"}`}
+                      placeholder={r.existing ? t("unchanged") : t("required")}
+                      aria-label={t("Password of {name}", { name: r.username || t("the new account") })}
                       className="h-7 w-56"
                       autoComplete="new-password"
                     />
@@ -107,8 +109,8 @@ export function UsersTab({ camera }: { camera: Camera }) {
                     <Button
                       size="icon"
                       variant="ghost"
-                      title="Remove"
-                      aria-label={`Remove ${r.username || "the new account"}`}
+                      title={t("Remove")}
+                      aria-label={t("Remove {name}", { name: r.username || t("the new account") })}
                       onClick={() => form.update((rs) => rs.filter((_, j) => j !== i))}
                     >
                       <Trash2 />
@@ -126,9 +128,9 @@ export function UsersTab({ camera }: { camera: Camera }) {
             size="sm"
             onClick={() => form.update((rs) => [...rs, { username: "", role: "operator", password: "", existing: false }])}
           >
-            <Plus /> Add account
+            <Plus /> {t("Add account")}
           </Button>
-          <span className="text-xs text-muted">Cameras accept weak passwords on purpose: they imitate real devices.</span>
+          <span className="text-xs text-muted">{t("Cameras accept weak passwords on purpose: they imitate real devices.")}</span>
         </div>
         {errors["users"] && (
           <div className="mt-3">
@@ -143,7 +145,7 @@ export function UsersTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note="At least one admin (RN-11). Changes apply at once; clients re-authenticate with the new passwords."
+          note={t("At least one admin (RN-11). Changes apply at once; clients re-authenticate with the new passwords.")}
         />
       </div>
     </Card>
