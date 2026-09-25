@@ -35,7 +35,7 @@ export function Layout({ username, children }: { username: string; children: Rea
         </div>
         <nav className="flex flex-col gap-0.5 p-2">
           {nav.map((item) => {
-            const active = path === item.href || (path === "/" && item.href === "/cameras");
+            const active = path === item.href || path.startsWith(`${item.href}/`) || (path === "/" && item.href === "/cameras");
             return (
               <Link
                 key={item.href}

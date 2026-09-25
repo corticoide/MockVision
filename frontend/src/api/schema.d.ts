@@ -245,6 +245,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cameras/{id}/actions/factory-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restores the camera to its profile (RN-10): parameters, accounts and protocols; with scope full, also the profile's factory address. The picture is kept. A running camera reboots. */
+        post: operations["resetCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/actions/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Creates a camera with the same profile, parameters, accounts, protocols, picture and targets, with its own ID, serial, MAC and address. */
+        post: operations["cloneCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the camera's accounts (RN-11: at least one admin). An empty password keeps the account's current one. Applied at once. */
+        put: operations["setCameraUsers"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/protocols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Enables, disables or moves protocols of the camera's profile (RN-04). A running camera applies them when it restarts (RN-09). */
+        put: operations["setCameraProtocols"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/streams/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                stream: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Changes the picture, resolution or frame rate of a stream. The stream is encoded again and a running camera switches to it without restarting. */
+        patch: operations["updateCameraStream"];
+        trace?: never;
+    };
     "/cameras/{id}/status": {
         parameters: {
             query?: never;
@@ -659,6 +755,17 @@ export interface components {
             netns?: string;
             pid?: number;
             retries: number;
+            /** @description Saved changes a running camera applies when it restarts (RN-09). */
+            pending_restart: ("network" | "protocols")[];
+        };
+        Protocol: {
+            instance: string;
+            engine: string;
+            /** @enum {string} */
+            role: "server" | "client";
+            enabled: boolean;
+            port: number;
+            default_port: number;
         };
         Endpoint: {
             instance: string;
@@ -720,6 +827,7 @@ export interface components {
             network: components["schemas"]["Network"];
             status: components["schemas"]["CameraStatus"];
             endpoints: components["schemas"]["Endpoint"][];
+            protocols: components["schemas"]["Protocol"][];
             streams: components["schemas"]["Stream"][];
             users: components["schemas"]["CameraUser"][];
             targets: {
@@ -737,20 +845,8 @@ export interface components {
             name: string;
             profile_id: string;
             profile_version: string;
-            network?: {
-                parent?: string;
-                mac?: string;
-                vendor_oui?: boolean;
-                ip?: string;
-                netmask?: string;
-                gateway?: string;
-            };
-            users?: {
-                username: string;
-                password: string;
-                /** @enum {string} */
-                role?: "admin" | "operator" | "viewer";
-            }[];
+            network?: components["schemas"]["NetworkInput"];
+            users?: components["schemas"]["CameraUserInput"][];
             stream?: {
                 asset_id?: string;
                 resolution?: string;
@@ -766,6 +862,31 @@ export interface components {
             autostart?: boolean;
             tags?: string[];
             target_ids?: string[];
+            /** @description The whole network identity; a running camera applies it when it restarts (RN-09). */
+            network?: components["schemas"]["NetworkInput"];
+        };
+        /** @description Empty fields take the node's defaults. When editing, an empty MAC keeps the current one and default_mac goes back to the one derived from the camera ID. No DNS servers means the node's. */
+        NetworkInput: {
+            parent?: string;
+            mac?: string;
+            default_mac?: boolean;
+            vendor_oui?: boolean;
+            ip?: string;
+            netmask?: string;
+            gateway?: string;
+            dns?: string[];
+        };
+        CameraUserInput: {
+            username: string;
+            /** @description Required for a new account; empty keeps the current one. */
+            password?: string;
+            /** @enum {string} */
+            role?: "admin" | "operator" | "viewer";
+        };
+        CloneCamera: {
+            name: string;
+            network?: components["schemas"]["NetworkInput"];
+            start?: boolean;
         };
         Param: {
             key: string;
@@ -1339,6 +1460,160 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+        };
+    };
+    resetCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    scope: "settings" | "full";
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    cloneCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneCamera"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    setCameraUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    users: components["schemas"]["CameraUserInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    setCameraProtocols: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    protocols: {
+                        instance: string;
+                        enabled?: boolean;
+                        port?: number;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    updateCameraStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                stream: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    asset_id?: string;
+                    resolution?: string;
+                    fps?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     getCameraStatus: {

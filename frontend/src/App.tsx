@@ -8,6 +8,7 @@ import { Toaster } from "@/components/toast";
 import { Notice } from "@/components/ui/card";
 import { usePath } from "@/lib/router";
 import { AssetsPage } from "@/pages/Assets";
+import { CameraPage } from "@/pages/camera/CameraPage";
 import { CamerasPage } from "@/pages/Cameras";
 import { EventsPage } from "@/pages/Events";
 import { LoginPage } from "@/pages/Login";
@@ -69,8 +70,10 @@ export function App() {
 }
 
 function Routes() {
-  const path = usePath();
-  const Page = pages[path.replace(/\/+$/, "") || "/"];
+  const path = usePath().replace(/\/+$/, "") || "/";
+  const camera = /^\/cameras\/([^/]+)(?:\/([^/]+))?$/.exec(path);
+  if (camera) return <CameraPage id={decodeURIComponent(camera[1])} tab={camera[2]} />;
+  const Page = pages[path];
   if (!Page) return <Notice tone="warn">Page not found: {path}</Notice>;
   return <Page />;
 }
