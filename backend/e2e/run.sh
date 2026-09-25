@@ -5,11 +5,18 @@
 # "client" device in its own network namespace, starts the node with
 # `mockvision run` and checks, from the client: ping and MAC (M1), RTSP with
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
-# line-crossing event (M4), admission (M7), capabilities of the camera
-# process, clean stop, and cameras coming back after a restart.
+# line-crossing event (M4), admission (M7), the privileges of the service
+# and camera processes, clean stop, and cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
+#
+# E2E_BIN=path uses an already built binary instead of building one.
+#
+# E2E_MODE=compose runs the same checks against the Docker image started
+# with the compose.yaml at the root (it builds the image unless
+# E2E_NO_BUILD=1 and the image exists):
+#   sudo E2E_MODE=compose backend/e2e/run.sh
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -24,13 +31,15 @@ CAM2_IP=10.77.0.11
 PORT=${E2E_PORT:-18090}
 API=http://127.0.0.1:$PORT/api/v1
 RUN_PID=
+MODE=${E2E_MODE:-binary}
+COMPOSE=(docker compose -f "$ROOT/compose.yaml" -p mockvision-e2e)
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok() { printf '   ok: %s\n' "$*"; }
 fail() {
 	printf '\n\033[31mFAIL: %s\033[0m\n' "$*" >&2
 	echo "--- node log (last 40 lines)" >&2
-	tail -n 40 "$WORK/node.log" >&2 || true
+	node_log | tail -n 40 >&2 || true
 	exit 1
 }
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
@@ -41,9 +50,18 @@ api() {
 }
 client() { ip netns exec "$CLIENT_NS" "$@"; }
 
+# The node's processes and namespaces live in the container in compose mode.
+node_exec() {
+	if [ "$MODE" = compose ]; then "${COMPOSE[@]}" exec -T mockvision "$@"; else "$@"; fi
+}
+node_log() {
+	if [ "$MODE" = compose ]; then "${COMPOSE[@]}" logs --no-color 2>/dev/null; else cat "$WORK/node.log"; fi
+}
+
 cleanup() {
 	set +e
 	[ -n "$RUN_PID" ] && kill "$RUN_PID" 2>/dev/null && wait "$RUN_PID" 2>/dev/null
+	[ "$MODE" = compose ] && "${COMPOSE[@]}" down --volumes --timeout 30 >/dev/null 2>&1
 	# ip netns exec may fork: stop every process of the client namespace.
 	ip netns pids "$CLIENT_NS" 2>/dev/null | xargs -r kill 2>/dev/null
 	ip netns del "$CLIENT_NS" 2>/dev/null
@@ -56,6 +74,10 @@ trap cleanup EXIT
 for tool in ip ffprobe curl python3; do
 	command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 2; }
 done
+case "$MODE" in
+binary | compose) ;;
+*) echo "E2E_MODE must be binary or compose" >&2; exit 2 ;;
+esac
 
 wait_state() { # camera, state, seconds
 	local i state
@@ -71,19 +93,50 @@ wait_state() { # camera, state, seconds
 }
 
 start_node() {
-	MOCKVISION_DATA=$WORK/data MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN \
-		"$BIN" run >>"$WORK/node.log" 2>&1 &
-	RUN_PID=$!
-	for _ in $(seq 1 60); do
+	if [ "$MODE" = compose ]; then
+		MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN "${COMPOSE[@]}" up -d --no-build >/dev/null 2>&1 ||
+			fail "docker compose up failed"
+	else
+		MOCKVISION_DATA=$WORK/data MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN \
+			"$BIN" run >>"$WORK/node.log" 2>&1 &
+		RUN_PID=$!
+	fi
+	for _ in $(seq 1 120); do
 		curl -s -o /dev/null "$API/auth/me" && return 0
 		sleep 0.25
 	done
 	fail "the node did not start"
 }
 
+stop_node() {
+	if [ "$MODE" = compose ]; then
+		"${COMPOSE[@]}" stop --timeout 30 >/dev/null 2>&1 || fail "docker compose stop failed"
+	else
+		kill "$RUN_PID"
+		wait "$RUN_PID" || true
+		RUN_PID=
+	fi
+}
+
+# Named namespaces are listed by ip netns; where mounting is not allowed
+# (Docker's AppArmor profile) cameras use anonymous namespaces instead.
+netns_named() { node_exec test -e "/run/netns/$1"; }
+
 step "build"
-(cd "$ROOT" && CGO_ENABLED=0 go build -o "$BIN" ./backend/cmd/mockvision)
-ok "$("$BIN" version)"
+if [ "$MODE" = compose ]; then
+	if [ -z "${E2E_NO_BUILD:-}" ] || ! docker image inspect mockvision:latest >/dev/null 2>&1; then
+		"${COMPOSE[@]}" build >"$WORK/build.log" 2>&1 || { tail -n 40 "$WORK/build.log" >&2; fail "docker compose build failed"; }
+	fi
+	ok "image mockvision:latest, $(docker run --rm mockvision:latest version)"
+	# A run that was interrupted may have left its container and volume.
+	"${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
+elif [ -n "${E2E_BIN:-}" ]; then
+	cp "$E2E_BIN" "$BIN"
+	ok "$("$BIN" version) ($E2E_BIN)"
+else
+	(cd "$ROOT" && CGO_ENABLED=0 go build -o "$BIN" ./backend/cmd/mockvision)
+	ok "$("$BIN" version)"
+fi
 
 step "isolated virtual LAN with a client device"
 ip link add "$LAN" type veth peer name "${LAN}p"
@@ -136,8 +189,14 @@ NODE_MAC=$(cat "/sys/class/net/$LAN/address")
 [ "$NEIGH" = "$MAC" ] || fail "ip neigh shows $NEIGH, want $MAC"
 [ "$NEIGH" != "$NODE_MAC" ] || fail "the camera answers with the node's MAC"
 ok "ping answers; ip neigh shows $NEIGH (node: $NODE_MAC)"
-ip netns list | grep -q "^$NETNS" || fail "namespace $NETNS is not listed by ip netns"
-ok "ip netns exec $NETNS works for debugging"
+if netns_named "$NETNS"; then
+	node_exec ip netns list | grep -q "^$NETNS" || fail "namespace $NETNS is not listed by ip netns"
+	ok "ip netns exec $NETNS works for debugging"
+elif [ "$MODE" = compose ]; then
+	ok "anonymous namespace (the container may not mount; ip netns does not list it)"
+else
+	fail "namespace $NETNS is not listed by ip netns"
+fi
 
 step "M2: ffprobe reads the RTSP stream at the configured resolution"
 for transport in tcp udp; do
@@ -178,14 +237,24 @@ ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
 ok "event $EID delivered, latency $(echo "$ev" | json 'd["latency_ms"]') ms"
 
-step "the camera process holds no capabilities"
-caps=$(grep -E '^Cap(Inh|Prm|Eff|Bnd|Amb)' "/proc/$PID/status")
-echo "$caps" | sed 's/^/   /'
-echo "$caps" | awk '{print $2}' | grep -qv '^0*$' && fail "capabilities left"
-grep -q 'NoNewPrivs:\s*1' "/proc/$PID/status" || fail "no_new_privs not set"
-uid=$(awk '/^Uid:/{print $2}' "/proc/$PID/status")
-[ "$uid" != 0 ] || fail "camera runs as root"
-ok "all capability sets are empty, uid $uid, no_new_privs"
+step "the main service and the camera hold no capabilities"
+check_privileges() { # pid, label
+	local status caps uid
+	status=$(node_exec cat "/proc/$1/status") || fail "cannot read the status of $2 (pid $1)"
+	caps=$(echo "$status" | grep -E '^Cap(Inh|Prm|Eff|Bnd|Amb)')
+	echo "$caps" | sed 's/^/   /'
+	echo "$caps" | awk '{print $2}' | grep -qv '^0*$' && fail "$2 keeps capabilities"
+	echo "$status" | grep -q 'NoNewPrivs:\s*1' || fail "$2: no_new_privs not set"
+	uid=$(echo "$status" | awk '/^Uid:/{print $2}')
+	[ "$uid" != 0 ] || fail "$2 runs as root"
+	ok "$2 (pid $1): all capability sets are empty, uid $uid, no_new_privs"
+}
+SVC_PID=$(node_exec sh -c 'for d in /proc/[0-9]*; do
+	tr "\0" " " 2>/dev/null <"$d/cmdline" | grep -q "^[^ ]*mockvision serve --helper-fd " && basename "$d"
+done; true' | head -n 1) || true
+[ -n "$SVC_PID" ] || fail "the main service process was not found"
+check_privileges "$SVC_PID" "main service"
+check_privileges "$PID" "camera"
 
 step "M7: metrics and admission"
 metrics=$(api GET /node/metrics)
@@ -200,17 +269,18 @@ api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}'
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null
 wait_state "$CID" stopped 20
-ip netns list | grep -q "^$NETNS" && fail "namespace $NETNS still exists"
+node_exec ip netns list | grep -q "^$NETNS" && fail "namespace $NETNS still exists"
 client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the stopped camera still answers"
 ok "namespace $NETNS removed, the IP no longer answers"
 
 step "restarting the node restores cameras with autostart"
 api POST "/cameras/$CID/actions/start" >/dev/null
 wait_state "$CID" running 60
-kill "$RUN_PID"
-wait "$RUN_PID" || true
-RUN_PID=
-ip netns list | grep -q "^sim-" && fail "namespaces left after the node stopped"
+stop_node
+if [ "$MODE" = binary ]; then
+	ip netns list | grep -q "^sim-" && fail "namespaces left after the node stopped"
+fi
+client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the camera still answers after the node stopped"
 ok "node stopped cleanly"
 start_node
 api POST /auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' >/dev/null
