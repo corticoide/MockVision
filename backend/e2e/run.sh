@@ -7,7 +7,8 @@
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
 # and camera processes, editing a running camera (accounts, stream and
-# address), clean stop, and cameras coming back after a restart.
+# address), API tokens with bulk actions and the audit log, clean stop, and
+# cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
@@ -289,6 +290,41 @@ resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gat
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
+
+step "API tokens: bulk clone and delete from automation, with the audit"
+SECRET=$(api POST /tokens -H 'Content-Type: application/json' -d '{"name":"e2e-ci","scopes":["write"]}' | json 'd["secret"]')
+READ=$(api POST /tokens -H 'Content-Type: application/json' -d '{"name":"e2e-read","scopes":["read"]}' | json 'd["secret"]')
+tok() { # secret, method, path, curl arguments
+	local secret=$1 method=$2 path=$3
+	shift 3
+	curl -sS -H "Authorization: Bearer $secret" -X "$method" "$API$path" "$@"
+}
+[ "$(tok "$READ" GET '/cameras?state=running' | json 'len(d["items"])')" = 1 ] || fail "a read token cannot list the running cameras"
+code=$(tok "$READ" POST "/cameras/$CID/actions/stop" -o /dev/null -w '%{http_code}')
+[ "$code" = 403 ] || fail "a read token stopped a camera: $code"
+ok "a read token lists cameras and cannot change them"
+res=$(tok "$SECRET" POST /cameras/actions/bulk -H 'Content-Type: application/json' -d "{\"action\":\"clone\",\"ids\":[\"$CID\"],\"start\":true}")
+[ "$(echo "$res" | json 'd["succeeded"]')" = 1 ] || fail "bulk clone: $res"
+COPY=$(echo "$res" | json 'd["results"][0]["camera"]["id"]')
+COPY_IP=$(echo "$res" | json 'd["results"][0]["camera"]["network"]["ip"]')
+[ "$COPY_IP" = "$CAM2_IP" ] || fail "the copy took $COPY_IP, want the next free address $CAM2_IP"
+wait_state "$COPY" running 60
+client ping -c 2 -W 2 "$COPY_IP" >/dev/null || fail "the copy does not answer on $COPY_IP"
+ok "a write token cloned Gate 1 as $(echo "$res" | json 'd["results"][0]["camera"]["name"]') on $COPY_IP; the client reaches it"
+res=$(tok "$SECRET" POST /cameras/actions/bulk -H 'Content-Type: application/json' -d "{\"action\":\"delete\",\"ids\":[\"$COPY\",\"missing\"]}")
+[ "$(echo "$res" | json '(d["succeeded"], d["failed"], d["results"][1]["error"]["status"])')" = "(1, 1, 404)" ] || fail "bulk delete: $res"
+client ping -c 1 -W 1 "$COPY_IP" >/dev/null 2>&1 && fail "the deleted copy still answers"
+ok "bulk delete removed the copy and reported the unknown camera on its own"
+api GET '/audit?origin=api' | json '[e["action"] for e in d["items"] if e["token"]["name"] == "e2e-ci"]' | grep -q camera.clone ||
+	fail "the token's clone is not audited as coming from the API"
+by_client=$(api GET "/audit?origin=camera&entity_id=$CID" | json 'd["items"][0]["origin_ip"]')
+[ "$by_client" = "$CLIENT_IP" ] || fail "the change through the emulated API is not audited from $CLIENT_IP: $by_client"
+ok "the audit shows the token's changes as API and the client's as coming from $CLIENT_IP"
+TOKEN_ID=$(api GET /tokens | json '[t["id"] for t in d["items"] if t["name"] == "e2e-ci"][0]')
+api DELETE "/tokens/$TOKEN_ID" -o /dev/null
+code=$(tok "$SECRET" GET /cameras -o /dev/null -w '%{http_code}')
+[ "$code" = 401 ] || fail "a revoked token got $code"
+ok "a revoked token is refused at once"
 
 step "v1 editing: a new address applies at the restart (RN-09)"
 pending=$(api PATCH "/cameras/$CID" -H 'Content-Type: application/json' \

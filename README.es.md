@@ -84,6 +84,25 @@ muestra la entrega, el código HTTP y la latencia.
 > corra en el nodo. Pon el cliente y los destinos en otras máquinas. La
 > vista previa del snapshot en el panel funciona igual, porque no usa la red.
 
+### Automatización con tokens de API
+
+Crea un token en **Configuración → Tokens de API**; se muestra una sola vez.
+Los scripts y la CI lo envían en la cabecera Bearer, sin cookie ni
+encabezado propio:
+
+```sh
+TOKEN=mvt_…   # de Configuración
+curl -H "Authorization: Bearer $TOKEN" "http://<nodo>:8080/api/v1/cameras?state=running"
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"action":"stop","ids":["<id de cámara>"]}' http://<nodo>:8080/api/v1/cameras/actions/bulk
+```
+
+Un token de lectura solo consulta el nodo (y abre el WebSocket); uno de
+escritura puede cambiarlo, salvo los tokens, que se administran únicamente
+desde el panel. **Auditoría** muestra cada cambio con su origen: el panel, la
+API con el nombre del token, un cliente de la API emulada de una cámara o el
+propio nodo.
+
 ### Configuración
 
 `compose.yaml` pasa los dos ajustes que necesita la mayoría de las
@@ -171,6 +190,10 @@ los hilos a la vez, y eso solo lo puede hacer un binario Go puro.
   El panel corre con una CSP estricta y no carga nada de otros orígenes.
 - Las contraseñas de cámaras y destinos se cifran con XChaCha20-Poly1305. La
   clave se guarda fuera de la base, y la API nunca las devuelve.
+- Los tokens de API se guardan como hash SHA-256 y se muestran una sola vez.
+  Tienen alcance (lectura o escritura), pueden vencer y se revocan al
+  instante desde el panel. La auditoría guarda cada cambio 90 días con su
+  origen y su IP.
 - El panel es HTTP plano. Ponlo detrás de un proxy inverso HTTPS
   (`MOCKVISION_SECURE_COOKIES=1`) antes de exponerlo fuera de una red de
   laboratorio.

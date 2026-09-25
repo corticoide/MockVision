@@ -83,6 +83,23 @@ latency.
 > Put the client and the targets on other machines. The panel's snapshot
 > preview works anyway, because it does not use the network.
 
+### Automation with API tokens
+
+Create a token in **Settings → API tokens**; it is shown once. Scripts and
+CI send it as a Bearer header, with no cookie or custom header:
+
+```sh
+TOKEN=mvt_…   # from Settings
+curl -H "Authorization: Bearer $TOKEN" "http://<node>:8080/api/v1/cameras?state=running"
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"action":"stop","ids":["<camera id>"]}' http://<node>:8080/api/v1/cameras/actions/bulk
+```
+
+A read token can only query the node (and open the WebSocket); a write
+token can change it, except tokens, which are managed from the panel only.
+**Audit** shows every change with where it came from: the panel, the API
+with the token's name, a client of a camera's emulated API, or the node.
+
 ### Configuration
 
 `compose.yaml` passes the two settings most installs need. Others go in its
@@ -177,6 +194,9 @@ docs/       notes
   panel runs under a strict CSP and loads nothing from other origins.
 - Camera and target passwords are encrypted with XChaCha20-Poly1305. The key
   is kept outside the database, and the API never returns them.
+- API tokens are stored as SHA-256 hashes and shown once. They carry a scope
+  (read or write), may expire, and are revoked at once from the panel. The
+  audit log keeps every change for 90 days with its origin and IP.
 - The panel is plain HTTP. Put it behind an HTTPS reverse proxy
   (`MOCKVISION_SECURE_COOKIES=1`) before exposing it beyond a lab network.
 
