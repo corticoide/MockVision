@@ -45,6 +45,21 @@ export function formatBytes(n: number | null | undefined): string {
   return `${value} ${units[i]}`;
 }
 
+/** Formats a byte rate as bits per second, the unit links are sold in. */
+export function formatBitRate(bytesPerSecond: number | null | undefined): string {
+  if (bytesPerSecond == null) return "—";
+  const units = ["bit/s", "kbit/s", "Mbit/s", "Gbit/s"];
+  let v = bytesPerSecond * 8;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i++;
+  }
+  const digits = i === 0 || v >= 100 ? 0 : 1;
+  const value = new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+  return `${value} ${units[i]}`;
+}
+
 export function formatPercent(n: number | null | undefined, digits = 1): string {
   if (n == null) return "—";
   const value = new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);

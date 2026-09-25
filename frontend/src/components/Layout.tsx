@@ -1,4 +1,4 @@
-import { Activity, Boxes, Camera, Cpu, Image, LogOut, MemoryStick, Send, Settings, Wifi, WifiOff } from "lucide-react";
+import { Activity, Boxes, Camera, Cpu, Image, LayoutDashboard, LogOut, MemoryStick, ScrollText, Send, Settings, Wifi, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLiveStatus } from "@/api/live";
 import { useLogout, useNode, useNodeMetrics } from "@/api/queries";
@@ -10,11 +10,13 @@ import { LanguageSelect } from "./LanguageSelect";
 import { Button } from "./ui/button";
 
 const nav = [
+  { href: "/", label: "Dashboard", icon: <LayoutDashboard /> },
   { href: "/cameras", label: "Cameras", icon: <Camera /> },
   { href: "/events", label: "Events", icon: <Activity /> },
   { href: "/profiles", label: "Profiles", icon: <Boxes /> },
   { href: "/assets", label: "Assets", icon: <Image /> },
   { href: "/targets", label: "Targets", icon: <Send /> },
+  { href: "/audit", label: "Audit", icon: <ScrollText /> },
   { href: "/settings", label: "Settings", icon: <Settings /> },
 ];
 
@@ -38,7 +40,7 @@ export function Layout({ username, children }: { username: string; children: Rea
         </div>
         <nav className="flex flex-col gap-0.5 p-2">
           {nav.map((item) => {
-            const active = path === item.href || path.startsWith(`${item.href}/`) || (path === "/" && item.href === "/cameras");
+            const active = item.href === "/" ? path === "/" : path === item.href || path.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

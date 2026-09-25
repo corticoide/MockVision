@@ -1,7 +1,7 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
-import type { Camera, EventItem, EventPage, NodeMetrics } from "./client";
-import { keys } from "./queries";
+import type { AuditEntry, AuditPage, Camera, EventItem, EventPage, NodeMetrics, NodeSample } from "./client";
+import { type AuditFilter, auditMatches, keys } from "./queries";
 
 /** A message of the WebSocket: every topic numbers its messages. */
 interface Message {
@@ -14,7 +14,10 @@ interface Message {
 
 type Status = "connecting" | "open" | "closed";
 
-const topics = ["cameras", "events", "node", "profiles"];
+const topics = ["cameras", "events", "node", "profiles", "audit"];
+
+/** How long the dashboard's charts reach back. */
+const historyWindow = 10 * 60_000;
 
 /**
  * LiveClient keeps the query cache in sync with the node. It remembers the
@@ -122,10 +125,13 @@ export class LiveClient {
         if (m.type === "event") this.onEvent(m.data as EventItem);
         break;
       case "node":
-        if (m.type === "metrics") this.qc.setQueryData(keys.nodeMetrics, m.data as NodeMetrics);
+        if (m.type === "metrics") this.onMetrics(m.data as NodeMetrics);
         break;
       case "profiles":
         this.qc.invalidateQueries({ queryKey: keys.profiles });
+        break;
+      case "audit":
+        if (m.type === "entry") this.onAudit(m.data as AuditEntry);
         break;
       default:
         if (m.topic.startsWith("camera:") && m.type === "config") {
@@ -150,6 +156,35 @@ export class LiveClient {
       case "profiles":
         this.qc.invalidateQueries({ queryKey: keys.profiles });
         break;
+      case "audit":
+        this.qc.invalidateQueries({ queryKey: ["audit"] });
+        break;
+    }
+  }
+
+  private onMetrics(m: NodeMetrics) {
+    this.qc.setQueryData(keys.nodeMetrics, m);
+    const sample: NodeSample = {
+      at: m.at,
+      cpu_percent: m.cpu_percent,
+      mem_total: m.mem_total,
+      mem_used: m.mem_used,
+      net_interface: m.net_interface,
+      net_rx_bps: m.net_rx_bps,
+      net_tx_bps: m.net_tx_bps,
+    };
+    const from = Date.parse(m.at) - historyWindow;
+    this.qc.setQueryData<NodeSample[]>(keys.nodeHistory, (list) => list && [...list.filter((s) => Date.parse(s.at) > from), sample]);
+  }
+
+  /** Puts a new entry on top of every loaded audit list it belongs to. */
+  private onAudit(e: AuditEntry) {
+    for (const [key, data] of this.qc.getQueriesData<InfiniteData<AuditPage, string>>({ queryKey: ["audit"] })) {
+      const filter = key[1] as AuditFilter;
+      if (!data?.pages.length || !auditMatches(filter, e)) continue;
+      const [first, ...rest] = data.pages;
+      if (first.items.some((x) => x.id === e.id)) continue;
+      this.qc.setQueryData<InfiniteData<AuditPage, string>>(key, { ...data, pages: [{ ...first, items: [e, ...first.items] }, ...rest] });
     }
   }
 
@@ -205,6 +240,17 @@ export class LiveClient {
     };
     this.qc.setQueryData<EventPage>(keys.events(), update);
     this.qc.setQueryData<EventPage>(keys.events(ev.camera_id), update);
+    this.qc.setQueryData<EventPage>(keys.failedEvents, (page) => {
+      if (!page) return page;
+      const i = page.items.findIndex((e) => e.id === ev.id);
+      if (i >= 0) {
+        const items = page.items.slice();
+        items[i] = ev;
+        return { ...page, items };
+      }
+      if (ev.delivery_status !== "failed") return page;
+      return { ...page, items: [ev, ...page.items].slice(0, 5) };
+    });
   }
 }
 

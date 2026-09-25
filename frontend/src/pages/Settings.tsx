@@ -8,15 +8,19 @@ import { Card, CardHeader, Notice, PageHeader } from "@/components/ui/card";
 import { Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
 import { formatBytes, formatTime, sinceText } from "@/lib/utils";
+import { TokensCard } from "./Tokens";
 
 export function SettingsPage() {
   const t = useT();
   return (
     <>
-      <PageHeader title={t("Settings")} description={t("Limits of this node and the network the cameras join.")} />
+      <PageHeader title={t("Settings")} description={t("Limits of this node, the network the cameras join and the API tokens for automation.")} />
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4">
         <LimitsCard />
         <NodeCard />
+        <div className="col-span-2">
+          <TokensCard />
+        </div>
       </div>
     </>
   );

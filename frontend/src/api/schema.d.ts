@@ -60,7 +60,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current user; 401 carries setup_required on a fresh node */
+        /** Current user, and the token of a request made with one; 401 carries setup_required on a fresh node */
         get: operations["me"];
         put?: never;
         post?: never;
@@ -94,6 +94,23 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getNodeMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/node/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Node samples of the last ten minutes, every 2 s */
+        get: operations["getNodeHistory"];
         put?: never;
         post?: never;
         delete?: never;
@@ -192,6 +209,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** API tokens of the current user (panel session only) */
+        get: operations["listTokens"];
+        put?: never;
+        /** Create an API token (panel session only); the secret is returned once */
+        post: operations["createToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an API token (panel session only) */
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who changed what, when and from where (kept 90 days) */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cameras": {
         parameters: {
             query?: never;
@@ -202,6 +273,23 @@ export interface paths {
         get: operations["listCameras"];
         put?: never;
         post: operations["createCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/actions/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start, stop, restart, clone or delete several cameras; each gets its own result */
+        post: operations["bulkCameras"];
         delete?: never;
         options?: never;
         head?: never;
@@ -600,8 +688,16 @@ export interface components {
                 username: string;
                 role: string;
             };
-            /** Format: date-time */
-            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Null for a token that does not expire
+             */
+            expires_at: string | null;
+            token?: {
+                id: string;
+                name: string;
+                scopes: ("read" | "write")[];
+            };
         };
         Interface: {
             name: string;
@@ -614,8 +710,12 @@ export interface components {
         };
         CameraCounts: {
             total: number;
+            /** @description Running and degraded */
             running: number;
             error: number;
+            by_state: {
+                [key: string]: number;
+            };
         };
         Node: {
             version: string;
@@ -629,6 +729,12 @@ export interface components {
             parent_interface: string;
             interfaces: components["schemas"]["Interface"][] | null;
             cameras: components["schemas"]["CameraCounts"];
+            /** @description Where the panel and the API listen (D63) */
+            panel: {
+                listen: string;
+                all_interfaces: boolean;
+                urls: string[];
+            };
             /** Format: date-time */
             started_at: string;
         };
@@ -653,6 +759,12 @@ export interface components {
             cpu_sustained_percent: number;
             mem_total: number;
             mem_used: number;
+            /** @description Interface the cameras hang from */
+            net_interface: string;
+            /** @description Bytes per second received */
+            net_rx_bps: number;
+            /** @description Bytes per second sent */
+            net_tx_bps: number;
             cameras: {
                 [key: string]: components["schemas"]["CameraMetrics"];
             };
@@ -662,6 +774,92 @@ export interface components {
                 write_transactions: number;
             };
             limits: components["schemas"]["Settings"];
+        };
+        NodeSample: {
+            /** Format: date-time */
+            at: string;
+            cpu_percent: number;
+            mem_total: number;
+            mem_used: number;
+            net_interface: string;
+            net_rx_bps: number;
+            net_tx_bps: number;
+        };
+        Token: {
+            id: string;
+            name: string;
+            /** @description First characters of the secret */
+            prefix: string;
+            scopes: ("read" | "write")[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string | null;
+            /** Format: date-time */
+            last_used_at: string | null;
+            last_used_ip: string;
+            expired: boolean;
+        };
+        TokenInput: {
+            name: string;
+            /** @description write implies read; none means read */
+            scopes?: ("read" | "write")[];
+            /** @description Null for a token that lasts until revoked */
+            expires_in_days?: number | null;
+        };
+        CreatedToken: {
+            token: components["schemas"]["Token"];
+            /** @description Shown only now; the node keeps its hash */
+            secret: string;
+        };
+        AuditEntry: {
+            id: string;
+            /** Format: date-time */
+            at: string;
+            actor: {
+                /** @enum {string} */
+                type: "user" | "camera" | "system";
+                id: string;
+                name: string;
+            };
+            /** @enum {string} */
+            origin: "panel" | "api" | "camera" | "system";
+            origin_ip: string;
+            token: {
+                id: string;
+                name: string;
+            } | null;
+            action: string;
+            entity: {
+                type: string;
+                id: string;
+                name: string;
+            };
+            diff: {
+                [key: string]: unknown;
+            };
+        };
+        AuditPage: {
+            items: components["schemas"]["AuditEntry"][];
+            next_cursor?: string;
+        };
+        BulkAction: {
+            /** @enum {string} */
+            action: "start" | "stop" | "restart" | "clone" | "delete";
+            ids: string[];
+            /** @description Start each copy (clone only) */
+            start?: boolean;
+        };
+        BulkResult: {
+            action: string;
+            succeeded: number;
+            failed: number;
+            results: {
+                id: string;
+                ok: boolean;
+                camera?: components["schemas"]["Camera"];
+                error?: components["schemas"]["Problem"];
+            }[];
         };
         Profile: {
             id: string;
@@ -1166,6 +1364,31 @@ export interface operations {
             };
         };
     };
+    getNodeHistory: {
+        parameters: {
+            query?: {
+                /** @description Unix milliseconds or RFC 3339 */
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Samples, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        samples: components["schemas"]["NodeSample"][];
+                    };
+                };
+            };
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -1321,9 +1544,123 @@ export interface operations {
             };
         };
     };
-    listCameras: {
+    listTokens: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tokens, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Token"][];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+        };
+    };
+    createToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TokenInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                origin?: "panel" | "api" | "camera" | "system";
+                entity_type?: string;
+                entity_id?: string;
+                token_id?: string;
+                /** @description Exact action or prefix */
+                action?: string;
+                /** @description Unix milliseconds or RFC 3339 */
+                since?: string;
+                /** @description Unix milliseconds or RFC 3339 */
+                until?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listCameras: {
+        parameters: {
+            query?: {
+                /** @description Text in the name */
+                q?: string;
+                state?: string;
+                /** @description Profile ID or ID@version */
+                profile?: string;
+                tag?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1366,6 +1703,31 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    bulkCameras: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkAction"];
+            };
+        };
+        responses: {
+            /** @description Results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkResult"];
+                };
+            };
             422: components["responses"]["Problem"];
         };
     };
@@ -2008,6 +2370,8 @@ export interface operations {
             query?: {
                 camera_id?: string;
                 type?: string;
+                /** @description Only events a target gave up on */
+                delivery?: "failed";
                 cursor?: string;
                 limit?: number;
             };

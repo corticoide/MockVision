@@ -1,9 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { navigate } from "@/lib/router";
 import {
   api,
   ApiError,
   type Asset,
+  type AuditEntry,
+  type AuditPage,
+  type BulkAction,
   type Camera,
   type CameraUserInput,
   type CloneCamera,
@@ -12,6 +15,7 @@ import {
   type ImportResult,
   type Settings,
   type TargetInput,
+  type TokenInput,
   type UpdateCamera,
   unwrap,
   upload,
@@ -21,6 +25,10 @@ export const keys = {
   me: ["me"] as const,
   node: ["node"] as const,
   nodeMetrics: ["node", "metrics"] as const,
+  nodeHistory: ["node", "history"] as const,
+  tokens: ["tokens"] as const,
+  audit: (f: AuditFilter) => ["audit", f] as const,
+  failedEvents: ["events", "failed"] as const,
   settings: ["settings"] as const,
   cameras: ["cameras"] as const,
   camera: (id: string) => ["cameras", id] as const,
@@ -97,6 +105,15 @@ export function useNodeMetrics() {
   });
 }
 
+/** Node samples of the last ten minutes; the node topic appends new ones. */
+export function useNodeHistory() {
+  return useQuery({
+    queryKey: keys.nodeHistory,
+    queryFn: async () => unwrap(await api.GET("/node/history")).samples,
+    staleTime: Infinity,
+  });
+}
+
 export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: async () => unwrap(await api.GET("/settings")) });
 }
@@ -115,6 +132,24 @@ export function useCameras() {
   return useQuery({
     queryKey: keys.cameras,
     queryFn: async () => unwrap(await api.GET("/cameras")).items,
+  });
+}
+
+/** Applies one action to several cameras; each camera reports its own result. */
+export function useBulkCameras() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: BulkAction) => unwrap(await api.POST("/cameras/actions/bulk", { body })),
+    onSuccess: (res) => {
+      const deleted = new Set<string>();
+      for (const r of res.results) {
+        if (!r.ok) continue;
+        if (r.camera) patchCameraCache(qc, r.camera);
+        else if (res.action === "delete") deleted.add(r.id);
+      }
+      if (deleted.size) qc.setQueryData<Camera[]>(keys.cameras, (list) => list?.filter((c) => !deleted.has(c.id)));
+    },
+    onError: () => qc.invalidateQueries({ queryKey: keys.cameras }),
   });
 }
 
@@ -369,6 +404,69 @@ export function useEvents(cameraId?: string) {
     queryKey: keys.events(cameraId),
     queryFn: async (): Promise<EventPage> =>
       unwrap(await api.GET("/events", { params: { query: { camera_id: cameraId, limit: 100 } } })),
+  });
+}
+
+/** The latest events a target gave up on, for the dashboard. */
+export function useFailedEvents() {
+  return useQuery({
+    queryKey: keys.failedEvents,
+    queryFn: async (): Promise<EventPage> =>
+      unwrap(await api.GET("/events", { params: { query: { delivery: "failed", limit: 5 } } })),
+  });
+}
+
+// --- API tokens ---
+
+export function useTokens() {
+  return useQuery({ queryKey: keys.tokens, queryFn: async () => unwrap(await api.GET("/tokens")).items });
+}
+
+export function useCreateToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: TokenInput) => unwrap(await api.POST("/tokens", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.tokens }),
+  });
+}
+
+export function useRevokeToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => unwrap(await api.DELETE("/tokens/{id}", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.tokens }),
+  });
+}
+
+// --- Audit ---
+
+/** Filters of the audit log; empty fields match everything. */
+export interface AuditFilter {
+  origin?: "panel" | "api" | "camera" | "system";
+  entity_type?: string;
+  entity_id?: string;
+  token_id?: string;
+  action?: string;
+}
+
+/** Whether an entry passes a filter, as the node would decide it. */
+export function auditMatches(f: AuditFilter, e: AuditEntry): boolean {
+  if (f.origin && e.origin !== f.origin) return false;
+  if (f.entity_type && e.entity.type !== f.entity_type) return false;
+  if (f.entity_id && e.entity.id !== f.entity_id) return false;
+  if (f.token_id && e.token?.id !== f.token_id) return false;
+  if (f.action && e.action !== f.action && !e.action.startsWith(`${f.action}.`)) return false;
+  return true;
+}
+
+/** Audit entries, newest first, a page at a time; new ones arrive live. */
+export function useAudit(filter: AuditFilter) {
+  return useInfiniteQuery({
+    queryKey: keys.audit(filter),
+    initialPageParam: "",
+    queryFn: async ({ pageParam }): Promise<AuditPage> =>
+      unwrap(await api.GET("/audit", { params: { query: { ...filter, cursor: pageParam || undefined, limit: 50 } } })),
+    getNextPageParam: (last) => last.next_cursor || undefined,
   });
 }
 

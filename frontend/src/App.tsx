@@ -9,8 +9,10 @@ import { Notice } from "@/components/ui/card";
 import { useT } from "@/lib/i18n";
 import { usePath } from "@/lib/router";
 import { AssetsPage } from "@/pages/Assets";
+import { AuditPage } from "@/pages/Audit";
 import { CameraPage } from "@/pages/camera/CameraPage";
 import { CamerasPage } from "@/pages/Cameras";
+import { DashboardPage } from "@/pages/Dashboard";
 import { EventsPage } from "@/pages/Events";
 import { LoginPage } from "@/pages/Login";
 import { ProfilesPage } from "@/pages/Profiles";
@@ -18,12 +20,13 @@ import { SettingsPage } from "@/pages/Settings";
 import { TargetsPage } from "@/pages/Targets";
 
 const pages: Record<string, ComponentType> = {
-  "/": CamerasPage,
+  "/": DashboardPage,
   "/cameras": CamerasPage,
   "/events": EventsPage,
   "/profiles": ProfilesPage,
   "/assets": AssetsPage,
   "/targets": TargetsPage,
+  "/audit": AuditPage,
   "/settings": SettingsPage,
 };
 

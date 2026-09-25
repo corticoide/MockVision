@@ -82,6 +82,14 @@ export function useI18n(): I18n {
   return ctx;
 }
 
+/**
+ * Picks the singular or plural source string by count; both are keys of
+ * the dictionaries, and {n} is filled with the count.
+ */
+export function plural(t: Translate, n: number, one: string, other: string, vars?: Vars): string {
+  return t(n === 1 ? one : other, { n, ...vars });
+}
+
 /** Shortcut for components that only need the translate function. */
 export function useT(): Translate {
   return useI18n().t;

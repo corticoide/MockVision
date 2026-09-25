@@ -24,6 +24,14 @@ export type NetworkInput = Schemas["NetworkInput"];
 export type UpdateCamera = Schemas["UpdateCamera"];
 export type CameraUserInput = Schemas["CameraUserInput"];
 export type CloneCamera = Schemas["CloneCamera"];
+export type Token = Schemas["Token"];
+export type TokenInput = Schemas["TokenInput"];
+export type CreatedToken = Schemas["CreatedToken"];
+export type AuditEntry = Schemas["AuditEntry"];
+export type AuditPage = Schemas["AuditPage"];
+export type BulkAction = Schemas["BulkAction"];
+export type BulkResult = Schemas["BulkResult"];
+export type NodeSample = Schemas["NodeSample"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.

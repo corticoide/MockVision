@@ -1,4 +1,4 @@
-import { ArrowLeft, CopyPlus, Play, RotateCcw, RotateCw, Square, Trash2, Zap } from "lucide-react";
+import { ArrowLeft, CopyPlus, Play, RotateCcw, RotateCw, ScrollText, Square, Trash2, Zap } from "lucide-react";
 import { useState } from "react";
 import { type Camera, errorMessage } from "@/api/client";
 import { useCameraTopic } from "@/api/live";
@@ -112,6 +112,9 @@ function Header({ camera }: { camera: Camera }) {
             <LevelBadge level={camera.profile.level} />
             <Mono>{camera.network.ip || "127.0.0.1"}</Mono>
             <Mono>{camera.network.mac}</Mono>
+            <Link href={`/audit?camera=${camera.id}`} className="inline-flex items-center gap-1 hover:text-text [&_svg]:size-3.5">
+              <ScrollText /> {t("Activity")}
+            </Link>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
