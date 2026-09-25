@@ -2,6 +2,7 @@ package tmpl
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,8 +65,11 @@ func TestFunctions(t *testing.T) {
 	if u := render(t, c, `{{ uuid }}`, data); len(u) != 36 || u[14] != '4' {
 		t.Errorf("uuid = %q", u)
 	}
-	if r := render(t, c, `{{ rand 5 10 }}`, data); r < "5" || len(r) > 2 {
-		t.Errorf("rand = %q", r)
+	for i := 0; i < 50; i++ {
+		n, err := strconv.Atoi(render(t, c, `{{ rand 5 10 }}`, data))
+		if err != nil || n < 5 || n > 10 {
+			t.Fatalf("rand 5 10 = %d, %v", n, err)
+		}
 	}
 }
 
