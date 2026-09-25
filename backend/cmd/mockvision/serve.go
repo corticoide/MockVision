@@ -60,6 +60,9 @@ func serve(args []string, log *slog.Logger) int {
 	if os.Geteuid() == 0 {
 		log.Warn("the main service is running as root; use mockvision run, which drops privileges")
 	}
+	// The database, packages and the node key stay private to the service;
+	// renditions are made readable for cameras explicitly.
+	syscall.Umask(0o077)
 	mode := *netMode
 	if mode == "" {
 		mode = "local"

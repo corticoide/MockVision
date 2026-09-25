@@ -137,6 +137,10 @@ func (l *Library) Encode(ctx context.Context, src string, p Params, key string) 
 	if err := os.MkdirAll(files.Dir, 0o755); err != nil {
 		return files, err
 	}
+	// Cameras read renditions with their own user, whatever the umask.
+	if err := os.Chmod(files.Dir, 0o755); err != nil {
+		return files, err
+	}
 	scale := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1", p.Width, p.Height, p.Width, p.Height)
 	tmpGOP := files.GOP + ".tmp"
 	gopArgs := []string{
