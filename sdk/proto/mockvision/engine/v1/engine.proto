@@ -1,0 +1,308 @@
+// MockVision engine contract, version 1, for external plugins.
+//
+// A plugin is an executable inside a .mvpkg package. The camera process
+// launches it sandboxed, with its sockets already open, and talks to it over
+// gRPC on a Unix socket. The plugin serves Engine; the camera serves Host,
+// limited to the permissions the user approved (net.listen, net.connect,
+// state.read, state.write, events.emit, events.deliver, media.read, sd).
+//
+// Built-in engines implement the same contract in-process through the Go
+// interfaces in sdk/engine; this file mirrors them for other languages.
+// JSON payloads (config, values, events) are carried as bytes to keep the
+// contract stable while profile schemas evolve.
+
+syntax = "proto3";
+
+package mockvision.engine.v1;
+
+option go_package = "github.com/corticoide/mockvision/sdk/proto/mockvision/engine/v1;enginev1";
+
+service Engine {
+  rpc Describe(DescribeRequest) returns (Descriptor);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Start(StartRequest) returns (StartResponse);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Stop(StopRequest) returns (StopResponse);
+}
+
+service Host {
+  // State
+  rpc StateGet(StateGetRequest) returns (StateGetResponse);
+  rpc StateList(StateListRequest) returns (StateListResponse);
+  rpc StateSet(StateSetRequest) returns (StateSetResponse);
+  rpc StateCanon(StateGetRequest) returns (StateGetResponse);
+  rpc StateWatch(StateWatchRequest) returns (stream StateChanges);
+  // Events
+  rpc EventEmit(EventEmitRequest) returns (EventEmitResponse);
+  rpc EventSubscribe(EventSubscribeRequest) returns (stream Dispatch);
+  rpc DeliveryReport(DeliveryReportRequest) returns (DeliveryReportResponse);
+  // Media
+  rpc MediaStreams(MediaStreamsRequest) returns (MediaStreamsResponse);
+  rpc MediaSnapshot(MediaSnapshotRequest) returns (MediaSnapshotResponse);
+  // Templates
+  rpc TemplateRender(TemplateRenderRequest) returns (TemplateRenderResponse);
+  // Files (simulated SD card)
+  rpc FilePut(stream FileChunk) returns (FilePutResponse);
+  rpc FileGet(FileGetRequest) returns (stream FileChunk);
+  // Telemetry
+  rpc Log(LogRequest) returns (LogResponse);
+  rpc RequestStat(RequestStatRequest) returns (RequestStatResponse);
+  rpc Gap(GapRequest) returns (GapResponse);
+}
+
+message SocketSpec {
+  string name = 1;
+  string network = 2; // tcp | udp
+  int32 default_port = 3;
+}
+
+message DescribeRequest {}
+
+message Descriptor {
+  string name = 1;
+  string version = 2;
+  int32 contract = 3;
+  string role = 4; // server | client
+  bytes config_schema = 5; // JSON Schema of the engine's profile section
+  repeated SocketSpec sockets = 6;
+  repeated string emits = 7;
+  repeated string delivers = 8;
+}
+
+message Problem {
+  string path = 1; // JSON pointer inside the engine section
+  string message = 2;
+  bool warning = 3;
+}
+
+message ValidateRequest {
+  bytes config = 1;
+}
+
+message ValidateResponse {
+  repeated Problem problems = 1;
+}
+
+message Identity {
+  string camera_id = 1;
+  string name = 2;
+  string ip = 3;
+  string mac = 4;
+  string serial = 5;
+  string vendor = 6;
+  string model = 7;
+  string firmware = 8;
+  string profile_id = 9;
+  string profile_version = 10;
+}
+
+message User {
+  string username = 1;
+  string password = 2;
+  string role = 3;
+}
+
+message StartRequest {
+  Identity identity = 1;
+  string instance = 2;
+  bytes config = 3;
+  int32 port = 4;
+  // Sockets are passed as file descriptors with SCM_RIGHTS on the control
+  // socket before Start; this maps socket names to descriptor numbers.
+  map<string, int32> socket_fds = 5;
+  repeated User users = 6;
+}
+
+message StartResponse {}
+
+message ReloadRequest {
+  bytes config = 1;
+}
+
+message ReloadResponse {}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string state = 1; // ok | degraded | failed | stopped
+  string detail = 2;
+  int32 clients = 3;
+  uint64 requests = 4;
+  uint64 errors = 5;
+  uint64 bytes_in = 6;
+  uint64 bytes_out = 7;
+}
+
+message StopRequest {
+  int64 deadline_ms = 1;
+}
+
+message StopResponse {}
+
+message Origin {
+  string kind = 1; // client | panel | system
+  string ip = 2;
+  string engine = 3;
+}
+
+message StateGetRequest {
+  string key = 1;
+}
+
+message StateGetResponse {
+  bool found = 1;
+  bytes value_json = 2;
+}
+
+message StateListRequest {
+  string prefix = 1;
+}
+
+message Param {
+  string key = 1;
+  string type = 2;
+  bytes value_json = 3;
+  string bind = 4;
+}
+
+message StateListResponse {
+  repeated Param params = 1;
+}
+
+message StateSetRequest {
+  map<string, bytes> values_json = 1;
+  Origin origin = 2;
+}
+
+message StateSetResponse {
+  map<string, string> problems = 1; // empty when applied
+}
+
+message StateWatchRequest {}
+
+message Change {
+  string key = 1;
+  bytes value_json = 2;
+  string bind = 3;
+  Origin origin = 4;
+}
+
+message StateChanges {
+  repeated Change changes = 1;
+}
+
+message EventEmitRequest {
+  bytes event_json = 1; // canonical event
+}
+
+message EventEmitResponse {
+  string event_id = 1;
+}
+
+message EventSubscribeRequest {
+  string transport = 1; // http_push, mqtt, ftp...
+}
+
+message Target {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  string url = 4;
+  string method = 5;
+  map<string, string> headers = 6;
+  string username = 7;
+  string password = 8;
+}
+
+message Dispatch {
+  bytes event_json = 1;
+  string vendor_name = 2;
+  bytes transport_json = 3;
+  int64 timeout_ms = 4;
+  int32 retries = 5;
+  int64 backoff_ms = 6;
+  repeated Target targets = 7;
+}
+
+message DeliveryReportRequest {
+  string event_id = 1;
+  string target_id = 2;
+  int32 attempt = 3;
+  int64 at_ms = 4;
+  string status = 5; // ok | retry | failed
+  int32 http_status = 6;
+  int64 latency_ms = 7;
+  string error = 8;
+}
+
+message DeliveryReportResponse {}
+
+message MediaStreamsRequest {}
+
+message StreamInfo {
+  string name = 1;
+  string codec = 2;
+  int32 width = 3;
+  int32 height = 4;
+  int32 fps = 5;
+  int32 gop = 6;
+  int32 bitrate = 7;
+}
+
+message MediaStreamsResponse {
+  repeated StreamInfo streams = 1;
+}
+
+message MediaSnapshotRequest {
+  string stream = 1;
+}
+
+message MediaSnapshotResponse {
+  bytes jpeg = 1;
+}
+
+message TemplateRenderRequest {
+  string name = 1; // template path inside the profile package
+  bytes data_json = 2; // .Request, .Event and .Result; .Camera and .Now are filled by the host
+}
+
+message TemplateRenderResponse {
+  bytes output = 1;
+}
+
+message FileChunk {
+  string name = 1;
+  bytes data = 2;
+}
+
+message FilePutResponse {}
+
+message FileGetRequest {
+  string name = 1;
+}
+
+message LogRequest {
+  string level = 1;
+  string message = 2;
+  map<string, string> attrs = 3;
+}
+
+message LogResponse {}
+
+message RequestStatRequest {
+  string route = 1;
+  string client_ip = 2;
+  int32 status = 3;
+  int64 duration_us = 4;
+}
+
+message RequestStatResponse {}
+
+message GapRequest {
+  string protocol = 1;
+  string client_ip = 2;
+  string summary = 3;
+}
+
+message GapResponse {}

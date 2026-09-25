@@ -1,0 +1,172 @@
+# MockVision demo profile: a minimal Milesight-style camera.
+#
+# Used by the technical demo to exercise the whole architecture: an RTSP
+# stream, three HTTP features (snapshot, device information, reading and
+# writing a parameter) and a line-crossing event pushed over HTTP.
+#
+# It is illustrative: routes and payloads were not captured from a real
+# device, so its verification level is Draft. MockVision is not affiliated
+# with Milesight; the name is only descriptive.
+#
+# yaml-language-server: $schema=./schema/profile.schema.json
+
+schema: 1
+
+profile:
+  id: milesight/demo
+  version: 0.1.0
+  name: Milesight demo camera
+  vendor: Milesight
+  model: MS-DEMO
+  firmware: ["demo-1.0"]
+
+identity:
+  serial: "6CXXXXXXXXXX"
+  factory:
+    network: { ip: 192.168.5.190, mask: 255.255.255.0, gateway: 192.168.5.1 }
+    users:
+      - { username: admin, password: ms1234, role: admin }
+  device:
+    firmware: "demo-1.0.0"
+    hardware: "V1.0"
+
+state:
+  System.DeviceName:
+    type: string
+    default: "Network Camera"
+    max_length: 32
+    description: Name shown by the device. Declarative.
+  Image.Brightness:
+    type: int
+    default: 50
+    min: 0
+    max: 100
+    description: Declarative; stored and returned.
+  Encode.Main.Resolution:
+    type: enum
+    values: ["1920x1080", "1280x720", "640x360"]
+    default: "1280x720"
+    bind: media.main.resolution
+    description: Effective; changing it regenerates the main stream.
+  Encode.Main.FrameRate:
+    type: int
+    default: 15
+    min: 1
+    max: 30
+    bind: media.main.fps
+
+media:
+  streams:
+    main:
+      codecs: [h264]
+      resolutions: ["1920x1080", "1280x720", "640x360"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 256, max: 8192 }
+      default: { codec: h264, resolution: 1280x720, fps: 15, bitrate: 2048, gop: 30 }
+
+engines:
+  rtsp:
+    engine: rtsp@^1
+    port: 554
+    auth: { scheme: digest }
+    paths:
+      main: /main
+
+  http:
+    engine: http-api@^1
+    port: 80
+    auth: { scheme: digest, realm: Milesight }
+    server: Milesight-Demo
+    routes:
+      # 1. Snapshot of the main stream.
+      - id: snapshot
+        match: { method: GET, path: /snapshot.cgi }
+        action: { handler: snapshot, stream: main }
+
+      # 2. Device information, rendered from the camera identity and state.
+      - id: device-info
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.system.information }
+        action:
+          type: application/json
+          body: |
+            {
+              "deviceName": {{ json (state "System.DeviceName") }},
+              "vendor": {{ json .Camera.Vendor }},
+              "model": {{ json .Camera.Model }},
+              "serialNumber": {{ json .Camera.Serial }},
+              "macAddress": {{ json (upper .Camera.MAC) }},
+              "ipAddress": {{ json .Camera.IP }},
+              "firmwareVersion": {{ json .Camera.Firmware }},
+              "systemTime": {{ json (fmtTime .Now "rfc3339") }}
+            }
+
+      # 3. Reading and writing parameters, for example
+      #    /cgi-bin/operator/param.cgi?action=get&name=Image.Brightness
+      #    /cgi-bin/operator/param.cgi?action=set&Image.Brightness=70
+      - id: param-get
+        match:
+          method: GET
+          path: /cgi-bin/operator/param.cgi
+          query: { action: get }
+        action:
+          handler: state.get
+          from: query
+          key: name
+          then:
+            type: text/plain
+            body: "{{ range .Result }}{{ .Key }}={{ .Value }}\n{{ end }}"
+
+      - id: param-set
+        match:
+          method: GET
+          path: /cgi-bin/operator/param.cgi
+          query: { action: set }
+        action:
+          handler: state.set
+          from: query
+          then: { type: text/plain, body: "OK\n" }
+
+    unknown:
+      status: 404
+      type: text/html
+      body: "<html><body><h1>404 Not Found</h1></body></html>\n"
+
+  push:
+    engine: http-push@^1
+
+events:
+  line_crossing:
+    vendor_name: LineCrossing
+    min_interval: 1s
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: |
+          {
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {
+              "name": {{ json (state "System.DeviceName") }},
+              "serialNumber": {{ json .Camera.Serial }},
+              "macAddress": {{ json (upper .Camera.MAC) }},
+              "ipAddress": {{ json .Camera.IP }}
+            },
+            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}}{{ else }}null{{ end }},
+            "direction": {{ json .Event.Direction }},
+            "object": {{ with .Event.Object }}{{ json .Class }}{{ else }}null{{ end }}
+          }
+    delivery: { timeout: 5s, retries: 3, backoff: 2s }
+
+vca:
+  rules: [line]
+  object_classes: [person, car, truck, bus, motorcycle, bicycle]
+
+coverage:
+  rtsp: main stream only
+  http-api: snapshot, device information and parameters
+  http_push: line_crossing
