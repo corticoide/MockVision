@@ -85,6 +85,11 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 	if err := os.MkdirAll(opts.DataDir, 0o755); err != nil {
 		return nil, err
 	}
+	// Cameras read renditions with their own user, so they must be able to
+	// traverse the data directory; what it holds stays private.
+	if fi, err := os.Stat(opts.DataDir); err == nil && fi.Mode().Perm()&0o011 != 0o011 {
+		_ = os.Chmod(opts.DataDir, fi.Mode().Perm()|0o711)
+	}
 	box, err := secret.LoadOrCreate(filepath.Join(opts.DataDir, "node.key"))
 	if err != nil {
 		return nil, err

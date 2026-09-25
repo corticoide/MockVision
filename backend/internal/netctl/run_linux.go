@@ -151,9 +151,19 @@ func lookupUser(name string, fallback int) (int, int, error) {
 }
 
 // prepareDataDir creates the data directory and gives it to the service.
+// A directory that already belongs to the service is left alone: the
+// helper holds no capability to read what the service keeps private, so
+// only a fresh volume or data restored by root is walked.
 func prepareDataDir(dir string, uid, gid int) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) == uid && int(st.Gid) == gid {
+		return nil
 	}
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
