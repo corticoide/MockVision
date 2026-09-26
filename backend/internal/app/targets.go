@@ -4,17 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/corticoide/mockvision/backend/internal/buildinfo"
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
+	"github.com/corticoide/mockvision/sdk/engine"
 )
 
 // targetConfig is stored in targets.config_json; the password lives
@@ -169,7 +175,8 @@ func (s *Service) UpdateTarget(ctx context.Context, actor Actor, id string, in T
 // DeleteTarget removes an unused target (RN-12: targets in use are
 // disabled instead).
 func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) error {
-	if _, err := s.store.R().GetTarget(ctx, id); err != nil {
+	t, err := s.store.R().GetTarget(ctx, id)
+	if err != nil {
 		return store.NotFound(err)
 	}
 	if cams, _ := s.store.R().CamerasUsingTarget(ctx, id); len(cams) > 0 {
@@ -181,7 +188,7 @@ func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) erro
 		}
 		return err
 	}
-	s.audit(ctx, actor, "target.delete", "target", id, nil)
+	s.audit(ctx, actor, "target.delete", "target", id, map[string]string{"name": t.Name})
 	return nil
 }
 
@@ -191,9 +198,21 @@ type TargetTestResult struct {
 	HTTPStatus int    `json:"http_status,omitempty"`
 	LatencyMS  int64  `json:"latency_ms"`
 	Error      string `json:"error,omitempty"`
+	// From says where the request left: "camera" (a running camera that
+	// uses the target, as its deliveries do) or "node".
+	From string `json:"from"`
+	// Camera names the camera the request left from.
+	Camera string `json:"camera,omitempty"`
 }
 
-// TestTarget sends a test request from the node to a target.
+// errTargetOnNode refuses a test from the node to the node itself.
+var errTargetOnNode = errors.New("the address is the node itself or a link-local one; cameras cannot reach it either")
+
+// TestTarget sends a test request to a target. It leaves from a running
+// camera that uses the target, so it crosses the same network as the
+// deliveries; with none running it leaves from the node, which then
+// refuses its own addresses: a camera could not reach them, and they are
+// the node's internal services (audit B7).
 func (s *Service) TestTarget(ctx context.Context, id string) (*TargetTestResult, error) {
 	r, err := s.store.R().GetTarget(ctx, id)
 	if err != nil {
@@ -201,34 +220,83 @@ func (s *Service) TestTarget(ctx context.Context, id string) (*TargetTestResult,
 	}
 	var cfg targetConfig
 	_ = json.Unmarshal([]byte(r.ConfigJson), &cfg)
-	body, _ := json.Marshal(map[string]any{"test": true, "source": "MockVision", "target": r.Name, "at": time.Now().UTC()})
+	pw := ""
+	if len(r.SecretEnc) > 0 {
+		if p, err := s.box.Open(r.SecretEnc, "targets:"+id); err == nil {
+			pw = string(p)
+		}
+	}
+	target := engine.Target{ID: r.ID, Name: r.Name, Type: r.Type, URL: cfg.URL, Method: cfg.Method, Headers: cfg.Headers, Username: cfg.Username, Password: pw}
+
+	cams, _ := s.store.R().CamerasUsingTarget(ctx, id)
+	for _, c := range cams {
+		ss := s.session(c)
+		if ss == nil || !ss.active() {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		var res ipc.TargetTestResult
+		err := ss.conn().Request(cctx, ipc.TypeTargetTest, ipc.TargetTest{Target: target}, &res)
+		cancel()
+		if err != nil {
+			continue // a camera too old or busy: try the next one
+		}
+		return &TargetTestResult{OK: res.OK, HTTPStatus: res.HTTPStatus, LatencyMS: res.LatencyMS, Error: res.Error, From: "camera", Camera: ss.name}, nil
+	}
+	return s.testFromNode(ctx, r.Name, target), nil
+}
+
+func (s *Service) testFromNode(ctx context.Context, name string, t engine.Target) *TargetTestResult {
+	res := &TargetTestResult{From: "node"}
+	body, _ := json.Marshal(map[string]any{"test": true, "source": "MockVision", "target": name, "at": time.Now().UTC()})
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, cfg.Method, cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, t.Method, t.URL, bytes.NewReader(body))
 	if err != nil {
-		return &TargetTestResult{Error: err.Error()}, nil
+		res.Error = err.Error()
+		return res
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", buildinfo.UserAgent())
-	for k, v := range cfg.Headers {
+	for k, v := range t.Headers {
 		req.Header.Set(k, v)
 	}
-	if cfg.Username != "" {
-		pw := ""
-		if len(r.SecretEnc) > 0 {
-			if p, err := s.box.Open(r.SecretEnc, "targets:"+id); err == nil {
-				pw = string(p)
-			}
-		}
-		req.SetBasicAuth(cfg.Username, pw)
+	if t.Username != "" {
+		req.SetBasicAuth(t.Username, t.Password)
 	}
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	if s.rt.Kind() != "local" {
+		// Checked on the address actually dialed, after name resolution,
+		// so a name that resolves to the node is refused too.
+		dialer.Control = func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip, err := netip.ParseAddr(host)
+			if err != nil {
+				return err
+			}
+			if ip = ip.Unmap(); nodeAddress(ip) {
+				return errTargetOnNode
+			}
+			return nil
+		}
+	}
+	client := &http.Client{
+		Transport:     &http.Transport{Proxy: nil, DialContext: dialer.DialContext},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	start := time.Now()
 	resp, err := client.Do(req)
-	res := &TargetTestResult{LatencyMS: time.Since(start).Milliseconds()}
+	res.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
-		res.Error = err.Error()
-		return res, nil
+		if errors.Is(err, errTargetOnNode) {
+			res.Error = errTargetOnNode.Error()
+		} else {
+			res.Error = err.Error()
+		}
+		return res
 	}
 	resp.Body.Close()
 	res.HTTPStatus = resp.StatusCode
@@ -236,5 +304,26 @@ func (s *Service) TestTarget(ctx context.Context, id string) (*TargetTestResult,
 	if !res.OK {
 		res.Error = fmt.Sprintf("target answered %d", resp.StatusCode)
 	}
-	return res, nil
+	return res
+}
+
+// nodeAddress reports whether ip is the node itself: loopback, an address
+// of one of its interfaces, or one no LAN device has (unspecified,
+// link-local, multicast).
+func nodeAddress(ip netip.Addr) bool {
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	info, err := nodeInfo()
+	if err != nil {
+		return false
+	}
+	for _, i := range info.Interfaces {
+		for _, a := range i.Addrs {
+			if p, err := netip.ParsePrefix(a); err == nil && p.Addr().Unmap() == ip {
+				return true
+			}
+		}
+	}
+	return false
 }

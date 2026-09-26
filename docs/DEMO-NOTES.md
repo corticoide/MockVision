@@ -81,8 +81,9 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   itself, since it has no manifest.
 - **The official catalog is not bundled** (D81): profiles are imported by
   hand, as the acceptance criteria ask.
-- **H.264 only**, one stream per camera (`main`). No H.265, MJPEG streams or
-  substreams.
+- **H.264 only**, one stream per camera (`main`), in the demo itself. Since
+  v1 feature 5 cameras serve main, sub and third streams in H.264, H.265 or
+  MJPEG.
 - The RTSP Digest realm is `ipcam`, fixed by the RTSP library; the profile's
   realm applies to the HTTP API.
 
@@ -95,10 +96,14 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   need a helper request of its own.
 - **One user for all cameras** (`mockvision-cam`), not one per camera.
   Cameras cannot reach the service's data, but they share a uid among
-  themselves.
-- **FFmpeg is not sandboxed**: it runs as the service user with a timeout.
-  The package validator subprocess also runs as the service user, without
-  an extra seccomp or Landlock policy.
+  themselves. Each runs in a PID namespace of its own, so one cannot signal
+  the others, and Landlock limits its files to the renditions directory.
+- **FFmpeg and the package validator run as the service user**, confined by
+  seccomp and Landlock (`mockvision sandbox-exec`): FFmpeg reaches only the
+  picture it reads and the directory it writes, the validator no file. A
+  separate user for them would need a helper request of its own. On a
+  kernel without Landlock, or in a container that refuses it, they and the
+  cameras run without it; cameras log a warning.
 - **Docker capabilities.** The design lists NET_ADMIN, NET_RAW and SYS_ADMIN
   on top of Docker's defaults (D61). `compose.yaml` drops all capabilities
   and adds back only what the helper uses: those three plus
@@ -131,9 +136,9 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 - No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
   runs under a CSP without `unsafe-inline`. The design tokens (colors,
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
-- Camera parameters have an API (`GET`/`PATCH /cameras/{id}/config`) but no
-  editor in the panel yet; neither does camera editing beyond start, stop,
-  delete and the trigger.
+- Camera detail tabs for rules, triggers, faults and logs come with their
+  features of the v1 plan; the detail page has General, Network, Protocols,
+  Media, Users, Configuration and Events.
 - The event log shows the latest 100 events; the API pages with a cursor.
 
 ### Distribution

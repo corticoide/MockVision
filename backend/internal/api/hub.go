@@ -22,10 +22,39 @@ func bufferSize(topic string) int {
 	switch {
 	case topic == "node":
 		return 1
-	case strings.HasPrefix(topic, "camera:"):
+	case strings.HasPrefix(topic, "camera:"), strings.HasPrefix(topic, "job:"):
 		return 200
 	}
 	return 1000
+}
+
+// topics a client may subscribe to: the fixed ones, and one camera or job
+// by its ID.
+var fixedTopics = map[string]bool{"node": true, "cameras": true, "events": true, "profiles": true, "audit": true, "jobs": true}
+
+func validTopic(name string) bool {
+	if fixedTopics[name] {
+		return true
+	}
+	for _, prefix := range []string{"camera:", "job:"} {
+		if id, ok := strings.CutPrefix(name, prefix); ok {
+			return validID(id)
+		}
+	}
+	return false
+}
+
+// validID accepts the ULIDs the node uses as IDs.
+func validID(id string) bool {
+	if len(id) != 26 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= '0' && r <= '9' || r >= 'A' && r <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 type topicState struct {
@@ -80,6 +109,27 @@ func (h *Hub) Publish(topic, typ string, data any) {
 	h.mu.Unlock()
 }
 
+// Forget drops what a topic keeps for reconnecting clients, once nothing
+// more will be published on it (a deleted camera, a finished job). A client
+// that comes back to it sees a new sequence and reloads it over REST.
+func (h *Hub) Forget(topic string) {
+	h.mu.Lock()
+	delete(h.topics, topic)
+	h.mu.Unlock()
+}
+
+// disconnect ends the connections that match, for example those opened
+// with a token just revoked or a session just closed.
+func (h *Hub) disconnect(match func(*wsClient) bool, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if match(c) {
+			c.end(reason)
+		}
+	}
+}
+
 func (h *Hub) add(c *wsClient) {
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
@@ -100,8 +150,14 @@ func (h *Hub) subscribe(c *wsClient, topics []string, since map[string]uint64) {
 	defer h.mu.Unlock()
 	now := time.Now().UnixMilli()
 	for _, name := range topics {
-		c.addTopic(name)
-		t := h.topic(name)
+		if !validTopic(name) || !c.addTopic(name) {
+			continue
+		}
+		// Subscribing never creates a topic: only publishing does.
+		t := h.topics[name]
+		if t == nil {
+			t = &topicState{}
+		}
 		last, resume := since[name]
 		switch {
 		case !resume || last >= t.seq:

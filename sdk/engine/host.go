@@ -12,6 +12,9 @@ import (
 // reach the same services over gRPC, limited by the permissions the user
 // approved.
 type Host interface {
+	// Accounts are the camera's users. They can change while the camera
+	// runs, so engines look them up on every request.
+	Accounts() Accounts
 	State() State
 	Events() Events
 	Media() Media
@@ -19,6 +22,15 @@ type Host interface {
 	// Files is the camera's simulated SD card; nil when the camera has none.
 	Files() Files
 	Telemetry() Telemetry
+}
+
+// Accounts are the camera's user accounts (D11): at least one
+// administrator, each with a role.
+type Accounts interface {
+	// List returns every account, sorted by username.
+	List() []User
+	// Lookup returns the account with that username.
+	Lookup(username string) (User, bool)
 }
 
 // Origin says who changed a parameter; the audit log keeps it (RN-08).
@@ -139,10 +151,10 @@ type Events interface {
 	Report(r DeliveryReport)
 }
 
-// StreamInfo describes one video stream of the camera.
+// StreamInfo describes one video stream of the camera: main, sub or third.
 type StreamInfo struct {
 	Name    string `json:"name"`
-	Codec   string `json:"codec"`
+	Codec   string `json:"codec"` // h264, h265 or mjpeg
 	Width   int    `json:"width"`
 	Height  int    `json:"height"`
 	FPS     int    `json:"fps"`
@@ -150,10 +162,14 @@ type StreamInfo struct {
 	Bitrate int    `json:"bitrate"`
 }
 
-// VideoSource is a precoded group of pictures that server engines send in a
-// loop. Each access unit is a list of NAL units without start codes.
+// VideoSource is a precoded stream that server engines send in a loop, one
+// access unit per frame. For H.264 and H.265 an access unit is a list of
+// NAL units without start codes, the first one a keyframe, and the
+// parameter sets are also given apart (VPS only for H.265). For MJPEG an
+// access unit holds a single element, a whole JPEG image.
 type VideoSource struct {
 	Info        StreamInfo
+	VPS         []byte
 	SPS         []byte
 	PPS         []byte
 	AccessUnits [][][]byte

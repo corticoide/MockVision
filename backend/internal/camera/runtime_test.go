@@ -127,10 +127,23 @@ func TestCameraEndToEnd(t *testing.T) {
 	if err := lib.TestPattern(ctx, src); err != nil {
 		t.Fatal(err)
 	}
-	params := media.Params{Codec: "h264", Width: 640, Height: 360, FPS: 15, GOP: 30, Bitrate: 1024}
-	files, err := lib.Encode(ctx, src, params, params.Key("test"))
-	if err != nil {
-		t.Fatal(err)
+	// One rendition per stream of the demo profile: main in H.264, sub in
+	// H.265 and third in MJPEG.
+	var streams []ipc.Stream
+	for _, st := range []struct {
+		name string
+		p    media.Params
+	}{
+		{"main", media.Params{Codec: "h264", Width: 640, Height: 360, FPS: 15, GOP: 30, Bitrate: 1024}},
+		{"sub", media.Params{Codec: "h265", Width: 320, Height: 180, FPS: 10, GOP: 20, Bitrate: 256}},
+		{"third", media.Params{Codec: "mjpeg", Width: 352, Height: 288, FPS: 5, GOP: 1, Bitrate: 512}},
+	} {
+		files, err := lib.Encode(ctx, src, st.p, st.p.Key("test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		streams = append(streams, ipc.Stream{Name: st.name, Codec: st.p.Codec, Width: st.p.Width, Height: st.p.Height, FPS: st.p.FPS,
+			GOP: st.p.GOP, Bitrate: st.p.Bitrate, StreamPath: files.Stream, SnapshotPath: files.Snapshot})
 	}
 
 	// Event target.
@@ -158,7 +171,7 @@ func TestCameraEndToEnd(t *testing.T) {
 		State:    map[string]any{"Encode.Main.Resolution": "640x360"},
 		Engines:  []ipc.EngineConfig{{Instance: "http", Enabled: true, Port: 80}, {Instance: "rtsp", Enabled: true, Port: 554}, {Instance: "push", Enabled: true}},
 		Users:    []engine.User{{Username: "admin", Password: "ms1234", Role: "admin"}},
-		Streams:  []ipc.Stream{{Name: "main", Codec: "h264", Width: 640, Height: 360, FPS: 15, GOP: 30, Bitrate: 1024, GOPPath: files.GOP, SnapshotPath: files.Snapshot}},
+		Streams:  streams,
 		Targets:  []ipc.Target{{Target: engine.Target{ID: "t1", Name: "test", Type: "http", URL: target.URL + "/events"}}},
 	}
 	if err := svc.conn.Request(ctx, ipc.TypeConfigure, cfg, nil); err != nil {
@@ -258,6 +271,31 @@ func TestCameraEndToEnd(t *testing.T) {
 			"-frames:v", "45", "-f", "null", "-").CombinedOutput()
 		if err != nil || len(strings.TrimSpace(string(out))) > 0 {
 			t.Fatalf("decoding the stream: %v: %s", err, out)
+		}
+	})
+
+	t.Run("sub and third streams", func(t *testing.T) {
+		if _, err := exec.LookPath("ffprobe"); err != nil {
+			t.Skip("ffprobe not installed")
+		}
+		for _, c := range []struct {
+			path, want string
+			frames     int
+		}{
+			{"/sub", "hevc,320,180", 25},   // more than one GOP of 20
+			{"/third", "mjpeg,352,288", 8}, // every frame the same JPEG
+		} {
+			url := fmt.Sprintf("rtsp://admin:ms1234@127.0.0.1:%d%s", ports["rtsp/rtsp"], c.path)
+			out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
+				"-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", url).CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != c.want {
+				t.Fatalf("ffprobe %s = %q, %v", c.path, out, err)
+			}
+			out, err = exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-rtsp_transport", "tcp", "-i", url,
+				"-frames:v", fmt.Sprint(c.frames), "-f", "null", "-").CombinedOutput()
+			if err != nil || len(strings.TrimSpace(string(out))) > 0 {
+				t.Fatalf("decoding %s: %v: %s", c.path, err, out)
+			}
 		}
 	})
 

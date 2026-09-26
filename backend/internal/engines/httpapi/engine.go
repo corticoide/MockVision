@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,7 +120,14 @@ func (e *Engine) compile(raw json.RawMessage) (*compiledConfig, error) {
 		return nil, err
 	}
 	cc := &compiledConfig{cfg: c}
-	users := func() []engine.User { return e.in.Users }
+	// Accounts are read on every request: an edited password applies at
+	// once.
+	users := func() []engine.User {
+		if e.in.Host == nil {
+			return nil
+		}
+		return e.in.Host.Accounts().List()
+	}
 	cc.auth = newAuthenticator(c.Auth.Scheme, c.Auth.Realm, users)
 	for _, r := range c.Routes {
 		cr := &compiledRoute{route: r, segments: splitPath(r.Match.Path), query: map[string]matcher{}, headers: map[string]matcher{}}
@@ -278,8 +286,8 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cw.Header().Set("Server", cc.cfg.Server)
 	}
 
-	user, stale := cc.auth.check(r)
-	if user == "" {
+	user, ok, stale := cc.auth.check(r)
+	if !ok {
 		routeID = "auth"
 		cc.auth.challenge(cw, stale)
 		cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -311,6 +319,12 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeID = route.route.ID
+	if roles := route.route.allowedRoles(); roles != nil && !slices.Contains(roles, user.Role) {
+		cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		cw.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(cw, "403 Forbidden\n")
+		return
+	}
 	e.run(cw, r, route, route.action, data)
 }
 
@@ -412,7 +426,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 		_, _ = w.Write(jpeg)
 		return
 	case HandlerStateGet:
-		result, err := e.stateGet(r, a.a)
+		result, err := e.stateGet(r, a.a, data.Request)
 		if err != nil {
 			e.fail(w, http.StatusBadRequest, err.Error())
 			return
@@ -447,7 +461,7 @@ type KV struct {
 	Value any
 }
 
-func (e *Engine) stateGet(r *http.Request, a Action) ([]KV, error) {
+func (e *Engine) stateGet(r *http.Request, a Action, req *engine.RequestData) ([]KV, error) {
 	keyParam := a.Key
 	if keyParam == "" {
 		keyParam = "name"
@@ -455,7 +469,13 @@ func (e *Engine) stateGet(r *http.Request, a Action) ([]KV, error) {
 	var raw string
 	switch a.From {
 	case "form":
-		raw = r.PostFormValue(keyParam)
+		// The body was read already: parse the copy the request keeps
+		// (audit B4).
+		form, err := url.ParseQuery(req.Body)
+		if err != nil {
+			return nil, errors.New("invalid form body")
+		}
+		raw = form.Get(keyParam)
 	default:
 		raw = r.URL.Query().Get(keyParam)
 	}

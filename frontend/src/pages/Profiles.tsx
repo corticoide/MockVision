@@ -7,6 +7,8 @@ import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, Empty, Notice, PageHeader } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { useT } from "@/lib/i18n";
+import { navigate } from "@/lib/router";
 import { cn, formatTime } from "@/lib/utils";
 
 export function ProfilesPage() {
@@ -15,18 +17,26 @@ export function ProfilesPage() {
   const action = useProfileAction();
   const input = useRef<HTMLInputElement>(null);
   const [report, setReport] = useState<{ report: ImportReport; ok: boolean; message: string } | null>(null);
+  const t = useT();
 
   const onFile = (file: File | undefined) => {
     if (!file) return;
     setReport(null);
     importer.mutate(file, {
       onSuccess: (res) => {
+        if ("job" in res) {
+          // Still queued or running after a minute: it goes on as a job.
+          toast(t("The import of {name} goes on in the background; follow it in Jobs.", { name: file.name }), "info");
+          navigate("/jobs");
+          return;
+        }
+        const id = `${res.profile.profile_id}@${res.profile.version}`;
         setReport({
           report: res.report,
           ok: true,
-          message: res.created ? `Imported ${res.profile.profile_id}@${res.profile.version}` : `${res.profile.profile_id}@${res.profile.version} was already installed`,
+          message: res.created ? t("Imported {id}", { id }) : t("{id} was already installed", { id }),
         });
-        toast(`Profile ${res.profile.name} ready`, "ok");
+        toast(t("Profile {name} ready", { name: res.profile.name }), "ok");
       },
       onError: (err) => {
         const rep = err instanceof ApiError ? err.problem.report : undefined;
@@ -40,8 +50,8 @@ export function ProfilesPage() {
   return (
     <>
       <PageHeader
-        title="Profiles"
-        description="Camera models: what each one serves and how. A profile imported by hand starts as a draft."
+        title={t("Profiles")}
+        description={t("Camera models: what each one serves and how. A profile imported by hand starts as a draft.")}
         actions={
           <>
             <input
@@ -52,7 +62,7 @@ export function ProfilesPage() {
               onChange={(e) => onFile(e.target.files?.[0])}
             />
             <Button variant="primary" onClick={() => input.current?.click()} disabled={importer.isPending}>
-              <Upload /> {importer.isPending ? "Validating…" : "Import profile"}
+              <Upload /> {importer.isPending ? t("Validating…") : t("Import profile")}
             </Button>
           </>
         }
@@ -61,23 +71,23 @@ export function ProfilesPage() {
       {report && <ReportCard {...report} onClose={() => setReport(null)} />}
       <Card>
         {isLoading ? (
-          <Empty title="Loading profiles…" />
+          <Empty title={t("Loading profiles…")} />
         ) : !profiles?.length ? (
-          <Empty icon={<Boxes />} title="No profiles installed">
-            Import a profile.yaml or a .mvpkg package, for example <span className="font-mono">profiles/milesight-demo.yaml</span>.
+          <Empty icon={<Boxes />} title={t("No profiles installed")}>
+            {t("Import a profile.yaml or a .mvpkg package, for example")} <span className="font-mono">profiles/milesight-demo.yaml</span>.
           </Empty>
         ) : (
           <Table>
             <THead>
               <tr>
-                <TH>Name</TH>
-                <TH>Profile</TH>
-                <TH>Firmware</TH>
-                <TH>Level</TH>
-                <TH>Signature</TH>
-                <TH className="text-right">Cameras</TH>
-                <TH>Imported</TH>
-                <TH className="text-right">Actions</TH>
+                <TH>{t("Name")}</TH>
+                <TH>{t("Profile")}</TH>
+                <TH>{t("Firmware")}</TH>
+                <TH>{t("Level")}</TH>
+                <TH>{t("Signature")}</TH>
+                <TH className="text-right">{t("Cameras")}</TH>
+                <TH>{t("Imported")}</TH>
+                <TH className="text-right">{t("Actions")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -88,7 +98,7 @@ export function ProfilesPage() {
                       <span className="font-medium">{p.name}</span>
                       {p.archived && (
                         <Badge tone="muted" icon={<Archive />}>
-                          Archived
+                          {t("Archived")}
                         </Badge>
                       )}
                     </div>
@@ -123,7 +133,7 @@ export function ProfilesPage() {
                         )
                       }
                     >
-                      {p.archived ? <ArchiveRestore /> : <Archive />} {p.archived ? "Unarchive" : "Archive"}
+                      {p.archived ? <ArchiveRestore /> : <Archive />} {p.archived ? t("Unarchive") : t("Archive")}
                     </Button>
                   </TD>
                 </TR>
@@ -137,6 +147,7 @@ export function ProfilesPage() {
 }
 
 function ReportCard({ report, ok, message, onClose }: { report: ImportReport; ok: boolean; message: string; onClose: () => void }) {
+  const t = useT();
   return (
     <Card className={cn("mb-4", ok ? "border-ok/40" : "border-error/40")}>
       <CardHeader
@@ -154,7 +165,7 @@ function ReportCard({ report, ok, message, onClose }: { report: ImportReport; ok
         }
         actions={
           <Button size="sm" variant="ghost" onClick={onClose}>
-            Dismiss
+            {t("Dismiss")}
           </Button>
         }
       />
@@ -175,7 +186,7 @@ function ReportCard({ report, ok, message, onClose }: { report: ImportReport; ok
         </ol>
         <div className="flex min-w-0 flex-col gap-1">
           {report.problems.length === 0 ? (
-            <span className="text-muted">No problems found.</span>
+            <span className="text-muted">{t("No problems found.")}</span>
           ) : (
             report.problems.map((p, i) => (
               <div key={i} className="flex gap-2">

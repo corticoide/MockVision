@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"net"
+	"net/netip"
 	"os"
 	"time"
 
@@ -24,14 +26,25 @@ type NodeView struct {
 	ParentInterface  string             `json:"parent_interface"`
 	Interfaces       []netctl.Interface `json:"interfaces"`
 	Cameras          CameraCounts       `json:"cameras"`
+	Panel            PanelAccess        `json:"panel"`
 	StartedAt        time.Time          `json:"started_at"`
 }
 
-// CameraCounts summarizes cameras by state.
+// PanelAccess says where the panel and the API listen (D63): every
+// interface or a management IP, always behind a login.
+type PanelAccess struct {
+	Listen        string   `json:"listen"`
+	AllInterfaces bool     `json:"all_interfaces"`
+	URLs          []string `json:"urls"`
+}
+
+// CameraCounts summarizes cameras by state. Running includes degraded
+// cameras, which still answer.
 type CameraCounts struct {
-	Total   int `json:"total"`
-	Running int `json:"running"`
-	Error   int `json:"error"`
+	Total   int            `json:"total"`
+	Running int            `json:"running"`
+	Error   int            `json:"error"`
+	ByState map[string]int `json:"by_state"`
 }
 
 // NodeMetrics is the live usage of the node and its cameras.
@@ -41,6 +54,9 @@ type NodeMetrics struct {
 	CPUSustained   float64                `json:"cpu_sustained_percent"`
 	MemTotal       uint64                 `json:"mem_total"`
 	MemUsed        uint64                 `json:"mem_used"`
+	NetInterface   string                 `json:"net_interface"`
+	NetRxBps       float64                `json:"net_rx_bps"`
+	NetTxBps       float64                `json:"net_tx_bps"`
 	Cameras        map[string]MetricsView `json:"cameras"`
 	CameraCounts   CameraCounts           `json:"camera_counts"`
 	DB             store.Stats            `json:"db"`
@@ -62,19 +78,61 @@ func (s *Service) Node(ctx context.Context) (*NodeView, error) {
 		ParentInterface: s.defaultParent(ctx), Interfaces: info.Interfaces, StartedAt: processStart,
 	}
 	v.Cameras = s.cameraCounts(ctx)
+	v.Panel = panelAccess(s.opts.Listen, info.Interfaces)
 	return v, nil
 }
 
+// panelAccess lists the URLs the panel answers on: the listen address, or
+// every address of the node when it listens on all interfaces.
+func panelAccess(listen string, ifaces []netctl.Interface) PanelAccess {
+	p := PanelAccess{Listen: listen, URLs: []string{}}
+	if listen == "" {
+		return p
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return p
+	}
+	ip := net.ParseIP(host)
+	if host != "" && (ip == nil || !ip.IsUnspecified()) {
+		p.URLs = append(p.URLs, "http://"+net.JoinHostPort(host, port))
+		return p
+	}
+	p.AllInterfaces = true
+	for _, i := range ifaces {
+		if i.Loopback || !i.Up {
+			continue
+		}
+		for _, a := range i.Addrs {
+			pfx, err := netip.ParsePrefix(a)
+			if err != nil || !pfx.Addr().Is4() {
+				continue
+			}
+			p.URLs = append(p.URLs, "http://"+net.JoinHostPort(pfx.Addr().String(), port))
+		}
+	}
+	return p
+}
+
 func (s *Service) cameraCounts(ctx context.Context) CameraCounts {
-	var c CameraCounts
+	c := CameraCounts{ByState: map[string]int{}}
 	cams, err := s.store.R().ListCameras(ctx)
 	if err != nil {
 		return c
 	}
 	c.Total = len(cams)
+	states := make(map[string]string, len(cams))
 	statuses, _ := s.store.R().ListCameraStatuses(ctx)
 	for _, st := range statuses {
-		switch domain.CameraState(st.ActualState) {
+		states[st.CameraID] = st.ActualState
+	}
+	for _, cam := range cams {
+		st, ok := states[cam.ID]
+		if !ok {
+			st = string(domain.StateStopped)
+		}
+		c.ByState[st]++
+		switch domain.CameraState(st) {
 		case domain.StateRunning, domain.StateDegraded:
 			c.Running++
 		case domain.StateError:
@@ -89,7 +147,8 @@ func (s *Service) Metrics(ctx context.Context) NodeMetrics {
 	latest := s.node.Latest()
 	m := NodeMetrics{
 		At: time.Now(), CPUPercent: latest.CPUPercent, CPUSustained: s.node.SustainedCPU(time.Minute),
-		MemTotal: latest.MemTotal, MemUsed: latest.MemUsed, Cameras: map[string]MetricsView{},
+		MemTotal: latest.MemTotal, MemUsed: latest.MemUsed, NetInterface: latest.NetInterface,
+		NetRxBps: latest.NetRxBps, NetTxBps: latest.NetTxBps, Cameras: map[string]MetricsView{},
 		DB: s.store.Stats(), AdmissionLimit: s.Settings(ctx),
 	}
 	s.mu.Lock()
@@ -107,6 +166,26 @@ func (s *Service) Metrics(ctx context.Context) NodeMetrics {
 	}
 	m.CameraCounts = s.cameraCounts(ctx)
 	return m
+}
+
+// NodeHistory returns the node samples newer than since, at most the last
+// ten minutes: enough for the dashboard's charts.
+func (s *Service) NodeHistory(since time.Time) []telemetry.NodeSample {
+	out := s.node.History(since)
+	if out == nil {
+		out = []telemetry.NodeSample{}
+	}
+	return out
+}
+
+// measureInterface points the node's traffic sampler at the interface the
+// cameras hang from; in local mode they answer on the loopback.
+func (s *Service) measureInterface(ctx context.Context) {
+	iface := "lo"
+	if s.rt.Kind() != "local" {
+		iface = s.defaultParent(ctx)
+	}
+	s.node.SetInterface(iface)
 }
 
 // CameraMetrics returns the recent samples of a camera.

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -48,6 +50,8 @@ func serve(args []string, log *slog.Logger) int {
 	ffmpeg := fs.String("ffmpeg", env("MOCKVISION_FFMPEG", "ffmpeg"), "FFmpeg binary")
 	origins := fs.String("allowed-origins", env("MOCKVISION_ALLOWED_ORIGINS", ""), "extra origins (host:port, comma separated), for a dev server")
 	secure := fs.Bool("secure-cookies", os.Getenv("MOCKVISION_SECURE_COOKIES") == "1", "mark cookies Secure (behind HTTPS)")
+	hosts := fs.String("allowed-hosts", env("MOCKVISION_ALLOWED_HOSTS", ""), "host names the panel answers to (comma separated); empty accepts any")
+	proxies := fs.String("trusted-proxies", env("MOCKVISION_TRUSTED_PROXIES", ""), "reverse proxies (IPs or CIDRs, comma separated) whose X-Forwarded-For is trusted")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -117,7 +121,7 @@ func serve(args []string, log *slog.Logger) int {
 
 	hub := api.NewHub()
 	svc, err := app.New(app.Options{
-		DataDir: *dataDir, FFmpeg: *ffmpeg, Exe: exe, ParentInterface: *parent, Runtime: rt, Log: log,
+		DataDir: *dataDir, FFmpeg: *ffmpeg, Exe: exe, ParentInterface: *parent, Listen: *listen, Runtime: rt, Log: log,
 	}, st, hub)
 	if err != nil {
 		log.Error("service", "error", err)
@@ -129,7 +133,19 @@ func serve(args []string, log *slog.Logger) int {
 			allowed = append(allowed, o)
 		}
 	}
-	srv := api.New(api.Config{AllowedOrigins: allowed, SecureCookies: *secure}, svc, hub, frontend.Dist(), log)
+	trusted, err := parsePrefixes(*proxies)
+	if err != nil {
+		log.Error("trusted proxies", "error", err)
+		return 2
+	}
+	var allowedHosts []string
+	for _, h := range strings.Split(*hosts, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			allowedHosts = append(allowedHosts, h)
+		}
+	}
+	srv := api.New(api.Config{AllowedOrigins: allowed, SecureCookies: *secure, TrustedProxies: trusted, AllowedHosts: allowedHosts},
+		svc, hub, frontend.Dist(), log)
 	httpSrv := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),
@@ -175,4 +191,24 @@ func serve(args []string, log *slog.Logger) int {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// parsePrefixes reads a comma separated list of IPs and CIDRs.
+func parsePrefixes(list string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, item := range strings.Split(list, ",") {
+		if item = strings.TrimSpace(item); item == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(item); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(item)
+		if err != nil {
+			return nil, fmt.Errorf("%q is neither an IP nor a CIDR", item)
+		}
+		out = append(out, netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen()))
+	}
+	return out, nil
 }

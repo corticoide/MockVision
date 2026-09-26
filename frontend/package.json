@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build && touch dist/.gitkeep",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && node scripts/check-i18n.mjs",
     "gen:api": "openapi-typescript ../backend/internal/api/openapi.yaml -o src/api/schema.d.ts",
     "preview": "vite preview"
   },

@@ -41,6 +41,19 @@ type StatusView struct {
 	Netns         string     `json:"netns,omitempty"`
 	PID           int        `json:"pid,omitempty"`
 	Retries       int        `json:"retries"`
+	// PendingRestart lists saved changes a running camera applies only
+	// when it restarts (RN-09): network, protocols.
+	PendingRestart []string `json:"pending_restart"`
+}
+
+// ProtocolView is an engine instance of the camera's profile (RN-04).
+type ProtocolView struct {
+	Instance    string `json:"instance"`
+	Engine      string `json:"engine"`
+	Role        string `json:"role"`
+	Enabled     bool   `json:"enabled"`
+	Port        int    `json:"port"`
+	DefaultPort int    `json:"default_port"`
 }
 
 // EndpointView is where a camera serves a protocol.
@@ -50,11 +63,14 @@ type EndpointView struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port"`
 	URL      string `json:"url"`
+
+	streams map[string]string // RTSP URL of each stream it serves
 }
 
 // StreamView is a camera stream and its rendition.
 type StreamView struct {
 	Name            string `json:"name"`
+	URL             string `json:"url,omitempty"` // where RTSP clients read it
 	Codec           string `json:"codec"`
 	Resolution      string `json:"resolution"`
 	FPS             int    `json:"fps"`
@@ -106,6 +122,7 @@ type CameraView struct {
 	Network      NetworkView    `json:"network"`
 	Status       StatusView     `json:"status"`
 	Endpoints    []EndpointView `json:"endpoints"`
+	Protocols    []ProtocolView `json:"protocols"`
 	Streams      []StreamView   `json:"streams"`
 	Users        []UserView     `json:"users"`
 	Targets      []TargetRef    `json:"targets"`
@@ -154,6 +171,8 @@ type ProfileStreamView struct {
 	Resolutions []string `json:"resolutions"`
 	FPSMin      int      `json:"fps_min"`
 	FPSMax      int      `json:"fps_max"`
+	BitrateMin  int      `json:"bitrate_min,omitempty"`
+	BitrateMax  int      `json:"bitrate_max,omitempty"`
 	Default     struct {
 		Codec      string `json:"codec"`
 		Resolution string `json:"resolution"`
@@ -186,6 +205,8 @@ type ImportResult struct {
 	Profile ProfileView `json:"profile"`
 	Report  pkg.Report  `json:"report"`
 	Created bool        `json:"created"`
+	// JobID is the import job, whose history keeps the steps.
+	JobID string `json:"job_id,omitempty"`
 }
 
 // ImportError carries the report of a rejected package.

@@ -1,7 +1,8 @@
 // Package rtsp implements the rtsp engine: an RTSP server that loops a
-// precoded H.264 group of pictures per stream. The GOP is encoded once from
-// an image, so a still picture costs almost no CPU; timestamps grow
-// continuously across loops so clients never see a jump.
+// precoded stream per camera stream: an H.264 or H.265 group of pictures,
+// or MJPEG frames. The stream is encoded once from an image, so a still
+// picture costs almost no CPU; timestamps grow continuously across loops so
+// clients never see a jump.
 package rtsp
 
 import (
@@ -25,6 +26,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
+	"github.com/pion/rtp"
 
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -83,7 +85,23 @@ type Engine struct {
 
 	state    atomic.Value
 	sessions atomic.Int64
-	playing  atomic.Int64
+}
+
+// sessionState is what the engine keeps about an RTSP session: whether
+// its SETUP was authorized, and the stream it plays.
+type sessionState struct {
+	mu         sync.Mutex
+	authorized bool
+	playing    *streamer
+}
+
+func stateOf(ss *gortsplib.ServerSession) *sessionState {
+	if st, ok := ss.UserData().(*sessionState); ok {
+		return st
+	}
+	st := &sessionState{}
+	ss.SetUserData(st)
+	return st
 }
 
 // New returns an engine instance.
@@ -175,7 +193,10 @@ func (e *Engine) Start(ctx context.Context, in engine.StartInput) error {
 		}
 	}
 	e.unwatch = in.Host.Media().Watch(func(stream string) {
-		if _, ok := e.cfg.Paths[stream]; !ok {
+		e.mu.RLock()
+		_, ok := e.cfg.Paths[stream]
+		e.mu.RUnlock()
+		if !ok {
 			return
 		}
 		if err := e.startStream(runCtx, stream); err != nil {
@@ -205,19 +226,12 @@ func (e *Engine) startStream(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("rtsp: stream %s: %w", name, err)
 	}
-	if src.Info.Codec != "h264" {
-		return fmt.Errorf("rtsp: stream %s: codec %s is not supported yet", name, src.Info.Codec)
+	forma, err := formatFor(src)
+	if err != nil {
+		return fmt.Errorf("rtsp: stream %s: %w", name, err)
 	}
 	desc := &description.Session{
-		Medias: []*description.Media{{
-			Type: description.MediaTypeVideo,
-			Formats: []format.Format{&format.H264{
-				PayloadTyp:        96,
-				PacketizationMode: 1,
-				SPS:               src.SPS,
-				PPS:               src.PPS,
-			}},
-		}},
+		Medias: []*description.Media{{Type: description.MediaTypeVideo, Formats: []format.Format{forma}}},
 	}
 	ss := &gortsplib.ServerStream{Server: e.server, Desc: desc}
 	if err := ss.Initialize(); err != nil {
@@ -328,19 +342,20 @@ func (e *Engine) authorize(conn *gortsplib.ServerConn, req *base.Request) bool {
 	if e.cfg.Auth.Scheme == "none" {
 		return true
 	}
+	// Accounts are read on every request: an edited password applies at
+	// once.
+	accounts := e.in.Host.Accounts()
 	var h headers.Authorization
 	if err := h.Unmarshal(req.Header["Authorization"]); err == nil {
-		for _, u := range e.in.Users {
-			if u.Username == h.Username {
-				return conn.VerifyCredentials(req, u.Username, u.Password)
-			}
+		if u, ok := accounts.Lookup(h.Username); ok {
+			return conn.VerifyCredentials(req, u.Username, u.Password)
 		}
 	}
 	// VerifyCredentials also creates the connection's nonce, which the
 	// 401 challenge carries; call it even when the request has no
 	// credentials so the challenge is valid.
-	if len(e.in.Users) > 0 {
-		conn.VerifyCredentials(req, e.in.Users[0].Username, "\x00")
+	if users := accounts.List(); len(users) > 0 {
+		conn.VerifyCredentials(req, users[0].Username, "\x00")
 	}
 	return false
 }
@@ -363,9 +378,13 @@ func (e *Engine) OnSessionOpen(*gortsplib.ServerHandlerOnSessionOpenCtx) {
 // OnSessionClose implements gortsplib.ServerHandlerOnSessionClose.
 func (e *Engine) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	e.sessions.Add(-1)
-	if ctx.Session.UserData() == "playing" {
-		e.playing.Add(-1)
+	st := stateOf(ctx.Session)
+	st.mu.Lock()
+	if st.playing != nil {
+		st.playing.viewers.Add(-1)
+		st.playing = nil
 	}
+	st.mu.Unlock()
 }
 
 // OnDescribe implements gortsplib.ServerHandlerOnDescribe.
@@ -390,17 +409,45 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 	if st == nil {
 		return &base.Response{StatusCode: base.StatusNotFound}, nil, nil
 	}
+	sess := stateOf(ctx.Session)
+	sess.mu.Lock()
+	sess.authorized = true
+	sess.mu.Unlock()
 	return &base.Response{StatusCode: base.StatusOK}, st.stream, nil
 }
 
-// OnPlay implements gortsplib.ServerHandlerOnPlay.
+// OnPlay implements gortsplib.ServerHandlerOnPlay. A session plays only
+// if its SETUP was authorized, or with credentials of its own (audit
+// B13). Like a camera encoder, the stream restarts at a keyframe for the
+// new viewer: H.265 decoders cannot start in the middle of a group of
+// pictures.
 func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
-	if ctx.Session.UserData() != "playing" {
-		ctx.Session.SetUserData("playing")
-		e.playing.Add(1)
+	sess := stateOf(ctx.Session)
+	sess.mu.Lock()
+	authorized := sess.authorized
+	sess.mu.Unlock()
+	if !authorized && !e.authorize(ctx.Conn, ctx.Request) {
+		return &base.Response{StatusCode: base.StatusUnauthorized}, liberrors.ErrServerAuth{}
+	}
+	st := e.streamFor(ctx.Path, ctx.Query)
+	if st != nil {
+		sess.mu.Lock()
+		if sess.playing != st {
+			if sess.playing != nil {
+				sess.playing.viewers.Add(-1)
+			}
+			st.viewers.Add(1)
+			sess.playing = st
+		}
+		sess.mu.Unlock()
+		st.keyframeAt.Store(time.Now().Add(keyframeDelay).UnixNano())
 	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
+
+// keyframeDelay leaves the server time to add a new reader to the stream,
+// right after OnPlay, before the keyframe it asked for goes out.
+const keyframeDelay = 20 * time.Millisecond
 
 // streamer loops a GOP into a server stream at the stream's frame rate.
 type streamer struct {
@@ -410,6 +457,13 @@ type streamer struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once
+
+	// keyframeAt asks for the loop to restart at its keyframe with the
+	// first frame due from then on (Unix nanoseconds, 0 for none).
+	keyframeAt atomic.Int64
+	// viewers counts the sessions playing this stream; a stream nobody
+	// plays skips the packetizing work.
+	viewers atomic.Int64
 }
 
 func (s *streamer) stop() {
@@ -423,7 +477,7 @@ func (s *streamer) stop() {
 func (s *streamer) run(ctx context.Context) {
 	defer close(s.done)
 	media := s.stream.Desc.Medias[0]
-	enc, err := media.Formats[0].(*format.H264).CreateEncoder()
+	encode, err := encoderFor(media.Formats[0], s.src)
 	if err != nil {
 		s.engine.in.Host.Telemetry().Log(slog.LevelError, "rtsp: encoder", "error", err)
 		return
@@ -440,54 +494,122 @@ func (s *streamer) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
-	var n int64 // frames sent since start; drives continuous timestamps
+	var (
+		n int64 // frames sent since start; drives continuous timestamps
+		i int   // position in the loop
+	)
 	for {
-		for i, au := range s.src.AccessUnits {
-			due := start.Add(time.Duration(n) * frame)
-			if wait := time.Until(due); wait > 0 {
-				timer.Reset(wait)
-				select {
-				case <-ctx.Done():
-					return
-				case <-timer.C:
-				}
-			} else if ctx.Err() != nil {
+		due := start.Add(time.Duration(n) * frame)
+		if wait := time.Until(due); wait > 0 {
+			timer.Reset(wait)
+			select {
+			case <-ctx.Done():
 				return
+			case <-timer.C:
 			}
-			// Nobody is watching: keep the clock running, skip the work.
-			if s.engine.playing.Load() > 0 {
-				nalus := au
-				if i == 0 {
-					nalus = withParameterSets(au, s.src.SPS, s.src.PPS)
-				}
-				pkts, err := enc.Encode(nalus)
-				if err == nil {
-					ts := rtpBase + uint32(n*90000/int64(fps))
-					for _, p := range pkts {
-						p.Timestamp = ts
-						_ = s.stream.WritePacketRTPWithNTP(media, p, due)
-					}
-				}
-			}
-			n++
+		} else if ctx.Err() != nil {
+			return
 		}
+		if at := s.keyframeAt.Load(); at != 0 && due.UnixNano() >= at && s.keyframeAt.CompareAndSwap(at, 0) {
+			i = 0
+		}
+		// Nobody is watching: keep the clock running, skip the work.
+		if s.viewers.Load() > 0 {
+			pkts, err := encode(s.src.AccessUnits[i], i == 0)
+			if err == nil {
+				ts := rtpBase + uint32(n*90000/int64(fps))
+				for _, p := range pkts {
+					p.Timestamp = ts
+					_ = s.stream.WritePacketRTPWithNTP(media, p, due)
+				}
+			}
+		}
+		n++
+		i = (i + 1) % len(s.src.AccessUnits)
 	}
 }
 
-// withParameterSets puts SPS and PPS in front of an IDR access unit when
-// they are missing, so clients joining at any keyframe can decode.
-func withParameterSets(au [][]byte, sps, pps []byte) [][]byte {
-	hasSPS := false
+// formatFor describes the RTP format of a source.
+func formatFor(src *engine.VideoSource) (format.Format, error) {
+	switch src.Info.Codec {
+	case "h264":
+		return &format.H264{PayloadTyp: 96, PacketizationMode: 1, SPS: src.SPS, PPS: src.PPS}, nil
+	case "h265":
+		return &format.H265{PayloadTyp: 96, VPS: src.VPS, SPS: src.SPS, PPS: src.PPS}, nil
+	case "mjpeg":
+		return &format.MJPEG{}, nil
+	}
+	return nil, fmt.Errorf("codec %s is not supported", src.Info.Codec)
+}
+
+// frameEncoder turns an access unit into RTP packets; keyframe marks the
+// first frame of the loop.
+type frameEncoder func(au [][]byte, keyframe bool) ([]*rtp.Packet, error)
+
+// encoderFor creates the RTP packetizer of a format. Keyframes of H.264
+// and H.265 carry their parameter sets, so clients joining at any loop can
+// decode.
+func encoderFor(f format.Format, src *engine.VideoSource) (frameEncoder, error) {
+	switch f := f.(type) {
+	case *format.H264:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, keyframe bool) ([]*rtp.Packet, error) {
+			if keyframe {
+				au = withParameterSets(au, func(n []byte) bool { return n[0]&0x1f == 7 }, src.SPS, src.PPS)
+			}
+			return enc.Encode(au)
+		}, nil
+	case *format.H265:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, keyframe bool) ([]*rtp.Packet, error) {
+			if keyframe {
+				au = withParameterSets(au, func(n []byte) bool { return (n[0]>>1)&0x3f == 32 }, src.VPS, src.SPS, src.PPS)
+			}
+			return enc.Encode(au)
+		}, nil
+	case *format.MJPEG:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, _ bool) (pkts []*rtp.Packet, err error) {
+			if len(au) != 1 {
+				return nil, errors.New("an MJPEG frame is one image")
+			}
+			// The packetizer panics on images RTP cannot carry; the
+			// media layer checks them, this guards the camera anyway.
+			defer func() {
+				if r := recover(); r != nil {
+					pkts, err = nil, fmt.Errorf("mjpeg: %v", r)
+				}
+			}()
+			return enc.Encode(au[0])
+		}, nil
+	}
+	return nil, fmt.Errorf("unsupported format %T", f)
+}
+
+// withParameterSets puts the parameter sets in front of a keyframe when the
+// frame does not carry them already.
+func withParameterSets(au [][]byte, isFirstSet func([]byte) bool, sets ...[]byte) [][]byte {
 	for _, n := range au {
-		if len(n) > 0 && n[0]&0x1f == 7 {
-			hasSPS = true
+		if len(n) > 0 && isFirstSet(n) {
+			return au
 		}
 	}
-	if hasSPS || sps == nil || pps == nil {
-		return au
+	out := make([][]byte, 0, len(au)+len(sets))
+	for _, ps := range sets {
+		if ps == nil {
+			return au
+		}
+		out = append(out, ps)
 	}
-	out := make([][]byte, 0, len(au)+2)
-	out = append(out, sps, pps)
 	return append(out, au...)
 }
 

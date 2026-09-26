@@ -61,6 +61,39 @@ func Drop(uid, gid int) error {
 	return Verify()
 }
 
+// DropBounding empties the capability bounding set of every thread. The
+// process keeps the capabilities it holds, but nothing it executes can get
+// any: the network helper calls it once the main service is started, so
+// cameras, which it starts as an unprivileged user, never hold one.
+func DropBounding() error {
+	last, err := lastCap()
+	if err != nil {
+		return err
+	}
+	for c := 0; c <= last; c++ {
+		if err := allThreads(unix.SYS_PRCTL, unix.PR_CAPBSET_DROP, uintptr(c), 0); err != nil && !errors.Is(err, unix.EINVAL) {
+			return fmt.Errorf("privdrop: drop bounding capability %d: %w", c, err)
+		}
+	}
+	return nil
+}
+
+// Harden is Drop for a process that was started as uid and gid already:
+// it sets no_new_privs, clears the ambient set and checks that nothing is
+// left.
+func Harden(uid, gid int) error {
+	if os.Getuid() != uid || os.Geteuid() != uid || os.Getgid() != gid || os.Getegid() != gid {
+		return fmt.Errorf("privdrop: running as uid %d gid %d, expected %d and %d", os.Geteuid(), os.Getegid(), uid, gid)
+	}
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); err != nil {
+		return fmt.Errorf("privdrop: no_new_privs: %w", err)
+	}
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0); err != nil && !errors.Is(err, unix.EINVAL) {
+		return fmt.Errorf("privdrop: clear ambient capabilities: %w", err)
+	}
+	return Verify()
+}
+
 func allThreads(trap, a1, a2, a3 uintptr) error {
 	_, _, errno := syscall.AllThreadsSyscall(trap, a1, a2, a3)
 	if errno == syscall.ENOTSUP {

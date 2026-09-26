@@ -39,14 +39,17 @@ type CreateCameraInput struct {
 }
 
 // NetworkInput is the requested network identity; empty fields get the
-// node's defaults.
+// node's defaults. When editing a camera an empty MAC keeps the current
+// one; DefaultMAC goes back to the one derived from the camera ID.
 type NetworkInput struct {
-	Parent    string `json:"parent"`
-	MAC       string `json:"mac"`
-	VendorOUI bool   `json:"vendor_oui"`
-	IP        string `json:"ip"`
-	Netmask   string `json:"netmask"`
-	Gateway   string `json:"gateway"`
+	Parent     string   `json:"parent"`
+	MAC        string   `json:"mac"`
+	DefaultMAC bool     `json:"default_mac"`
+	VendorOUI  bool     `json:"vendor_oui"`
+	IP         string   `json:"ip"`
+	Netmask    string   `json:"netmask"`
+	Gateway    string   `json:"gateway"`
+	DNS        []string `json:"dns"`
 }
 
 // UserInput is a camera account to create.
@@ -59,16 +62,20 @@ type UserInput struct {
 // StreamInput selects the image and settings of the main stream.
 type StreamInput struct {
 	AssetID    string `json:"asset_id"`
+	Codec      string `json:"codec"`
 	Resolution string `json:"resolution"`
 	FPS        int    `json:"fps"`
 }
 
-// UpdateCameraInput changes a camera; nil fields stay as they are.
+// UpdateCameraInput changes a camera; nil fields stay as they are. The
+// network replaces the whole identity and reaches a running camera when it
+// restarts (RN-09).
 type UpdateCameraInput struct {
-	Name      *string   `json:"name"`
-	Autostart *bool     `json:"autostart"`
-	Tags      *[]string `json:"tags"`
-	TargetIDs *[]string `json:"target_ids"`
+	Name      *string       `json:"name"`
+	Autostart *bool         `json:"autostart"`
+	Tags      *[]string     `json:"tags"`
+	TargetIDs *[]string     `json:"target_ids"`
+	Network   *NetworkInput `json:"network"`
 }
 
 // cameraBundle is everything stored about a camera.
@@ -166,6 +173,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	if err := domain.ValidateCameraName(in.Name); err != nil {
 		return nil, err
 	}
+	cleanTags, err := domain.NormalizeTags(in.Tags)
+	if err != nil {
+		return nil, err
+	}
 	prof, err := s.store.R().GetProfileByRef(ctx, db.GetProfileByRefParams{ProfileID: in.ProfileID, Version: in.ProfileVersion})
 	if err != nil {
 		if notFound(err) {
@@ -210,6 +221,11 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	// written through the parameters bound to them.
 	values := model.Defaults()
 	overrides := map[string]any{}
+	if in.Stream.Codec != "" {
+		if err := s.setBound(doc, model, values, overrides, "media.main.codec", in.Stream.Codec, "stream.codec"); err != nil {
+			return nil, err
+		}
+	}
 	if in.Stream.Resolution != "" {
 		if err := s.setBound(doc, model, values, overrides, "media.main.resolution", in.Stream.Resolution, "stream.resolution"); err != nil {
 			return nil, err
@@ -220,12 +236,14 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 			return nil, err
 		}
 	}
-	settings, err := model.StreamFor("main", values)
-	if err != nil {
-		return nil, err
-	}
-	if settings.Codec != "h264" {
-		return nil, domain.Invalid("stream", "codec %s is not supported yet", settings.Codec)
+	// Every stream of the profile: the wizard sets the main one, the sub
+	// and third streams start from their defaults, all with one picture.
+	names := streamNames(doc)
+	settings := make([]profile.StreamSettings, len(names))
+	for i, name := range names {
+		if settings[i], err = model.StreamFor(name, values); err != nil {
+			return nil, domain.Invalid("stream", "%v", err)
+		}
 	}
 
 	assetID := in.Stream.AssetID
@@ -255,15 +273,17 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		return nil, err
 	}
 
-	rend, err := s.ensureRenditionRow(ctx, asset, settings)
-	if err != nil {
-		return nil, err
+	rends := make([]db.Rendition, len(names))
+	for i, name := range names {
+		if rends[i], err = s.ensureRenditionRow(ctx, asset, settings[i]); err != nil {
+			return nil, streamError(name, err)
+		}
 	}
 	autostart := true
 	if in.Autostart != nil {
 		autostart = *in.Autostart
 	}
-	tags, _ := json.Marshal(nonNil(in.Tags))
+	tags, _ := json.Marshal(cleanTags)
 	now := time.Now()
 	serial := serialFor(id, doc.Identity.Serial)
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
@@ -308,8 +328,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 				return err
 			}
 		}
-		if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: "main", AssetID: asset.ID, RenditionID: store.NullString(rend.ID)}); err != nil {
-			return err
+		for i, name := range names {
+			if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: name, AssetID: asset.ID, RenditionID: store.NullString(rends[i].ID)}); err != nil {
+				return err
+			}
 		}
 		for _, t := range dedupe(in.TargetIDs) {
 			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t, EventTypesJson: "[]", OverridesJson: "{}"}); err != nil {
@@ -324,7 +346,9 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		}
 		return nil, err
 	}
-	s.encodeAsync(rend.ID)
+	for _, r := range rends {
+		s.encodeAsync(r.ID)
+	}
 	s.audit(ctx, actor, "camera.create", "camera", id, map[string]any{"name": in.Name, "profile": prof.ProfileID + "@" + prof.Version, "ip": netw.ip, "mac": netw.mac})
 	view, err := s.GetCamera(ctx, id)
 	if err != nil {
@@ -343,6 +367,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, overrides map[string]any, canon string, v any, field string) error {
 	key, ok := m.NativeFor(canon)
 	if !ok {
+		// Asking for what the profile fixes anyway is not a change.
+		if cur, ok := m.Canon(canon, values); ok && fmt.Sprint(cur) == fmt.Sprint(v) {
+			return nil
+		}
 		return domain.Invalid(field, "this profile does not allow changing %s", canon)
 	}
 	cv, err := profile.Coerce(doc.State[key], v)
@@ -368,7 +396,12 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 		oui, _ = domain.ParseOUI(doc.Identity.OUI)
 	}
 	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String()}
-	if in.MAC != "" {
+	dns, err := parseDNS(in.DNS)
+	if err != nil {
+		return out, err
+	}
+	out.dns = dns
+	if in.MAC != "" && !in.DefaultMAC {
 		hw, err := domain.ParseMAC(in.MAC)
 		if err != nil {
 			return out, domain.Invalid("network.mac", "%v", err)
@@ -449,19 +482,53 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 }
 
 func (s *Service) checkUnique(ctx context.Context, name string, n resolvedNetwork) error {
-	q := s.store.R()
-	if _, err := q.CameraIDByName(ctx, name); err == nil {
+	if _, err := s.store.R().CameraIDByName(ctx, name); err == nil {
 		return domain.Conflict("name", "a camera named %q already exists", name)
 	}
+	return s.checkUniqueNetwork(ctx, "", n)
+}
+
+// checkUniqueNetwork enforces RN-05 for IP and MAC, ignoring the camera
+// being edited.
+func (s *Service) checkUniqueNetwork(ctx context.Context, self string, n resolvedNetwork) error {
+	q := s.store.R()
 	if n.ip != "" {
-		if other, err := q.CameraIDByIP(ctx, n.ip); err == nil {
-			return domain.Conflict("network.ip", "IP %s is already used by camera %s", n.ip, other)
+		if other, err := q.CameraIDByIP(ctx, n.ip); err == nil && other != self {
+			name := other
+			if c, err := q.GetCamera(ctx, other); err == nil {
+				name = c.Name
+			}
+			return domain.Conflict("network.ip", "IP %s is already used by camera %s", n.ip, name)
 		}
 	}
-	if _, err := q.CameraIDByMAC(ctx, n.mac); err == nil {
+	if other, err := q.CameraIDByMAC(ctx, n.mac); err == nil && other != self {
 		return domain.Conflict("network.mac", "MAC %s is already used by another camera", n.mac)
 	}
 	return nil
+}
+
+// parseDNS validates the DNS servers of a camera; none means the node's.
+func parseDNS(in []string) ([]string, error) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, raw := range in {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			return nil, domain.Invalid("network.dns", "%q is not an IP address", raw)
+		}
+		if !seen[addr.String()] {
+			seen[addr.String()] = true
+			out = append(out, addr.String())
+		}
+	}
+	if len(out) > 3 {
+		return nil, domain.Invalid("network.dns", "at most 3 servers")
+	}
+	return out, nil
 }
 
 // instancePort is the default port of an engine instance: the port in its
@@ -525,8 +592,8 @@ func dedupe(in []string) []string {
 	return out
 }
 
-// ListCameras returns every camera.
-func (s *Service) ListCameras(ctx context.Context) ([]CameraView, error) {
+// ListCameras returns the cameras that pass the filter, by name.
+func (s *Service) ListCameras(ctx context.Context, f CameraFilter) ([]CameraView, error) {
 	cams, err := s.store.R().ListCameras(ctx)
 	if err != nil {
 		return nil, err
@@ -537,7 +604,9 @@ func (s *Service) ListCameras(ctx context.Context) ([]CameraView, error) {
 		if err != nil {
 			continue // deleted meanwhile
 		}
-		out = append(out, *v)
+		if f.Match(v) {
+			out = append(out, *v)
+		}
 	}
 	return out, nil
 }
@@ -615,6 +684,11 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		endpoints = s.expectedEndpoints(b)
 	}
 	v.Endpoints = endpoints
+	v.Status.PendingRestart = []string{}
+	if ss != nil {
+		v.Status.PendingRestart = pendingRestart(ss.applied, restartKeys(b))
+	}
+	v.Protocols = s.protocolViews(b)
 	for _, u := range b.users {
 		v.Users = append(v.Users, UserView{Username: u.Username, Role: u.Role})
 	}
@@ -623,9 +697,17 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		_ = json.Unmarshal([]byte(t.EventTypesJson), &types)
 		v.Targets = append(v.Targets, TargetRef{ID: t.ID, Name: t.Name, EventTypes: nonNil(types)})
 	}
+	urls := map[string]string{}
+	for _, e := range endpoints {
+		for stream, url := range e.streams {
+			if urls[stream] == "" {
+				urls[stream] = url
+			}
+		}
+	}
 	values := b.values()
 	for _, st := range b.streams {
-		sv := StreamView{Name: st.Stream, AssetID: st.AssetID, RenditionStatus: "missing"}
+		sv := StreamView{Name: st.Stream, URL: urls[st.Stream], AssetID: st.AssetID, RenditionStatus: "missing"}
 		if set, err := b.model.StreamFor(st.Stream, values); err == nil {
 			sv.Codec, sv.FPS, sv.GOP, sv.Bitrate = set.Codec, set.FPS, set.GOP, set.Bitrate
 			sv.Resolution = fmt.Sprintf("%dx%d", set.Width, set.Height)
@@ -687,9 +769,16 @@ func (s *Service) endpointViewsFrom(b *cameraBundle, ip string, eps []ipcEndpoin
 				Paths map[string]string `json:"paths"`
 			}
 			_ = json.Unmarshal(section, &cfg)
-			path := cfg.Paths["main"]
+			base := "rtsp://" + hostPort(ip, ep.port, 554)
 			ev.Protocol = "rtsp"
-			ev.URL = "rtsp://" + hostPort(ip, ep.port, 554) + path
+			ev.streams = map[string]string{}
+			for _, stream := range profile.SortedKeys(cfg.Paths) {
+				ev.streams[stream] = base + cfg.Paths[stream]
+			}
+			ev.URL = ev.streams["main"]
+			if ev.URL == "" && len(cfg.Paths) > 0 {
+				ev.URL = ev.streams[profile.SortedKeys(cfg.Paths)[0]]
+			}
 		case "http-api":
 			ev.Protocol = "http"
 			ev.URL = "http://" + hostPort(ip, ep.port, 80) + "/"
@@ -732,7 +821,11 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 	}
 	tags := b.cam.TagsJson
 	if in.Tags != nil {
-		raw, _ := json.Marshal(nonNil(*in.Tags))
+		clean, err := domain.NormalizeTags(*in.Tags)
+		if err != nil {
+			return nil, err
+		}
+		raw, _ := json.Marshal(clean)
 		tags = string(raw)
 	}
 	if in.TargetIDs != nil {
@@ -742,9 +835,32 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 			}
 		}
 	}
+	var netw *resolvedNetwork
+	if in.Network != nil {
+		nin := *in.Network
+		if nin.MAC == "" && !nin.DefaultMAC && !nin.VendorOUI {
+			nin.MAC = b.net.Mac
+		}
+		n, err := s.resolveNetwork(ctx, id, b.doc, nin)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkUniqueNetwork(ctx, id, n); err != nil {
+			return nil, err
+		}
+		netw = &n
+	}
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
 		if err := q.UpdateCameraMeta(ctx, db.UpdateCameraMetaParams{ID: id, Name: name, Autostart: store.Int(autostart), TagsJson: tags, UpdatedAt: time.Now().UnixMilli()}); err != nil {
 			return err
+		}
+		if netw != nil {
+			dns, _ := json.Marshal(nonNil(netw.dns))
+			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
+				CameraID: id, ParentIf: netw.parent, Mac: netw.mac, Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
+			}); err != nil {
+				return err
+			}
 		}
 		if in.TargetIDs != nil {
 			if err := q.DeleteCameraTargets(ctx, id); err != nil {
@@ -760,7 +876,7 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 	})
 	if err != nil {
 		if store.IsUnique(err) {
-			return nil, domain.Conflict("name", "a camera named %q already exists", name)
+			return nil, domain.Conflict("name", "a camera with this name, IP or MAC already exists")
 		}
 		return nil, err
 	}
@@ -777,9 +893,13 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 
 // DeleteCamera stops a camera and removes it with its events.
 func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) error {
-	if _, err := s.store.R().GetCamera(ctx, id); err != nil {
+	cam, err := s.store.R().GetCamera(ctx, id)
+	if err != nil {
 		return store.NotFound(err)
 	}
+	// Runs after the unlock below: nothing about the camera stays in
+	// memory once it is gone (audit B14).
+	defer s.forgetCamera(id)
 	lock := s.opLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -796,9 +916,27 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 		return err
 	}
 	s.metrics.Remove(id)
-	s.audit(ctx, actor, "camera.delete", "camera", id, nil)
+	s.audit(ctx, actor, "camera.delete", "camera", id, map[string]string{"name": cam.Name})
 	s.pub.Publish("cameras", "deleted", map[string]string{"id": id})
+	s.pub.Forget("camera:" + id)
 	return nil
+}
+
+// forgetCamera drops what the service keeps in memory about a camera.
+func (s *Service) forgetCamera(id string) {
+	if _, err := s.store.R().GetCamera(context.Background(), id); err == nil {
+		return // the delete failed: the camera is still there
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.opLocks, id)
+	delete(s.exits, id)
+	delete(s.retries, id)
+	for name, owner := range s.netnsNames {
+		if owner == id {
+			delete(s.netnsNames, name)
+		}
+	}
 }
 
 // CameraConfig returns the camera's native parameters.
@@ -901,7 +1039,7 @@ func (s *Service) afterChanges(id string, changes []engine.Change) {
 	}
 	s.pub.Publish("camera:"+id, "config", changes)
 	if media {
-		go s.regenerateStreams(id)
+		s.regenerateStreamsLater(id)
 	}
 }
 

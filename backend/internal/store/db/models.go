@@ -8,6 +8,19 @@ import (
 	"database/sql"
 )
 
+type ApiToken struct {
+	ID         string
+	UserID     string
+	Name       string
+	TokenHash  string
+	Prefix     string
+	ScopesJson string
+	ExpiresAt  sql.NullInt64
+	LastUsedAt sql.NullInt64
+	LastUsedIp string
+	CreatedAt  int64
+}
+
 type Asset struct {
 	ID        string
 	Sha256    string
@@ -31,6 +44,10 @@ type AuditLog struct {
 	EntityID   string
 	OriginIp   string
 	DiffJson   string
+	Origin     string
+	ActorName  string
+	TokenID    string
+	TokenName  string
 }
 
 type Camera struct {
@@ -118,13 +135,42 @@ type Delivery struct {
 }
 
 type Event struct {
-	ID        string
-	CameraID  string
-	Type      string
-	At        int64
-	DataJson  string
-	RuleID    sql.NullString
-	TriggerID sql.NullString
+	ID                 string
+	CameraID           string
+	Type               string
+	At                 int64
+	DataJson           string
+	RuleID             sql.NullString
+	TriggerID          sql.NullString
+	ReceivedAt         int64
+	ExpectedDeliveries int64
+}
+
+type Job struct {
+	ID             string
+	Type           string
+	Title          string
+	Status         string
+	Progress       float64
+	Step           string
+	ParamsJson     string
+	CheckpointJson string
+	QuestionJson   sql.NullString
+	ResultJson     string
+	DedupeKey      sql.NullString
+	CreatedBy      string
+	CreatedAt      int64
+	StartedAt      sql.NullInt64
+	FinishedAt     sql.NullInt64
+	Error          string
+}
+
+type JobEvent struct {
+	JobID       string
+	Seq         int64
+	At          int64
+	Kind        string
+	PayloadJson string
 }
 
 type Package struct {

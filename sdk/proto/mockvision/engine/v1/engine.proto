@@ -4,7 +4,8 @@
 // launches it sandboxed, with its sockets already open, and talks to it over
 // gRPC on a Unix socket. The plugin serves Engine; the camera serves Host,
 // limited to the permissions the user approved (net.listen, net.connect,
-// state.read, state.write, events.emit, events.deliver, media.read, sd).
+// accounts.read, state.read, state.write, events.emit, events.deliver,
+// media.read, sd).
 //
 // Built-in engines implement the same contract in-process through the Go
 // interfaces in sdk/engine; this file mirrors them for other languages.
@@ -27,6 +28,8 @@ service Engine {
 }
 
 service Host {
+  // Accounts: the camera's users, which can change while it runs.
+  rpc AccountsList(AccountsListRequest) returns (AccountsListResponse);
   // State
   rpc StateGet(StateGetRequest) returns (StateGetResponse);
   rpc StateList(StateListRequest) returns (StateListResponse);
@@ -111,10 +114,19 @@ message StartRequest {
   // Sockets are passed as file descriptors with SCM_RIGHTS on the control
   // socket before Start; this maps socket names to descriptor numbers.
   map<string, int32> socket_fds = 5;
-  repeated User users = 6;
+  // Accounts come from Host.AccountsList, since they change while the
+  // camera runs.
+  reserved 6;
+  reserved "users";
 }
 
 message StartResponse {}
+
+message AccountsListRequest {}
+
+message AccountsListResponse {
+  repeated User users = 1;
+}
 
 message ReloadRequest {
   bytes config = 1;

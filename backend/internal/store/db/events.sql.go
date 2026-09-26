@@ -24,7 +24,7 @@ func (q *Queries) DeleteDeliveriesBefore(ctx context.Context, before int64) (int
 }
 
 const deleteEventsBefore = `-- name: DeleteEventsBefore :execrows
-DELETE FROM events WHERE at < ?1
+DELETE FROM events WHERE received_at < ?1
 `
 
 func (q *Queries) DeleteEventsBefore(ctx context.Context, before int64) (int64, error) {
@@ -48,21 +48,23 @@ func (q *Queries) DeleteTarget(ctx context.Context, id string) (int64, error) {
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT events.id, events.camera_id, events.type, events.at, events.data_json, events.rule_id, events.trigger_id, cameras.name AS camera_name
+SELECT events.id, events.camera_id, events.type, events.at, events.data_json, events.rule_id, events.trigger_id, events.received_at, events.expected_deliveries, cameras.name AS camera_name
 FROM events
 JOIN cameras ON cameras.id = events.camera_id
 WHERE events.id = ?1
 `
 
 type GetEventRow struct {
-	ID         string
-	CameraID   string
-	Type       string
-	At         int64
-	DataJson   string
-	RuleID     sql.NullString
-	TriggerID  sql.NullString
-	CameraName string
+	ID                 string
+	CameraID           string
+	Type               string
+	At                 int64
+	DataJson           string
+	RuleID             sql.NullString
+	TriggerID          sql.NullString
+	ReceivedAt         int64
+	ExpectedDeliveries int64
+	CameraName         string
 }
 
 func (q *Queries) GetEvent(ctx context.Context, id string) (GetEventRow, error) {
@@ -76,6 +78,8 @@ func (q *Queries) GetEvent(ctx context.Context, id string) (GetEventRow, error) 
 		&i.DataJson,
 		&i.RuleID,
 		&i.TriggerID,
+		&i.ReceivedAt,
+		&i.ExpectedDeliveries,
 		&i.CameraName,
 	)
 	return i, err
@@ -133,18 +137,20 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (id, camera_id, type, at, data_json, rule_id, trigger_id)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+INSERT INTO events (id, camera_id, type, at, data_json, rule_id, trigger_id, received_at, expected_deliveries)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 `
 
 type InsertEventParams struct {
-	ID        string
-	CameraID  string
-	Type      string
-	At        int64
-	DataJson  string
-	RuleID    sql.NullString
-	TriggerID sql.NullString
+	ID                 string
+	CameraID           string
+	Type               string
+	At                 int64
+	DataJson           string
+	RuleID             sql.NullString
+	TriggerID          sql.NullString
+	ReceivedAt         int64
+	ExpectedDeliveries int64
 }
 
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
@@ -156,6 +162,8 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 		arg.DataJson,
 		arg.RuleID,
 		arg.TriggerID,
+		arg.ReceivedAt,
+		arg.ExpectedDeliveries,
 	)
 	return err
 }
@@ -254,32 +262,37 @@ func (q *Queries) ListDeliveriesForEvents(ctx context.Context, eventIds []string
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT events.id, events.camera_id, events.type, events.at, events.data_json, events.rule_id, events.trigger_id, cameras.name AS camera_name
+SELECT events.id, events.camera_id, events.type, events.at, events.data_json, events.rule_id, events.trigger_id, events.received_at, events.expected_deliveries, cameras.name AS camera_name
 FROM events
 JOIN cameras ON cameras.id = events.camera_id
 WHERE (CAST(?1 AS TEXT) = '' OR events.id < CAST(?1 AS TEXT))
   AND (CAST(?2 AS TEXT) = '' OR events.camera_id = CAST(?2 AS TEXT))
   AND (CAST(?3 AS TEXT) = '' OR events.type = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = '' OR EXISTS (
+        SELECT 1 FROM deliveries WHERE deliveries.event_id = events.id AND deliveries.status = CAST(?4 AS TEXT)))
 ORDER BY events.id DESC
-LIMIT ?4
+LIMIT ?5
 `
 
 type ListEventsParams struct {
 	Cursor   string
 	CameraID string
 	Type     string
+	Delivery string
 	Limit    int64
 }
 
 type ListEventsRow struct {
-	ID         string
-	CameraID   string
-	Type       string
-	At         int64
-	DataJson   string
-	RuleID     sql.NullString
-	TriggerID  sql.NullString
-	CameraName string
+	ID                 string
+	CameraID           string
+	Type               string
+	At                 int64
+	DataJson           string
+	RuleID             sql.NullString
+	TriggerID          sql.NullString
+	ReceivedAt         int64
+	ExpectedDeliveries int64
+	CameraName         string
 }
 
 func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
@@ -287,6 +300,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 		arg.Cursor,
 		arg.CameraID,
 		arg.Type,
+		arg.Delivery,
 		arg.Limit,
 	)
 	if err != nil {
@@ -304,6 +318,8 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 			&i.DataJson,
 			&i.RuleID,
 			&i.TriggerID,
+			&i.ReceivedAt,
+			&i.ExpectedDeliveries,
 			&i.CameraName,
 		); err != nil {
 			return nil, err

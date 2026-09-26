@@ -1,7 +1,7 @@
-import type { QueryClient } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
-import type { Camera, EventItem, EventPage, NodeMetrics } from "./client";
-import { keys } from "./queries";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import { useEffect, useSyncExternalStore } from "react";
+import type { AuditEntry, AuditPage, Camera, EventItem, EventPage, Job, JobDetail, JobEvent, JobPage, NodeMetrics, NodeSample } from "./client";
+import { type AuditFilter, auditMatches, type JobFilter, jobMatches, keys } from "./queries";
 
 /** A message of the WebSocket: every topic numbers its messages. */
 interface Message {
@@ -14,7 +14,10 @@ interface Message {
 
 type Status = "connecting" | "open" | "closed";
 
-const topics = ["cameras", "events", "node", "profiles"];
+const topics = ["cameras", "events", "node", "profiles", "audit", "jobs"];
+
+/** How long the dashboard's charts reach back. */
+const historyWindow = 10 * 60_000;
 
 /**
  * LiveClient keeps the query cache in sync with the node. It remembers the
@@ -49,6 +52,19 @@ export class LiveClient {
 
   getStatus = () => this.status;
 
+  subscribeTopic(topic: string) {
+    this.send({ op: "subscribe", topics: [topic], since: {} });
+  }
+
+  unsubscribeTopic(topic: string) {
+    this.seqs.delete(topic);
+    this.send({ op: "unsubscribe", topics: [topic] });
+  }
+
+  private send(op: object) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(op));
+  }
+
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -67,7 +83,7 @@ export class LiveClient {
     ws.onopen = () => {
       this.retry = 0;
       this.setStatus("open");
-      ws.send(JSON.stringify({ op: "subscribe", topics, since: Object.fromEntries(this.seqs) }));
+      ws.send(JSON.stringify({ op: "subscribe", topics: [...topics, ...extraTopics.keys()], since: Object.fromEntries(this.seqs) }));
     };
     ws.onmessage = (ev) => {
       try {
@@ -109,16 +125,43 @@ export class LiveClient {
         if (m.type === "event") this.onEvent(m.data as EventItem);
         break;
       case "node":
-        if (m.type === "metrics") this.qc.setQueryData(keys.nodeMetrics, m.data as NodeMetrics);
+        if (m.type === "metrics") this.onMetrics(m.data as NodeMetrics);
         break;
       case "profiles":
         this.qc.invalidateQueries({ queryKey: keys.profiles });
         break;
+      case "audit":
+        if (m.type === "entry") this.onAudit(m.data as AuditEntry);
+        break;
+      case "jobs":
+        if (m.type === "job") this.onJob(m.data as Job);
+        break;
+      default:
+        if (m.topic.startsWith("job:") && m.type === "event") {
+          this.onJobEvent(m.data as JobEvent);
+          break;
+        }
+        if (m.topic.startsWith("camera:") && m.type === "config") {
+          // A client of the emulated API or the panel changed parameters.
+          this.qc.invalidateQueries({ queryKey: keys.cameraConfig(m.topic.slice("camera:".length)) });
+        }
     }
   }
 
   private resync(topic: string) {
+    if (topic.startsWith("camera:")) {
+      this.qc.invalidateQueries({ queryKey: keys.cameraConfig(topic.slice("camera:".length)) });
+      return;
+    }
+    if (topic.startsWith("job:")) {
+      this.qc.invalidateQueries({ queryKey: keys.job(topic.slice("job:".length)) });
+      return;
+    }
     switch (topic) {
+      case "node":
+        // Samples were missed: reload the charts' ten minutes.
+        this.qc.invalidateQueries({ queryKey: keys.nodeHistory });
+        break;
       case "cameras":
         this.qc.invalidateQueries({ queryKey: keys.cameras });
         break;
@@ -128,6 +171,64 @@ export class LiveClient {
       case "profiles":
         this.qc.invalidateQueries({ queryKey: keys.profiles });
         break;
+      case "audit":
+        this.qc.invalidateQueries({ queryKey: ["audit"] });
+        break;
+      case "jobs":
+        this.qc.invalidateQueries({ queryKey: ["jobs"] });
+        break;
+    }
+  }
+
+  /** A job changed: update its detail and every loaded list it belongs to. */
+  private onJob(job: Job) {
+    this.qc.setQueryData<JobDetail>(keys.job(job.id), (d) => d && { ...d, ...job });
+    for (const [key, page] of this.qc.getQueriesData<JobPage>({ queryKey: ["jobs"] })) {
+      if (!page) continue;
+      const filter = key[1] as JobFilter;
+      const i = page.items.findIndex((j) => j.id === job.id);
+      const belongs = jobMatches(filter, job);
+      let items = page.items;
+      if (i >= 0) {
+        items = belongs ? items.map((j) => (j.id === job.id ? job : j)) : items.filter((j) => j.id !== job.id);
+      } else if (belongs) {
+        items = [job, ...items];
+      } else {
+        continue;
+      }
+      this.qc.setQueryData<JobPage>(key, { ...page, items });
+    }
+  }
+
+  private onJobEvent(e: JobEvent) {
+    this.qc.setQueryData<JobDetail>(keys.job(e.job_id), (d) =>
+      d && !d.events.some((x) => x.seq === e.seq) ? { ...d, events: [...d.events, e] } : d,
+    );
+  }
+
+  private onMetrics(m: NodeMetrics) {
+    this.qc.setQueryData(keys.nodeMetrics, m);
+    const sample: NodeSample = {
+      at: m.at,
+      cpu_percent: m.cpu_percent,
+      mem_total: m.mem_total,
+      mem_used: m.mem_used,
+      net_interface: m.net_interface,
+      net_rx_bps: m.net_rx_bps,
+      net_tx_bps: m.net_tx_bps,
+    };
+    const from = Date.parse(m.at) - historyWindow;
+    this.qc.setQueryData<NodeSample[]>(keys.nodeHistory, (list) => list && [...list.filter((s) => Date.parse(s.at) > from), sample]);
+  }
+
+  /** Puts a new entry on top of every loaded audit list it belongs to. */
+  private onAudit(e: AuditEntry) {
+    for (const [key, data] of this.qc.getQueriesData<InfiniteData<AuditPage, string>>({ queryKey: ["audit"] })) {
+      const filter = key[1] as AuditFilter;
+      if (!data?.pages.length || !auditMatches(filter, e)) continue;
+      const [first, ...rest] = data.pages;
+      if (first.items.some((x) => x.id === e.id)) continue;
+      this.qc.setQueryData<InfiniteData<AuditPage, string>>(key, { ...data, pages: [{ ...first, items: [e, ...first.items] }, ...rest] });
     }
   }
 
@@ -183,6 +284,17 @@ export class LiveClient {
     };
     this.qc.setQueryData<EventPage>(keys.events(), update);
     this.qc.setQueryData<EventPage>(keys.events(ev.camera_id), update);
+    this.qc.setQueryData<EventPage>(keys.failedEvents, (page) => {
+      if (!page) return page;
+      const i = page.items.findIndex((e) => e.id === ev.id);
+      if (i >= 0) {
+        const items = page.items.slice();
+        items[i] = ev;
+        return { ...page, items };
+      }
+      if (ev.delivery_status !== "failed") return page;
+      return { ...page, items: [ev, ...page.items].slice(0, 5) };
+    });
   }
 }
 
@@ -198,6 +310,35 @@ export function startLive(qc: QueryClient) {
 export function stopLive() {
   client?.stop();
   client = null;
+}
+
+// Topics pages asked for, such as camera:<id>, with how many ask. They
+// outlive the client, so a reconnection subscribes to them again.
+const extraTopics = new Map<string, number>();
+
+function watchTopic(topic: string) {
+  const n = (extraTopics.get(topic) ?? 0) + 1;
+  extraTopics.set(topic, n);
+  if (n === 1) client?.subscribeTopic(topic);
+  return () => {
+    const left = (extraTopics.get(topic) ?? 1) - 1;
+    if (left > 0) {
+      extraTopics.set(topic, left);
+      return;
+    }
+    extraTopics.delete(topic);
+    client?.unsubscribeTopic(topic);
+  };
+}
+
+/** Follows the topic of one camera while the component is mounted. */
+export function useCameraTopic(id: string) {
+  useEffect(() => watchTopic(`camera:${id}`), [id]);
+}
+
+/** Follows the history of one job while the component is mounted. */
+export function useJobTopic(id: string | null) {
+  useEffect(() => (id ? watchTopic(`job:${id}`) : undefined), [id]);
 }
 
 const closed = () => "closed" as Status;

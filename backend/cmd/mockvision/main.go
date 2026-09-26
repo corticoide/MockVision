@@ -15,6 +15,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
+	"github.com/corticoide/mockvision/backend/internal/sandbox"
 )
 
 const usage = `MockVision %s — simulated IP cameras on a real network
@@ -46,6 +47,8 @@ func main() {
 		os.Exit(camera.Main(args))
 	case "pkg":
 		os.Exit(pkg.Main(args, engines.Builtin()))
+	case "sandbox-exec":
+		os.Exit(sandbox.ExecMain(args))
 	case "version", "--version":
 		fmt.Println(buildinfo.Version)
 	case "help", "-h", "--help":

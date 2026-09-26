@@ -31,6 +31,7 @@ const (
 	TypeFaultStop  = "fault.stop"
 	TypeStateSet   = "state.set"
 	TypeStop       = "stop"
+	TypeTargetTest = "target.test"
 )
 
 // HeartbeatInterval is how often cameras report; three missed heartbeats
@@ -60,7 +61,7 @@ type Stream struct {
 	FPS          int    `json:"fps"`
 	GOP          int    `json:"gop"`
 	Bitrate      int    `json:"bitrate"`
-	GOPPath      string `json:"gop_path"`
+	StreamPath   string `json:"stream_path"`
 	SnapshotPath string `json:"snapshot_path"`
 }
 
@@ -80,6 +81,8 @@ type Configure struct {
 	Users    []engine.User   `json:"users"`
 	Streams  []Stream        `json:"streams"`
 	Targets  []Target        `json:"targets"`
+	// DNS servers of the camera; empty means the node's.
+	DNS []string `json:"dns,omitempty"`
 }
 
 // Reload replaces parts of the configuration; nil fields stay as they are.
@@ -182,4 +185,18 @@ type StateSet struct {
 // Stop asks the camera to shut down within a deadline.
 type Stop struct {
 	DeadlineMS int64 `json:"deadline_ms"`
+}
+
+// TargetTest asks the camera to send a test request to a target from its
+// own network, as its deliveries would.
+type TargetTest struct {
+	Target engine.Target `json:"target"`
+}
+
+// TargetTestResult is the reply to TargetTest.
+type TargetTestResult struct {
+	OK         bool   `json:"ok"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	LatencyMS  int64  `json:"latency_ms"`
+	Error      string `json:"error,omitempty"`
 }

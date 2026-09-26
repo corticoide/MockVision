@@ -6,7 +6,10 @@
 # `mockvision run` and checks, from the client: ping and MAC (M1), RTSP with
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
-# and camera processes, clean stop, and cameras coming back after a restart.
+# and camera processes, editing a running camera (accounts, stream and
+# address), sub and third streams in H.264, H.265 and MJPEG, API tokens
+# with bulk actions and the audit log, background jobs, clean stop, and
+# cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
@@ -28,6 +31,7 @@ CLIENT_NS=mve2e-client
 CLIENT_IP=10.77.0.2
 CAM_IP=10.77.0.10
 CAM2_IP=10.77.0.11
+CAM3_IP=10.77.0.12
 PORT=${E2E_PORT:-18090}
 API=http://127.0.0.1:$PORT/api/v1
 RUN_PID=
@@ -97,7 +101,9 @@ start_node() {
 		MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN "${COMPOSE[@]}" up -d --no-build >/dev/null 2>&1 ||
 			fail "docker compose up failed"
 	else
+		# The test host has no mockvision users: numeric ones, as the image's.
 		MOCKVISION_DATA=$WORK/data MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN \
+			MOCKVISION_SERVICE_USER=10001 MOCKVISION_CAMERA_USER=10002 \
 			"$BIN" run >>"$WORK/node.log" 2>&1 &
 		RUN_PID=$!
 	fi
@@ -158,9 +164,21 @@ setup=$(curl -s "$API/auth/me" | json 'd.get("setup_required")')
 [ "$setup" = True ] || fail "a fresh node must require setup"
 ok "first run asks for the administrator"
 
-step "first login creates the administrator"
-api POST /auth/setup -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' | json 'd["user"]["username"]' | grep -qx admin || fail "setup"
-ok "admin created and logged in"
+step "first login creates the administrator with the setup code"
+code=$(api POST /auth/setup -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' -o /dev/null -w '%{http_code}')
+[ "$code" = 403 ] || fail "setup without the setup code answered $code"
+if [ "$MODE" = compose ]; then
+	# Root holds no capability in the container: read it as the service.
+	SETUP_CODE=$("${COMPOSE[@]}" exec -T -u 10001 mockvision cat /data/setup-code | tr -d '[:space:]')
+else
+	SETUP_CODE=$(tr -d '[:space:]' <"$WORK/data/setup-code")
+fi
+node_log | grep -q "setup_code=$SETUP_CODE" || fail "the setup code is not in the node's log"
+api POST /auth/setup -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"e2e-password-1\",\"setup_code\":\"$SETUP_CODE\"}" |
+	json 'd["user"]["username"]' | grep -qx admin || fail "setup"
+if [ "$MODE" = compose ]; then node_exec test ! -e /data/setup-code; else [ ! -e "$WORK/data/setup-code" ]; fi ||
+	fail "the setup code outlived the setup"
+ok "setup needs the one-time code from the log; admin created and logged in"
 
 step "import profiles/milesight-demo.yaml"
 level=$(api POST /packages -F "file=@$ROOT/profiles/milesight-demo.yaml" | json 'd["profile"]["level"]')
@@ -170,7 +188,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.1.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.2.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -237,6 +255,59 @@ ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
 ok "event $EID delivered, latency $(echo "$ev" | json 'd["latency_ms"]') ms"
 
+step "v1 editing: accounts and stream apply without a restart"
+probe() { # password -> codec,width,height
+	client ffprobe -v error -rtsp_transport tcp -select_streams v:0 \
+		-show_entries stream=codec_name,width,height -of csv=p=0 "rtsp://admin:$1@$CAM_IP:554/main" 2>/dev/null
+}
+api PUT "/cameras/$CID/users" -H 'Content-Type: application/json' \
+	-d '{"users":[{"username":"admin","password":"e2e-new-pw","role":"admin"},{"username":"viewer","password":"e2e-view","role":"viewer"}]}' |
+	json 'len(d["users"])' | grep -qx 2 || fail "accounts not saved"
+[ "$(probe e2e-new-pw)" = "h264,640,360" ] || fail "RTSP refused the new password"
+probe e2e-cam-pw >/dev/null && fail "RTSP still accepts the old password"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u viewer:e2e-view "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 200 ] || fail "the new account got $code"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u viewer:e2e-view "http://$CAM_IP/cgi-bin/operator/param.cgi?action=set&Image.Brightness=10")
+[ "$code" = 403 ] || fail "a viewer account changed a parameter ($code)"
+ok "new password and new account work at once; the old password is refused; a viewer cannot change settings"
+api PATCH "/cameras/$CID/streams/main" -H 'Content-Type: application/json' -d '{"resolution":"1280x720"}' >/dev/null
+for _ in $(seq 1 120); do
+	[ "$(probe e2e-new-pw)" = "h264,1280,720" ] && break
+	sleep 0.5
+done
+[ "$(probe e2e-new-pw)" = "h264,1280,720" ] || fail "the stream did not switch to 1280x720"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "the camera restarted"
+ok "ffprobe reads 1280x720 from the same camera process (pid $PID)"
+
+step "streams and codecs: sub and third streams, H.265 on the fly (D35)"
+probe_path() { # path -> codec,width,height
+	client ffprobe -v error -rtsp_transport tcp -select_streams v:0 \
+		-show_entries stream=codec_name,width,height -of csv=p=0 "rtsp://admin:e2e-new-pw@$CAM_IP:554$1" 2>/dev/null
+}
+urls=$(api GET "/cameras/$CID" | json '" ".join(s["name"] + "=" + s.get("url", "") for s in d["streams"])')
+[ "$urls" = "main=rtsp://$CAM_IP/main sub=rtsp://$CAM_IP/sub third=rtsp://$CAM_IP/third" ] || fail "stream URLs: $urls"
+[ "$(probe_path /sub)" = "h264,640,360" ] || fail "sub stream: $(probe_path /sub)"
+[ "$(probe_path /third)" = "mjpeg,640,360" ] || fail "third stream: $(probe_path /third)"
+ok "the camera serves /main, /sub (H.264 640x360) and /third (MJPEG 640x360)"
+client ffmpeg -v error -rtsp_transport tcp -i "rtsp://admin:e2e-new-pw@$CAM_IP:554/third" -frames:v 10 -f null - 2>"$WORK/third.err" ||
+	fail "decoding the MJPEG stream: $(cat "$WORK/third.err")"
+[ ! -s "$WORK/third.err" ] || fail "decoding the MJPEG stream: $(cat "$WORK/third.err")"
+ok "10 MJPEG frames decode without errors"
+api PATCH "/cameras/$CID/streams/sub" -H 'Content-Type: application/json' -d '{"codec":"h265","resolution":"320x180"}' >/dev/null
+for _ in $(seq 1 120); do
+	[ "$(probe_path /sub)" = "hevc,320,180" ] && break
+	sleep 0.5
+done
+[ "$(probe_path /sub)" = "hevc,320,180" ] || fail "the sub stream did not switch to H.265: $(probe_path /sub)"
+client ffmpeg -v error -rtsp_transport tcp -i "rtsp://admin:e2e-new-pw@$CAM_IP:554/sub" -frames:v 25 -f null - 2>"$WORK/sub.err" ||
+	fail "decoding the H.265 stream: $(cat "$WORK/sub.err")"
+[ ! -s "$WORK/sub.err" ] || fail "decoding the H.265 stream: $(cat "$WORK/sub.err")"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "the camera restarted"
+ok "the sub stream switched to H.265 320x180 and decodes past its GOP, same process"
+code=$(api GET "/cameras/$CID/snapshot?stream=third" -o "$WORK/third.jpg" -w '%{http_code}')
+[ "$code" = 200 ] && head -c 2 "$WORK/third.jpg" | od -An -tx1 | grep -q "ff d8" || fail "snapshot of the third stream: $code"
+ok "the panel shows the snapshot of each stream"
+
 step "the main service and the camera hold no capabilities"
 check_privileges() { # pid, label
 	local status caps uid
@@ -255,16 +326,83 @@ done; true' | head -n 1) || true
 [ -n "$SVC_PID" ] || fail "the main service process was not found"
 check_privileges "$SVC_PID" "main service"
 check_privileges "$PID" "camera"
+cam_status=$(node_exec cat "/proc/$PID/status")
+echo "$cam_status" | grep -q 'Seccomp:\s*2' || fail "the camera has no seccomp filter"
+echo "$cam_status" | awk '/^NSpid:/{exit !(NF == 3 && $3 == 1)}' || fail "the camera does not run in its own PID namespace"
+ok "camera: seccomp filter on, PID 1 of its own PID namespace"
 
 step "M7: metrics and admission"
 metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.1.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.2.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
+
+step "API tokens: bulk clone and delete from automation, with the audit"
+SECRET=$(api POST /tokens -H 'Content-Type: application/json' -d '{"name":"e2e-ci","scopes":["write"]}' | json 'd["secret"]')
+READ=$(api POST /tokens -H 'Content-Type: application/json' -d '{"name":"e2e-read","scopes":["read"]}' | json 'd["secret"]')
+tok() { # secret, method, path, curl arguments
+	local secret=$1 method=$2 path=$3
+	shift 3
+	curl -sS -H "Authorization: Bearer $secret" -X "$method" "$API$path" "$@"
+}
+[ "$(tok "$READ" GET '/cameras?state=running' | json 'len(d["items"])')" = 1 ] || fail "a read token cannot list the running cameras"
+code=$(tok "$READ" POST "/cameras/$CID/actions/stop" -o /dev/null -w '%{http_code}')
+[ "$code" = 403 ] || fail "a read token stopped a camera: $code"
+ok "a read token lists cameras and cannot change them"
+res=$(tok "$SECRET" POST /cameras/actions/bulk -H 'Content-Type: application/json' -d "{\"action\":\"clone\",\"ids\":[\"$CID\"],\"start\":true}")
+[ "$(echo "$res" | json 'd["succeeded"]')" = 1 ] || fail "bulk clone: $res"
+COPY=$(echo "$res" | json 'd["results"][0]["camera"]["id"]')
+COPY_IP=$(echo "$res" | json 'd["results"][0]["camera"]["network"]["ip"]')
+[ "$COPY_IP" = "$CAM2_IP" ] || fail "the copy took $COPY_IP, want the next free address $CAM2_IP"
+wait_state "$COPY" running 60
+client ping -c 2 -W 2 "$COPY_IP" >/dev/null || fail "the copy does not answer on $COPY_IP"
+ok "a write token cloned Gate 1 as $(echo "$res" | json 'd["results"][0]["camera"]["name"]') on $COPY_IP; the client reaches it"
+res=$(tok "$SECRET" POST /cameras/actions/bulk -H 'Content-Type: application/json' -d "{\"action\":\"delete\",\"ids\":[\"$COPY\",\"missing\"]}")
+[ "$(echo "$res" | json '(d["succeeded"], d["failed"], d["results"][1]["error"]["status"])')" = "(1, 1, 404)" ] || fail "bulk delete: $res"
+client ping -c 1 -W 1 "$COPY_IP" >/dev/null 2>&1 && fail "the deleted copy still answers"
+ok "bulk delete removed the copy and reported the unknown camera on its own"
+api GET '/audit?origin=api' | json '[e["action"] for e in d["items"] if e["token"]["name"] == "e2e-ci"]' | grep -q camera.clone ||
+	fail "the token's clone is not audited as coming from the API"
+by_client=$(api GET "/audit?origin=camera&entity_id=$CID" | json 'd["items"][0]["origin_ip"]')
+[ "$by_client" = "$CLIENT_IP" ] || fail "the change through the emulated API is not audited from $CLIENT_IP: $by_client"
+ok "the audit shows the token's changes as API and the client's as coming from $CLIENT_IP"
+TOKEN_ID=$(api GET /tokens | json '[t["id"] for t in d["items"] if t["name"] == "e2e-ci"][0]')
+api DELETE "/tokens/$TOKEN_ID" -o /dev/null
+code=$(tok "$SECRET" GET /cameras -o /dev/null -w '%{http_code}')
+[ "$code" = 401 ] || fail "a revoked token got $code"
+ok "a revoked token is refused at once"
+
+step "background jobs: import, renditions and a preparation (D72, D74)"
+[ "$(api GET '/jobs?type=import' | json 'd["items"][-1]["status"]')" = completed ] || fail "the import did not run as a completed job"
+[ "$(api GET '/jobs?type=rendition&status=completed' | json 'len(d["items"])')" -ge 1 ] || fail "no rendition was encoded as a job"
+JID=$(api POST /jobs -H 'Content-Type: application/json' -d '{"type":"renditions.prepare"}' | json 'd["id"]')
+for _ in $(seq 1 120); do
+	st=$(api GET "/jobs/$JID" | json 'd["status"]')
+	case "$st" in completed | failed | canceled) break ;; esac
+	sleep 0.5
+done
+[ "$st" = completed ] || fail "renditions.prepare ended $st: $(api GET "/jobs/$JID")"
+ok "import and renditions ran as jobs; preparation: $(api GET "/jobs/$JID" | json 'd["result"]')"
+
+step "v1 editing: a new address applies at the restart (RN-09)"
+pending=$(api PATCH "/cameras/$CID" -H 'Content-Type: application/json' \
+	-d "{\"network\":{\"ip\":\"$CAM3_IP\",\"netmask\":\"255.255.255.0\"}}" | json '",".join(d["status"]["pending_restart"])')
+[ "$pending" = network ] || fail "pending restart: $pending"
+client ping -c 1 -W 2 "$CAM_IP" >/dev/null || fail "the camera left its address before the restart"
+ok "saved; the camera keeps $CAM_IP until it restarts"
+api POST "/cameras/$CID/actions/restart" >/dev/null
+wait_state "$CID" running 60
+client ping -c 2 -W 2 "$CAM3_IP" >/dev/null || fail "no answer on the new address $CAM3_IP"
+client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the old address still answers"
+NEIGH=$(client ip neigh show "$CAM3_IP" | awk '{print $5}')
+[ "$NEIGH" = "$MAC" ] || fail "new address answers with $NEIGH, want $MAC"
+[ -z "$(api GET "/cameras/$CID" | json '",".join(d["status"]["pending_restart"])')" ] || fail "still pending after the restart"
+ok "after the restart the camera answers on $CAM3_IP with its MAC $MAC"
+CAM_IP=$CAM3_IP
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

@@ -3,6 +3,7 @@ import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
 export type Camera = Schemas["Camera"];
+export type CameraStream = Schemas["Stream"];
 export type CameraState = Camera["status"]["state"];
 export type Profile = Schemas["Profile"];
 export type ProfileDetail = Schemas["ProfileDetail"];
@@ -19,6 +20,24 @@ export type Settings = Schemas["Settings"];
 export type Problem = Schemas["Problem"];
 export type CreateCamera = Schemas["CreateCamera"];
 export type Param = Schemas["Param"];
+export type Protocol = Schemas["Protocol"];
+export type NetworkInput = Schemas["NetworkInput"];
+export type UpdateCamera = Schemas["UpdateCamera"];
+export type CameraUserInput = Schemas["CameraUserInput"];
+export type CloneCamera = Schemas["CloneCamera"];
+export type Token = Schemas["Token"];
+export type TokenInput = Schemas["TokenInput"];
+export type CreatedToken = Schemas["CreatedToken"];
+export type AuditEntry = Schemas["AuditEntry"];
+export type AuditPage = Schemas["AuditPage"];
+export type BulkAction = Schemas["BulkAction"];
+export type BulkResult = Schemas["BulkResult"];
+export type NodeSample = Schemas["NodeSample"];
+export type Job = Schemas["Job"];
+export type JobStatus = Job["status"];
+export type JobDetail = Schemas["JobDetail"];
+export type JobEvent = Schemas["JobEvent"];
+export type JobPage = Schemas["JobPage"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.

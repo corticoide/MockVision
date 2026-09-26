@@ -19,8 +19,10 @@ reemplaza.
 - Una cámara creada desde el panel aparece en la LAN con su propia IP y MAC
   (macvlan). Antes de tomar la IP hace un sondeo ARP, y se anuncia con ARP
   gratuito.
-- RTSP H.264 a la resolución configurada, en bucle a partir de una imagen.
-  La imagen se codifica una sola vez y el bucle casi no usa CPU.
+- Streams RTSP en bucle a partir de una imagen: principal, secundario y
+  tercero, como los define el perfil, en H.264, H.265 o MJPEG. Cada imagen
+  se codifica una sola vez por configuración de stream y el bucle casi no
+  usa CPU.
 - Una API HTTP definida en un perfil YAML, con autenticación Digest:
   snapshot, información del equipo y lectura y escritura de un parámetro.
 - Un evento de cruce de línea, disparado desde el panel y enviado a un
@@ -51,7 +53,16 @@ docker compose up -d   # la primera vez construye la imagen
 ```
 
 Abre `http://<nodo>:8080`. En la primera visita el panel pide crear el
-administrador; no hay credenciales por defecto. Después:
+administrador; no hay credenciales por defecto. Crearlo requiere el **código
+de setup** de un solo uso del nodo, para que nadie que llegue antes al puerto
+se quede con el nodo. Se imprime en el log y se guarda hasta que se usa:
+
+```sh
+docker compose logs mockvision | grep setup_code   # o bien:
+docker compose exec -u mockvision mockvision cat /data/setup-code
+```
+
+Después:
 
 1. **Profiles → Import profile:** elige `profiles/milesight-demo.yaml`. Se
    valida y queda listado como *Draft* (borrador).
@@ -66,14 +77,16 @@ Desde **otro equipo** de la misma LAN (la IP `192.168.1.50` y la contraseña
 ```sh
 ping 192.168.1.50
 ip neigh show 192.168.1.50   # la MAC propia de la cámara, no la del nodo
-ffprobe rtsp://admin:secret@192.168.1.50:554/main
+ffprobe rtsp://admin:secret@192.168.1.50:554/main   # también /sub y /third
 curl --digest -u admin:secret -o snapshot.jpg http://192.168.1.50/snapshot.cgi
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/operator.cgi?action=get.system.information"
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/param.cgi?action=set&Image.Brightness=70"
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/param.cgi?action=get&name=Image.Brightness"
 ```
 
-El usuario de la cámara es el que se cargó al crearla. Si la contraseña quedó
+Las cuentas de cámara tienen un rol: las `admin` y `operator` pueden cambiar
+parámetros y las `viewer` solo leen (un perfil puede fijar los roles de cada
+ruta). El usuario de la cámara es el que se cargó al crearla. Si la contraseña quedó
 vacía, la cámara usa la cuenta de fábrica del perfil (`admin` / `ms1234`).
 Pulsa **Line crossing** en la cámara: el destino recibe el POST, y **Events**
 muestra la entrega, el código HTTP y la latencia.
@@ -83,6 +96,57 @@ muestra la entrega, el código HTTP y la latencia.
 > sus cámaras, y sus cámaras no pueden entregar eventos a un receptor que
 > corra en el nodo. Pon el cliente y los destinos en otras máquinas. La
 > vista previa del snapshot en el panel funciona igual, porque no usa la red.
+
+### Automatización con tokens de API
+
+Crea un token en **Configuración → Tokens de API**; se muestra una sola vez.
+Los scripts y la CI lo envían en la cabecera Bearer, sin cookie ni
+encabezado propio:
+
+```sh
+TOKEN=mvt_…   # de Configuración
+curl -H "Authorization: Bearer $TOKEN" "http://<nodo>:8080/api/v1/cameras?state=running"
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"action":"stop","ids":["<id de cámara>"]}' http://<nodo>:8080/api/v1/cameras/actions/bulk
+```
+
+Un token de lectura solo consulta el nodo (y abre el WebSocket); uno de
+escritura puede cambiarlo, salvo los tokens, que se administran únicamente
+desde el panel. **Auditoría** muestra cada cambio con su origen: el panel, la
+API con el nombre del token, un cliente de la API emulada de una cámara o el
+propio nodo.
+
+### Trabajos en segundo plano
+
+Codificar un stream e importar un paquete corren como trabajos
+(**Trabajos** en el panel, `/api/v1/jobs` en la API), con su progreso y su
+historial. Corren a lo sumo dos a la vez (**Configuración → Límites**); el
+resto espera en la cola. Cerrar el navegador no detiene nada, y un trabajo
+cortado por un reinicio queda *Interrumpido* hasta que lo reanudas desde su
+último punto de control. **Preparar variantes** codifica de antemano todos
+los streams que necesitan las cámaras, así arrancar muchas no espera nada;
+si una falla, pregunta si reintentar, omitirla o detenerse, y la omite si
+nadie responde en diez minutos. Un trabajo que espera tu respuesta no
+frena a los demás.
+
+### Streams y códecs
+
+Como una cámara real, cada cámara codifica la misma imagen una vez por uso:
+el stream **principal** para grabar, uno **secundario** liviano para
+mosaicos y celulares, y un **tercero**, a menudo MJPEG, para clientes
+simples. Cada uno tiene su dirección RTSP (`rtsp://<ip>/main`, `/sub`,
+`/third` con el perfil demo), que la pestaña **Medios** de la cámara muestra
+junto a su instantánea. El códec, la resolución, los cuadros por segundo, el
+bitrate y el GOP se cambian ahí, o desde la API propia de la cámara, cuando
+el perfil les vincula un parámetro; el stream se codifica de nuevo y la
+cámara cambia a él sin reiniciarse.
+
+- **H.264** se reproduce en todos los clientes. **H.265** necesita cerca de
+  la mitad del bitrate para la misma imagen, pero no todos los clientes lo
+  reproducen. **MJPEG** envía cada cuadro como un JPEG; por RTSP admite a lo
+  sumo 2040×2040 en múltiplos de 8.
+- Un cliente que se conecta recibe un cuadro clave enseguida, como de un
+  codificador real.
 
 ### Configuración
 
@@ -97,8 +161,10 @@ instalaciones. El resto va en su sección `environment`.
 | `MOCKVISION_FFMPEG` | `ffmpeg` | Binario de FFmpeg |
 | `MOCKVISION_SECURE_COOKIES` | apagado | `1` detrás de un proxy inverso HTTPS |
 | `MOCKVISION_ALLOWED_ORIGINS` | ninguno | Orígenes extra (`host:puerto`) que pueden llamar a la API |
+| `MOCKVISION_ALLOWED_HOSTS` | cualquiera | Nombres de host a los que responde el panel (separados por comas); fíjalo para frenar el DNS rebinding. Las direcciones IP se aceptan siempre |
+| `MOCKVISION_TRUSTED_PROXIES` | ninguno | Proxies inversos (IP o CIDR) cuyo `X-Forwarded-For` identifica al cliente, para los límites de inicio de sesión y la auditoría |
 | `MOCKVISION_LOG_LEVEL`, `MOCKVISION_LOG_FORMAT` | `info`, texto | `debug`…`error`; `json` |
-| `MOCKVISION_SERVICE_USER`, `MOCKVISION_CAMERA_USER` | `mockvision`, `mockvision-cam` | Usuarios del servicio principal y de las cámaras |
+| `MOCKVISION_SERVICE_USER`, `MOCKVISION_CAMERA_USER` | `mockvision`, `mockvision-cam` | Usuarios del servicio principal y de las cámaras: nombres que deben existir, o uid numéricos; tienen que ser distintos |
 
 Los límites (máximo de cámaras, umbrales de RAM y CPU, retención de eventos)
 se configuran en **Settings**.
@@ -108,7 +174,9 @@ se configuran en **Settings**.
 Instala FFmpeg, compila (`make build`, requiere Go 1.27 y Node 22) e instala
 el binario con la unidad de systemd de
 [deploy/mockvision.service](deploy/mockvision.service); su encabezado lista
-los pasos.
+los pasos. Los usuarios del servicio y de las cámaras tienen que existir, y el
+usuario de las cámaras tiene que poder ejecutar el binario (modo 0755): las
+cámaras arrancan como ese usuario.
 
 ## Cómo funciona
 
@@ -116,21 +184,30 @@ Un único binario corre como tres tipos de proceso:
 
 ```
 mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan, ARP, arranque de cámaras
- └─ mockvision serve   uid mockvision, ninguna   panel, API REST, WebSocket, SQLite, reconciliador, FFmpeg
- └─ mockvision camera  uid mockvision-cam, ninguna   una por cámara, dentro de su namespace sim-<nombre>
+ └─ mockvision serve   uid mockvision, ninguna   panel, API REST, WebSocket, SQLite, reconciliador
+     └─ FFmpeg, validador de paquetes   confinados: seccomp y Landlock
+ └─ mockvision camera  uid mockvision-cam, ninguna   una por cámara, en sus namespaces de red y de PID
 ```
 
 - El **helper de red** es el único proceso con privilegios. Acepta un
   conjunto cerrado de pedidos validados del servicio, por un socket privado.
-  Nunca ejecuta una shell.
+  Nunca ejecuta una shell y, una vez arrancado el servicio, vacía su conjunto
+  de capacidades límite: nada de lo que lanza puede tener una capacidad.
 - El **servicio principal** guarda el estado deseado en SQLite y lo
   reconcilia con el kernel al arrancar y cada 10 segundos. Las cámaras con
   autoarranque vuelven después de un reinicio.
-- Cada **cámara** recibe sus sockets ya abiertos en su namespace. Suelta
-  todos los privilegios antes de leer cualquier entrada: sin capacidades, con
-  un usuario aparte y con `no_new_privs`. Después sirve los motores de su
-  perfil (`rtsp`, `http-api`, `http-push`) y habla con el servicio en líneas
-  JSON.
+- Cada **cámara** recibe sus sockets ya abiertos en su namespace y arranca
+  directamente como el usuario de cámaras, nunca como root, en un namespace
+  de PID propio. Antes de leer cualquier entrada fija `no_new_privs` y un
+  filtro seccomp (sin namespaces, montajes, trazas, módulos ni llaveros), y
+  Landlock limita sus archivos a sus streams y a lo que necesitan DNS y TLS.
+  Después sirve los motores de su perfil (`rtsp`, `http-api`, `http-push`) y
+  habla con el servicio en líneas JSON; el servicio verifica lo que reporta
+  contra el perfil.
+- **FFmpeg**, que decodifica las imágenes subidas, y el **validador de
+  paquetes** también corren confinados: FFmpeg solo alcanza la imagen que lee
+  y la rendition que escribe, y el validador ningún archivo. Ninguno de los
+  dos puede leer la base de datos ni la clave del nodo.
 
 Los namespaces con nombre permiten depurar con `ip netns exec sim-<cámara> …`
 (con Docker: `docker compose exec mockvision ip netns`). Donde el perfil
@@ -159,18 +236,32 @@ tiene IP ni MAC en la LAN.
 | `make e2e-compose` | los mismos criterios contra la imagen Docker levantada con `compose.yaml` |
 | `make generate` | consultas de sqlc y tipos de la API del panel desde `openapi.yaml` |
 
-El binario se compila con `CGO_ENABLED=0`: soltar privilegios cambia todos
-los hilos a la vez, y eso solo lo puede hacer un binario Go puro.
+El binario se compila con `CGO_ENABLED=0`: soltar privilegios y el sandbox
+cambian todos los hilos a la vez, y eso solo lo puede hacer un binario Go
+puro.
 
 ## Seguridad
 
-- La primera ejecución crea el administrador. Las contraseñas usan Argon2id,
-  y los fallos repetidos bloquean el login.
+- La primera ejecución crea el administrador con un código de setup de un
+  solo uso que aparece en el log del nodo. Las contraseñas usan Argon2id, con
+  a lo sumo dos cálculos a la vez; cada dirección tiene diez intentos de
+  inicio de sesión por minuto, y los fallos repetidos en una cuenta la
+  bloquean para esa dirección.
 - Las sesiones son cookies `HttpOnly` y `SameSite=Strict`. Todo pedido que
   cambia estado necesita un encabezado propio y pasa un chequeo de `Origin`.
   El panel corre con una CSP estricta y no carga nada de otros orígenes.
 - Las contraseñas de cámaras y destinos se cifran con XChaCha20-Poly1305. La
   clave se guarda fuera de la base, y la API nunca las devuelve.
+- Los tokens de API se guardan como hash SHA-256 y se muestran una sola vez.
+  Tienen alcance (lectura o escritura), pueden vencer y se revocan al
+  instante desde el panel, incluidos los WebSockets abiertos con ellos. Las
+  sesiones del panel duran 12 horas sin uso y 7 días como máximo. La
+  auditoría guarda cada cambio 90 días con su origen y su IP.
+- Los clientes de la API emulada de una cámara también tienen límites: los
+  cambios del codificador se agrupan por cámara, la cola de jobs admite a lo
+  sumo 500 y las renditions sin uso se borran pasado un día.
+- [docs/AUDITORIA.md](docs/AUDITORIA.md) es la auditoría de código de la que
+  salen estas medidas, con la corrección de cada hallazgo.
 - El panel es HTTP plano. Ponlo detrás de un proxy inverso HTTPS
   (`MOCKVISION_SECURE_COOKIES=1`) antes de exponerlo fuera de una red de
   laboratorio.
