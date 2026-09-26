@@ -78,7 +78,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = nsA.delete() })
 	start := time.Now()
-	if err := setupInterface(host, nsA, specA); err != nil {
+	if err := setupInterface(host, nsA, specA, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("namespace %s ready in %s (named=%v)", nsA.name, time.Since(start).Round(time.Millisecond), nsA.named)
@@ -89,7 +89,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = setupInterface(host, nsDup, specDup)
+	err = setupInterface(host, nsDup, specDup, nil)
 	_ = nsDup.delete()
 	var ne *Error
 	if !errors.As(err, &ne) || ne.Code != CodeIPInUse {
@@ -102,7 +102,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = nsB.delete() })
-	if err := setupInterface(host, nsB, specB); err != nil {
+	if err := setupInterface(host, nsB, specB, nil); err != nil {
 		t.Fatal(err)
 	}
 

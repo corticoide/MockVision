@@ -80,6 +80,9 @@ func TestConfinedChild(t *testing.T) {
 	}
 	got := strings.TrimSpace(string(out))
 	t.Log(got)
+	if strings.Contains(got, "built with cgo") {
+		t.Skip("confining every thread needs a binary built with CGO_ENABLED=0 (the race detector needs cgo)")
+	}
 	for _, want := range []string{"read-allowed=true", "write-out=true", "unshare=false", "mount=false", "keyctl=false"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("want %s in %q", want, got)

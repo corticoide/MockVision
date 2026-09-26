@@ -172,6 +172,13 @@ func TestQueueRespectsTheLimitAndOrder(t *testing.T) {
 	// Raising the limit lets the next one start without a restart.
 	h.max.Store(2)
 	waitFor(t, "the second job to run", func() bool { return h.status(jobs[1].ID) == Running })
+	// Its status is saved before its handler starts: wait for the handler
+	// too, or under load the third job could get ahead of it.
+	waitFor(t, "the second handler to start", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(order) == 2
+	})
 	close(release)
 	for _, j := range jobs {
 		got := h.wait(j.ID)

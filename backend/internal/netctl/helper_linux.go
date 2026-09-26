@@ -49,6 +49,7 @@ type camProc struct {
 	cmd      *exec.Cmd
 	done     chan struct{} // closed when the process ends
 	created  chan struct{} // closed when create is over, whatever its outcome
+	stopping chan struct{} // closed when a delete begins
 	deleting bool
 }
 
@@ -177,7 +178,7 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 		h.mu.Unlock()
 		return createResult{}, errorf(CodeAlreadyExist, "camera %s already exists", spec.ID)
 	}
-	cp := &camProc{spec: spec, done: make(chan struct{}), created: make(chan struct{})}
+	cp := &camProc{spec: spec, done: make(chan struct{}), created: make(chan struct{}), stopping: make(chan struct{})}
 	h.cams[spec.ID] = cp
 	h.mu.Unlock()
 	defer close(cp.created)
@@ -196,6 +197,7 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 		}
 		h.mu.Unlock()
 		if ns != nil {
+			removeLinks(ns)
 			_ = ns.delete()
 		}
 		return createResult{}, err
@@ -219,7 +221,7 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 	if deleted() {
 		return fail(errDeleted)
 	}
-	if err := setupInterface(h.host, ns, &spec); err != nil {
+	if err := setupInterface(h.host, ns, &spec, cp.stopping); err != nil {
 		return fail(err)
 	}
 	if deleted() {
@@ -311,7 +313,10 @@ func (h *Helper) delete(id string) error {
 		h.mu.Unlock()
 		return nil
 	}
-	cp.deleting = true
+	if !cp.deleting {
+		cp.deleting = true
+		close(cp.stopping)
+	}
 	h.mu.Unlock()
 
 	<-cp.created
@@ -332,6 +337,7 @@ func (h *Helper) delete(id string) error {
 	}
 	var err error
 	if ns != nil {
+		removeLinks(ns)
 		err = ns.delete()
 	}
 	h.mu.Lock()
