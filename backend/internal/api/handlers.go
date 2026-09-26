@@ -693,7 +693,7 @@ func (s *Server) handleCameraMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	path, err := s.svc.SnapshotFile(r.Context(), r.PathValue("id"))
+	path, err := s.svc.SnapshotFile(r.Context(), r.PathValue("id"), r.URL.Query().Get("stream"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

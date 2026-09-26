@@ -174,8 +174,13 @@ func (s *Service) DeleteAsset(ctx context.Context, actor Actor, id string) error
 }
 
 // ensureRenditionRow returns the rendition of an asset for the settings,
-// creating it as pending when needed.
+// creating it as pending when needed. Settings no encoder can honor, such
+// as MJPEG above 2040 pixels, are refused here.
 func (s *Service) ensureRenditionRow(ctx context.Context, asset db.Asset, set profile.StreamSettings) (db.Rendition, error) {
+	mp := media.Params{Codec: set.Codec, Width: set.Width, Height: set.Height, FPS: set.FPS, GOP: set.GOP, Bitrate: set.Bitrate}
+	if err := mp.Validate(); err != nil {
+		return db.Rendition{}, domain.Invalid("stream", "%v", err)
+	}
 	p := db.GetRenditionByParamsParams{AssetID: asset.ID, Codec: set.Codec, Width: int64(set.Width), Height: int64(set.Height),
 		Fps: int64(set.FPS), Gop: int64(set.GOP), Bitrate: int64(set.Bitrate)}
 	if r, err := s.store.R().GetRenditionByParams(ctx, p); err == nil {
@@ -189,6 +194,60 @@ func (s *Service) ensureRenditionRow(ctx context.Context, asset db.Asset, set pr
 		return db.Rendition{}, err
 	}
 	return s.store.R().GetRenditionByParams(ctx, p)
+}
+
+// streamNames lists the streams a profile defines: main, then sub and
+// third.
+func streamNames(doc *profile.Document) []string {
+	var out []string
+	for _, name := range []string{"main", "sub", "third"} {
+		if _, ok := doc.Media.Streams[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// streamError names the stream a validation error comes from.
+func streamError(name string, err error) error {
+	var verr *domain.ValidationError
+	if errors.As(err, &verr) && len(verr.Fields) > 0 {
+		return domain.Invalid(verr.Fields[0].Field, "stream %s: %s", name, verr.Fields[0].Message)
+	}
+	return err
+}
+
+// completeStreams gives a camera the streams of its profile it lacks, with
+// the picture of its main stream: cameras created before sub and third
+// streams were served only have a main one.
+func (s *Service) completeStreams(ctx context.Context, b *cameraBundle) error {
+	have := map[string]bool{}
+	asset := ""
+	for _, st := range b.streams {
+		have[st.Stream] = true
+		if asset == "" || st.Stream == "main" {
+			asset = st.AssetID
+		}
+	}
+	if asset == "" {
+		return nil
+	}
+	added := false
+	for _, name := range streamNames(b.doc) {
+		if have[name] {
+			continue
+		}
+		if err := s.store.W().UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: b.cam.ID, Stream: name, AssetID: asset}); err != nil {
+			return err
+		}
+		added = true
+	}
+	if !added {
+		return nil
+	}
+	var err error
+	b.streams, err = s.store.R().ListCameraStreams(ctx, b.cam.ID)
+	return err
 }
 
 func renditionParams(r db.Rendition) media.Params {
@@ -229,7 +288,20 @@ func (s *Service) renditionInfo(ctx context.Context, id string) (db.Rendition, d
 }
 
 func renditionTitle(r db.Rendition, a db.Asset) string {
-	return fmt.Sprintf("Encode %dx%d %s at %d fps from %s", r.Width, r.Height, r.Codec, r.Fps, a.Filename)
+	return fmt.Sprintf("Encode %dx%d %s at %d fps from %s", r.Width, r.Height, codecLabel(r.Codec), r.Fps, a.Filename)
+}
+
+// codecLabel names a codec as cameras and clients show it.
+func codecLabel(codec string) string {
+	switch codec {
+	case media.CodecH264:
+		return "H.264"
+	case media.CodecH265:
+		return "H.265"
+	case media.CodecMJPEG:
+		return "MJPEG"
+	}
+	return codec
 }
 
 type renditionJobParams struct {
@@ -253,11 +325,11 @@ func (s *Service) encodeRendition(ctx context.Context, id string) (media.Files, 
 	if err != nil {
 		return media.Files{}, err
 	}
-	if s.lib.Ready(key) {
+	if s.lib.Ready(key, r.Codec) {
 		if r.Status != string(domain.RenditionReady) {
 			_ = s.store.W().SetRenditionStatus(ctx, db.SetRenditionStatusParams{ID: id, Status: string(domain.RenditionReady), Sha256: key})
 		}
-		return s.lib.RenditionFiles(key), nil
+		return s.lib.RenditionFiles(key, r.Codec), nil
 	}
 	j, err := s.renditionJob(ctx, r, asset, key)
 	if err != nil {
@@ -272,13 +344,13 @@ func (s *Service) encodeRendition(ctx context.Context, id string) (media.Files, 
 		}
 		return media.Files{}, fmt.Errorf("the encoding job was %s", j.Status)
 	}
-	return s.lib.RenditionFiles(key), nil
+	return s.lib.RenditionFiles(key, r.Codec), nil
 }
 
 // encodeAsync queues the encoding of a rendition without waiting for it.
 func (s *Service) encodeAsync(id string) {
 	r, asset, key, err := s.renditionInfo(s.baseCtx, id)
-	if err != nil || s.lib.Ready(key) {
+	if err != nil || s.lib.Ready(key, r.Codec) {
 		return
 	}
 	if _, err := s.renditionJob(s.baseCtx, r, asset, key); err != nil {
@@ -318,13 +390,13 @@ func (s *Service) encodeSteps(ctx context.Context, run *worker.Run, r db.Renditi
 	lock := s.encodeLock(key)
 	lock.Lock()
 	defer lock.Unlock()
-	if s.lib.Ready(key) {
+	if s.lib.Ready(key, r.Codec) {
 		return nil
 	}
 	params := renditionParams(r)
 	src := s.lib.AssetPath(asset.Sha256, assetExt(asset))
 	span := to - from
-	if !s.lib.StreamReady(key) {
+	if !s.lib.StreamReady(key, r.Codec) {
 		run.Step(fmt.Sprintf("Stream %dx%d", r.Width, r.Height), from)
 		sctx, cancel := run.StepContext(ctx)
 		err := s.lib.EncodeStream(sctx, src, params, key, func(frames int) {
@@ -357,7 +429,7 @@ func (s *Service) prepareStreams(ctx context.Context, b *cameraBundle) ([]ipc.St
 		}
 		out = append(out, ipc.Stream{
 			Name: st.Stream, Codec: set.Codec, Width: set.Width, Height: set.Height, FPS: set.FPS, GOP: set.GOP,
-			Bitrate: set.Bitrate, GOPPath: files.GOP, SnapshotPath: files.Snapshot,
+			Bitrate: set.Bitrate, StreamPath: files.Stream, SnapshotPath: files.Snapshot,
 		})
 	}
 	if len(out) == 0 {
@@ -418,22 +490,27 @@ func (s *Service) regenerateStreamsLater(id string) {
 	s.goBackground(func(ctx context.Context) { s.regenerateStreams(ctx, id) })
 }
 
-// SnapshotFile returns the JPEG of a camera's main stream, the preview of
-// the panel (D46: snapshots in v1).
-func (s *Service) SnapshotFile(ctx context.Context, id string) (string, error) {
+// SnapshotFile returns the JPEG of a camera stream, the main one when
+// stream is empty: the preview of the panel (D46: snapshots in v1).
+func (s *Service) SnapshotFile(ctx context.Context, id, stream string) (string, error) {
+	if stream == "" {
+		stream = "main"
+	}
 	b, err := s.loadBundle(ctx, id)
 	if err != nil {
 		return "", err
 	}
 	for _, st := range b.streams {
-		if st.Stream != "main" || !st.RenditionID.Valid {
+		if st.Stream != stream {
 			continue
 		}
-		r, err := s.store.R().GetRendition(ctx, st.RenditionID.String)
-		if err != nil || r.Status != string(domain.RenditionReady) {
-			break
+		if st.RenditionID.Valid {
+			r, err := s.store.R().GetRendition(ctx, st.RenditionID.String)
+			if err == nil && r.Status == string(domain.RenditionReady) {
+				return s.lib.RenditionFiles(r.Sha256, r.Codec).Snapshot, nil
+			}
 		}
-		return s.lib.RenditionFiles(r.Sha256).Snapshot, nil
+		return "", domain.Conflict("", "the stream is not encoded yet")
 	}
-	return "", domain.Conflict("", "the stream is not encoded yet")
+	return "", fmt.Errorf("camera has no stream %q: %w", stream, domain.ErrNotFound)
 }

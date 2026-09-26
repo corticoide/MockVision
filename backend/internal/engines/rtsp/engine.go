@@ -1,7 +1,8 @@
 // Package rtsp implements the rtsp engine: an RTSP server that loops a
-// precoded H.264 group of pictures per stream. The GOP is encoded once from
-// an image, so a still picture costs almost no CPU; timestamps grow
-// continuously across loops so clients never see a jump.
+// precoded stream per camera stream: an H.264 or H.265 group of pictures,
+// or MJPEG frames. The stream is encoded once from an image, so a still
+// picture costs almost no CPU; timestamps grow continuously across loops so
+// clients never see a jump.
 package rtsp
 
 import (
@@ -25,6 +26,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
+	"github.com/pion/rtp"
 
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -205,19 +207,12 @@ func (e *Engine) startStream(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("rtsp: stream %s: %w", name, err)
 	}
-	if src.Info.Codec != "h264" {
-		return fmt.Errorf("rtsp: stream %s: codec %s is not supported yet", name, src.Info.Codec)
+	forma, err := formatFor(src)
+	if err != nil {
+		return fmt.Errorf("rtsp: stream %s: %w", name, err)
 	}
 	desc := &description.Session{
-		Medias: []*description.Media{{
-			Type: description.MediaTypeVideo,
-			Formats: []format.Format{&format.H264{
-				PayloadTyp:        96,
-				PacketizationMode: 1,
-				SPS:               src.SPS,
-				PPS:               src.PPS,
-			}},
-		}},
+		Medias: []*description.Media{{Type: description.MediaTypeVideo, Formats: []format.Format{forma}}},
 	}
 	ss := &gortsplib.ServerStream{Server: e.server, Desc: desc}
 	if err := ss.Initialize(); err != nil {
@@ -394,14 +389,23 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 	return &base.Response{StatusCode: base.StatusOK}, st.stream, nil
 }
 
-// OnPlay implements gortsplib.ServerHandlerOnPlay.
+// OnPlay implements gortsplib.ServerHandlerOnPlay. Like a camera encoder,
+// the stream restarts at a keyframe for the new viewer: H.265 decoders
+// cannot start in the middle of a group of pictures.
 func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
 	if ctx.Session.UserData() != "playing" {
 		ctx.Session.SetUserData("playing")
 		e.playing.Add(1)
 	}
+	if st := e.streamFor(ctx.Path, ctx.Query); st != nil {
+		st.keyframeAt.Store(time.Now().Add(keyframeDelay).UnixNano())
+	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
+
+// keyframeDelay leaves the server time to add a new reader to the stream,
+// right after OnPlay, before the keyframe it asked for goes out.
+const keyframeDelay = 20 * time.Millisecond
 
 // streamer loops a GOP into a server stream at the stream's frame rate.
 type streamer struct {
@@ -411,6 +415,10 @@ type streamer struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once
+
+	// keyframeAt asks for the loop to restart at its keyframe with the
+	// first frame due from then on (Unix nanoseconds, 0 for none).
+	keyframeAt atomic.Int64
 }
 
 func (s *streamer) stop() {
@@ -424,7 +432,7 @@ func (s *streamer) stop() {
 func (s *streamer) run(ctx context.Context) {
 	defer close(s.done)
 	media := s.stream.Desc.Medias[0]
-	enc, err := media.Formats[0].(*format.H264).CreateEncoder()
+	encode, err := encoderFor(media.Formats[0], s.src)
 	if err != nil {
 		s.engine.in.Host.Telemetry().Log(slog.LevelError, "rtsp: encoder", "error", err)
 		return
@@ -441,54 +449,122 @@ func (s *streamer) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
-	var n int64 // frames sent since start; drives continuous timestamps
+	var (
+		n int64 // frames sent since start; drives continuous timestamps
+		i int   // position in the loop
+	)
 	for {
-		for i, au := range s.src.AccessUnits {
-			due := start.Add(time.Duration(n) * frame)
-			if wait := time.Until(due); wait > 0 {
-				timer.Reset(wait)
-				select {
-				case <-ctx.Done():
-					return
-				case <-timer.C:
-				}
-			} else if ctx.Err() != nil {
+		due := start.Add(time.Duration(n) * frame)
+		if wait := time.Until(due); wait > 0 {
+			timer.Reset(wait)
+			select {
+			case <-ctx.Done():
 				return
+			case <-timer.C:
 			}
-			// Nobody is watching: keep the clock running, skip the work.
-			if s.engine.playing.Load() > 0 {
-				nalus := au
-				if i == 0 {
-					nalus = withParameterSets(au, s.src.SPS, s.src.PPS)
-				}
-				pkts, err := enc.Encode(nalus)
-				if err == nil {
-					ts := rtpBase + uint32(n*90000/int64(fps))
-					for _, p := range pkts {
-						p.Timestamp = ts
-						_ = s.stream.WritePacketRTPWithNTP(media, p, due)
-					}
-				}
-			}
-			n++
+		} else if ctx.Err() != nil {
+			return
 		}
+		if at := s.keyframeAt.Load(); at != 0 && due.UnixNano() >= at && s.keyframeAt.CompareAndSwap(at, 0) {
+			i = 0
+		}
+		// Nobody is watching: keep the clock running, skip the work.
+		if s.engine.playing.Load() > 0 {
+			pkts, err := encode(s.src.AccessUnits[i], i == 0)
+			if err == nil {
+				ts := rtpBase + uint32(n*90000/int64(fps))
+				for _, p := range pkts {
+					p.Timestamp = ts
+					_ = s.stream.WritePacketRTPWithNTP(media, p, due)
+				}
+			}
+		}
+		n++
+		i = (i + 1) % len(s.src.AccessUnits)
 	}
 }
 
-// withParameterSets puts SPS and PPS in front of an IDR access unit when
-// they are missing, so clients joining at any keyframe can decode.
-func withParameterSets(au [][]byte, sps, pps []byte) [][]byte {
-	hasSPS := false
+// formatFor describes the RTP format of a source.
+func formatFor(src *engine.VideoSource) (format.Format, error) {
+	switch src.Info.Codec {
+	case "h264":
+		return &format.H264{PayloadTyp: 96, PacketizationMode: 1, SPS: src.SPS, PPS: src.PPS}, nil
+	case "h265":
+		return &format.H265{PayloadTyp: 96, VPS: src.VPS, SPS: src.SPS, PPS: src.PPS}, nil
+	case "mjpeg":
+		return &format.MJPEG{}, nil
+	}
+	return nil, fmt.Errorf("codec %s is not supported", src.Info.Codec)
+}
+
+// frameEncoder turns an access unit into RTP packets; keyframe marks the
+// first frame of the loop.
+type frameEncoder func(au [][]byte, keyframe bool) ([]*rtp.Packet, error)
+
+// encoderFor creates the RTP packetizer of a format. Keyframes of H.264
+// and H.265 carry their parameter sets, so clients joining at any loop can
+// decode.
+func encoderFor(f format.Format, src *engine.VideoSource) (frameEncoder, error) {
+	switch f := f.(type) {
+	case *format.H264:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, keyframe bool) ([]*rtp.Packet, error) {
+			if keyframe {
+				au = withParameterSets(au, func(n []byte) bool { return n[0]&0x1f == 7 }, src.SPS, src.PPS)
+			}
+			return enc.Encode(au)
+		}, nil
+	case *format.H265:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, keyframe bool) ([]*rtp.Packet, error) {
+			if keyframe {
+				au = withParameterSets(au, func(n []byte) bool { return (n[0]>>1)&0x3f == 32 }, src.VPS, src.SPS, src.PPS)
+			}
+			return enc.Encode(au)
+		}, nil
+	case *format.MJPEG:
+		enc, err := f.CreateEncoder()
+		if err != nil {
+			return nil, err
+		}
+		return func(au [][]byte, _ bool) (pkts []*rtp.Packet, err error) {
+			if len(au) != 1 {
+				return nil, errors.New("an MJPEG frame is one image")
+			}
+			// The packetizer panics on images RTP cannot carry; the
+			// media layer checks them, this guards the camera anyway.
+			defer func() {
+				if r := recover(); r != nil {
+					pkts, err = nil, fmt.Errorf("mjpeg: %v", r)
+				}
+			}()
+			return enc.Encode(au[0])
+		}, nil
+	}
+	return nil, fmt.Errorf("unsupported format %T", f)
+}
+
+// withParameterSets puts the parameter sets in front of a keyframe when the
+// frame does not carry them already.
+func withParameterSets(au [][]byte, isFirstSet func([]byte) bool, sets ...[]byte) [][]byte {
 	for _, n := range au {
-		if len(n) > 0 && n[0]&0x1f == 7 {
-			hasSPS = true
+		if len(n) > 0 && isFirstSet(n) {
+			return au
 		}
 	}
-	if hasSPS || sps == nil || pps == nil {
-		return au
+	out := make([][]byte, 0, len(au)+len(sets))
+	for _, ps := range sets {
+		if ps == nil {
+			return au
+		}
+		out = append(out, ps)
 	}
-	out := make([][]byte, 0, len(au)+2)
-	out = append(out, sps, pps)
 	return append(out, au...)
 }
 

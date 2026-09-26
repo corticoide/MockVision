@@ -62,6 +62,7 @@ type UserInput struct {
 // StreamInput selects the image and settings of the main stream.
 type StreamInput struct {
 	AssetID    string `json:"asset_id"`
+	Codec      string `json:"codec"`
 	Resolution string `json:"resolution"`
 	FPS        int    `json:"fps"`
 }
@@ -220,6 +221,11 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	// written through the parameters bound to them.
 	values := model.Defaults()
 	overrides := map[string]any{}
+	if in.Stream.Codec != "" {
+		if err := s.setBound(doc, model, values, overrides, "media.main.codec", in.Stream.Codec, "stream.codec"); err != nil {
+			return nil, err
+		}
+	}
 	if in.Stream.Resolution != "" {
 		if err := s.setBound(doc, model, values, overrides, "media.main.resolution", in.Stream.Resolution, "stream.resolution"); err != nil {
 			return nil, err
@@ -230,12 +236,14 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 			return nil, err
 		}
 	}
-	settings, err := model.StreamFor("main", values)
-	if err != nil {
-		return nil, err
-	}
-	if settings.Codec != "h264" {
-		return nil, domain.Invalid("stream", "codec %s is not supported yet", settings.Codec)
+	// Every stream of the profile: the wizard sets the main one, the sub
+	// and third streams start from their defaults, all with one picture.
+	names := streamNames(doc)
+	settings := make([]profile.StreamSettings, len(names))
+	for i, name := range names {
+		if settings[i], err = model.StreamFor(name, values); err != nil {
+			return nil, domain.Invalid("stream", "%v", err)
+		}
 	}
 
 	assetID := in.Stream.AssetID
@@ -265,9 +273,11 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		return nil, err
 	}
 
-	rend, err := s.ensureRenditionRow(ctx, asset, settings)
-	if err != nil {
-		return nil, err
+	rends := make([]db.Rendition, len(names))
+	for i, name := range names {
+		if rends[i], err = s.ensureRenditionRow(ctx, asset, settings[i]); err != nil {
+			return nil, streamError(name, err)
+		}
 	}
 	autostart := true
 	if in.Autostart != nil {
@@ -318,8 +328,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 				return err
 			}
 		}
-		if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: "main", AssetID: asset.ID, RenditionID: store.NullString(rend.ID)}); err != nil {
-			return err
+		for i, name := range names {
+			if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: name, AssetID: asset.ID, RenditionID: store.NullString(rends[i].ID)}); err != nil {
+				return err
+			}
 		}
 		for _, t := range dedupe(in.TargetIDs) {
 			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t, EventTypesJson: "[]", OverridesJson: "{}"}); err != nil {
@@ -334,7 +346,9 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		}
 		return nil, err
 	}
-	s.encodeAsync(rend.ID)
+	for _, r := range rends {
+		s.encodeAsync(r.ID)
+	}
 	s.audit(ctx, actor, "camera.create", "camera", id, map[string]any{"name": in.Name, "profile": prof.ProfileID + "@" + prof.Version, "ip": netw.ip, "mac": netw.mac})
 	view, err := s.GetCamera(ctx, id)
 	if err != nil {
@@ -353,6 +367,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, overrides map[string]any, canon string, v any, field string) error {
 	key, ok := m.NativeFor(canon)
 	if !ok {
+		// Asking for what the profile fixes anyway is not a change.
+		if cur, ok := m.Canon(canon, values); ok && fmt.Sprint(cur) == fmt.Sprint(v) {
+			return nil
+		}
 		return domain.Invalid(field, "this profile does not allow changing %s", canon)
 	}
 	cv, err := profile.Coerce(doc.State[key], v)
@@ -679,9 +697,17 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		_ = json.Unmarshal([]byte(t.EventTypesJson), &types)
 		v.Targets = append(v.Targets, TargetRef{ID: t.ID, Name: t.Name, EventTypes: nonNil(types)})
 	}
+	urls := map[string]string{}
+	for _, e := range endpoints {
+		for stream, url := range e.streams {
+			if urls[stream] == "" {
+				urls[stream] = url
+			}
+		}
+	}
 	values := b.values()
 	for _, st := range b.streams {
-		sv := StreamView{Name: st.Stream, AssetID: st.AssetID, RenditionStatus: "missing"}
+		sv := StreamView{Name: st.Stream, URL: urls[st.Stream], AssetID: st.AssetID, RenditionStatus: "missing"}
 		if set, err := b.model.StreamFor(st.Stream, values); err == nil {
 			sv.Codec, sv.FPS, sv.GOP, sv.Bitrate = set.Codec, set.FPS, set.GOP, set.Bitrate
 			sv.Resolution = fmt.Sprintf("%dx%d", set.Width, set.Height)
@@ -743,9 +769,16 @@ func (s *Service) endpointViewsFrom(b *cameraBundle, ip string, eps []ipcEndpoin
 				Paths map[string]string `json:"paths"`
 			}
 			_ = json.Unmarshal(section, &cfg)
-			path := cfg.Paths["main"]
+			base := "rtsp://" + hostPort(ip, ep.port, 554)
 			ev.Protocol = "rtsp"
-			ev.URL = "rtsp://" + hostPort(ip, ep.port, 554) + path
+			ev.streams = map[string]string{}
+			for _, stream := range profile.SortedKeys(cfg.Paths) {
+				ev.streams[stream] = base + cfg.Paths[stream]
+			}
+			ev.URL = ev.streams["main"]
+			if ev.URL == "" && len(cfg.Paths) > 0 {
+				ev.URL = ev.streams[profile.SortedKeys(cfg.Paths)[0]]
+			}
 		case "http-api":
 			ev.Protocol = "http"
 			ev.URL = "http://" + hostPort(ip, ep.port, 80) + "/"

@@ -489,9 +489,10 @@ paths:
       tags: [cameras]
       operationId: updateCameraStream
       description: >
-        Changes the picture, resolution or frame rate of a stream. The stream
-        is encoded again and a running camera switches to it without
-        restarting.
+        Changes the picture of a stream or its encoding: codec, resolution,
+        frame rate, bitrate and GOP, each through the profile parameter bound
+        to it. The stream is encoded again and a running camera switches to
+        it without restarting; RTSP clients of that stream reconnect.
       requestBody:
         required: true
         content:
@@ -500,8 +501,11 @@ paths:
               type: object
               properties:
                 asset_id: { type: string }
+                codec: { type: string, enum: [h264, h265, mjpeg] }
                 resolution: { type: string }
                 fps: { type: integer }
+                bitrate: { type: integer, description: kbit/s }
+                gop: { type: integer, description: Frames between keyframes }
       responses:
         "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "404": { $ref: "#/components/responses/Problem" }
@@ -567,6 +571,7 @@ paths:
   /cameras/{id}/snapshot:
     parameters:
       - $ref: "#/components/parameters/ID"
+      - { name: stream, in: query, description: "main (the default), sub or third", schema: { type: string } }
     get:
       tags: [cameras]
       operationId: getSnapshot
@@ -1004,6 +1009,8 @@ components:
         resolutions: { type: array, items: { type: string } }
         fps_min: { type: integer }
         fps_max: { type: integer }
+        bitrate_min: { type: integer }
+        bitrate_max: { type: integer }
         default:
           type: object
           required: [codec, resolution, fps, bitrate, gop]
@@ -1184,8 +1191,9 @@ components:
       type: object
       required: [name, codec, resolution, fps, gop, bitrate, asset_id, rendition_status]
       properties:
-        name: { type: string }
-        codec: { type: string }
+        name: { type: string, enum: [main, sub, third] }
+        url: { type: string, description: RTSP URL of the stream, when an RTSP protocol serves it }
+        codec: { type: string, enum: [h264, h265, mjpeg] }
         resolution: { type: string }
         fps: { type: integer }
         gop: { type: integer }
@@ -1267,8 +1275,10 @@ components:
         users: { type: array, items: { $ref: "#/components/schemas/CameraUserInput" } }
         stream:
           type: object
+          description: The main stream; sub and third start from the profile defaults with the same picture.
           properties:
             asset_id: { type: string }
+            codec: { type: string, enum: [h264, h265, mjpeg] }
             resolution: { type: string }
             fps: { type: integer }
         target_ids: { type: array, items: { type: string } }

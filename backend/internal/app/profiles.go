@@ -310,11 +310,14 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 	}
 	d := &ProfileDetail{ProfileView: profileView(p, pk.SignatureStatus, 0), Streams: []ProfileStreamView{}, Engines: []ProfileEngineView{},
 		Events: []string{}, FactoryUsers: []UserView{}, Params: []ParamView{}}
-	for _, name := range profile.SortedKeys(doc.Media.Streams) {
+	for _, name := range streamNames(doc) {
 		st := doc.Media.Streams[name]
 		sv := ProfileStreamView{Name: name, Codecs: st.Codecs, Resolutions: st.Resolutions}
 		if st.FPS != nil {
 			sv.FPSMin, sv.FPSMax = st.FPS.Min, st.FPS.Max
+		}
+		if st.Bitrate != nil {
+			sv.BitrateMin, sv.BitrateMax = st.Bitrate.Min, st.Bitrate.Max
 		}
 		sv.Default.Codec, sv.Default.Resolution, sv.Default.FPS = st.Default.Codec, st.Default.Resolution, st.Default.FPS
 		sv.Default.Bitrate, sv.Default.GOP = st.Default.Bitrate, st.Default.GOP

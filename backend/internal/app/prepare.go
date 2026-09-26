@@ -111,13 +111,13 @@ func (s *Service) prepareOne(ctx context.Context, run *worker.Run, id string, fr
 	if err != nil {
 		return "gone", nil // deleted with its asset meanwhile
 	}
-	if s.lib.Ready(key) {
+	if s.lib.Ready(key, r.Codec) {
 		if r.Status != string(domain.RenditionReady) {
 			_ = s.store.W().SetRenditionStatus(ctx, db.SetRenditionStatusParams{ID: r.ID, Status: string(domain.RenditionReady), Sha256: key})
 		}
 		return "ready", nil
 	}
-	desc := fmt.Sprintf("%dx%d %s from %s", r.Width, r.Height, r.Codec, asset.Filename)
+	desc := fmt.Sprintf("%dx%d %s from %s", r.Width, r.Height, codecLabel(r.Codec), asset.Filename)
 	for {
 		err := s.encodeSteps(ctx, run, r, asset, key, from, to)
 		if err == nil {

@@ -151,10 +151,10 @@ type Events interface {
 	Report(r DeliveryReport)
 }
 
-// StreamInfo describes one video stream of the camera.
+// StreamInfo describes one video stream of the camera: main, sub or third.
 type StreamInfo struct {
 	Name    string `json:"name"`
-	Codec   string `json:"codec"`
+	Codec   string `json:"codec"` // h264, h265 or mjpeg
 	Width   int    `json:"width"`
 	Height  int    `json:"height"`
 	FPS     int    `json:"fps"`
@@ -162,10 +162,14 @@ type StreamInfo struct {
 	Bitrate int    `json:"bitrate"`
 }
 
-// VideoSource is a precoded group of pictures that server engines send in a
-// loop. Each access unit is a list of NAL units without start codes.
+// VideoSource is a precoded stream that server engines send in a loop, one
+// access unit per frame. For H.264 and H.265 an access unit is a list of
+// NAL units without start codes, the first one a keyframe, and the
+// parameter sets are also given apart (VPS only for H.265). For MJPEG an
+// access unit holds a single element, a whole JPEG image.
 type VideoSource struct {
 	Info        StreamInfo
+	VPS         []byte
 	SPS         []byte
 	PPS         []byte
 	AccessUnits [][][]byte

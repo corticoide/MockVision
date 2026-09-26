@@ -260,14 +260,17 @@ func (s *Service) SetCameraProtocols(ctx context.Context, actor Actor, id string
 // stay as they are.
 type StreamUpdate struct {
 	AssetID    *string `json:"asset_id"`
+	Codec      *string `json:"codec"`
 	Resolution *string `json:"resolution"`
 	FPS        *int    `json:"fps"`
+	Bitrate    *int    `json:"bitrate"`
+	GOP        *int    `json:"gop"`
 }
 
-// UpdateCameraStream changes a stream's picture, resolution or frame rate.
-// Resolution and frame rate are the profile parameters bound to them, as if
-// set from the panel. The stream is encoded again and a running camera
-// switches to it without restarting (RN-09).
+// UpdateCameraStream changes a stream's picture or its encoding: codec,
+// resolution, frame rate, bitrate and GOP are the profile parameters bound
+// to them, as if set from the panel. The stream is encoded again and a
+// running camera switches to it without restarting (RN-09).
 func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name string, in StreamUpdate) (*CameraView, error) {
 	b, err := s.loadBundle(ctx, id)
 	if err != nil {
@@ -282,7 +285,7 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 	if cur == nil {
 		return nil, fmt.Errorf("camera has no stream %q: %w", name, domain.ErrNotFound)
 	}
-	if in.AssetID == nil && in.Resolution == nil && in.FPS == nil {
+	if in.AssetID == nil && in.Codec == nil && in.Resolution == nil && in.FPS == nil && in.Bitrate == nil && in.GOP == nil {
 		return nil, domain.Invalid("", "nothing to change")
 	}
 	type setting struct {
@@ -290,11 +293,20 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 		raw          any
 	}
 	var wanted []setting
+	if in.Codec != nil {
+		wanted = append(wanted, setting{"codec", "media." + name + ".codec", *in.Codec})
+	}
 	if in.Resolution != nil {
 		wanted = append(wanted, setting{"resolution", "media." + name + ".resolution", *in.Resolution})
 	}
 	if in.FPS != nil {
 		wanted = append(wanted, setting{"fps", "media." + name + ".fps", int64(*in.FPS)})
+	}
+	if in.Bitrate != nil {
+		wanted = append(wanted, setting{"bitrate", "media." + name + ".bitrate", int64(*in.Bitrate)})
+	}
+	if in.GOP != nil {
+		wanted = append(wanted, setting{"gop", "media." + name + ".gop", int64(*in.GOP)})
 	}
 	values := b.values()
 	coerced := map[string]any{}
@@ -324,9 +336,6 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 	settings, err := b.model.StreamFor(name, values)
 	if err != nil {
 		return nil, domain.Invalid("resolution", "%v", err)
-	}
-	if settings.Codec != "h264" {
-		return nil, domain.Invalid("codec", "codec %s is not supported yet", settings.Codec)
 	}
 	rend, err := s.ensureRenditionRow(ctx, asset, settings)
 	if err != nil {

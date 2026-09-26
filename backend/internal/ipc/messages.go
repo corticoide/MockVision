@@ -60,7 +60,7 @@ type Stream struct {
 	FPS          int    `json:"fps"`
 	GOP          int    `json:"gop"`
 	Bitrate      int    `json:"bitrate"`
-	GOPPath      string `json:"gop_path"`
+	StreamPath   string `json:"stream_path"`
 	SnapshotPath string `json:"snapshot_path"`
 }
 

@@ -63,11 +63,14 @@ type EndpointView struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port"`
 	URL      string `json:"url"`
+
+	streams map[string]string // RTSP URL of each stream it serves
 }
 
 // StreamView is a camera stream and its rendition.
 type StreamView struct {
 	Name            string `json:"name"`
+	URL             string `json:"url,omitempty"` // where RTSP clients read it
 	Codec           string `json:"codec"`
 	Resolution      string `json:"resolution"`
 	FPS             int    `json:"fps"`
@@ -168,6 +171,8 @@ type ProfileStreamView struct {
 	Resolutions []string `json:"resolutions"`
 	FPSMin      int      `json:"fps_min"`
 	FPSMax      int      `json:"fps_max"`
+	BitrateMin  int      `json:"bitrate_min,omitempty"`
+	BitrateMax  int      `json:"bitrate_max,omitempty"`
 	Default     struct {
 		Codec      string `json:"codec"`
 		Resolution string `json:"resolution"`

@@ -25,7 +25,7 @@ type loadedStream struct {
 	info     engine.StreamInfo
 	source   *engine.VideoSource
 	snapshot []byte
-	gopPath  string
+	path     string
 }
 
 func newMediaStore() *mediaStore {
@@ -33,11 +33,11 @@ func newMediaStore() *mediaStore {
 }
 
 func loadStream(s ipc.Stream) (*loadedStream, error) {
-	data, err := os.ReadFile(s.GOPPath)
+	data, err := os.ReadFile(s.StreamPath)
 	if err != nil {
 		return nil, fmt.Errorf("stream %s: %w", s.Name, err)
 	}
-	src, err := media.ParseGOP(data)
+	src, err := media.ParseStream(s.Codec, data)
 	if err != nil {
 		return nil, fmt.Errorf("stream %s: %w", s.Name, err)
 	}
@@ -47,7 +47,7 @@ func loadStream(s ipc.Stream) (*loadedStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stream %s snapshot: %w", s.Name, err)
 	}
-	return &loadedStream{info: info, source: src, snapshot: snap, gopPath: s.GOPPath}, nil
+	return &loadedStream{info: info, source: src, snapshot: snap, path: s.StreamPath}, nil
 }
 
 // replace loads the given streams and swaps them in, notifying watchers of
@@ -64,7 +64,7 @@ func (m *mediaStore) replace(streams []ipc.Stream) error {
 	m.mu.Lock()
 	var changed []string
 	for name, ls := range loaded {
-		if old, ok := m.streams[name]; ok && old.gopPath != ls.gopPath {
+		if old, ok := m.streams[name]; ok && old.path != ls.path {
 			changed = append(changed, name)
 		}
 		m.streams[name] = ls

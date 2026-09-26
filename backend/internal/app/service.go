@@ -200,6 +200,11 @@ func (s *Service) bootCameras(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, c := range cams {
+		if b, err := s.loadBundle(ctx, c.ID); err == nil {
+			if err := s.completeStreams(ctx, b); err != nil {
+				return err
+			}
+		}
 		desired := domain.DesiredStopped
 		if store.Bool(c.Autostart) {
 			desired = domain.DesiredRunning

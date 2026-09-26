@@ -94,7 +94,7 @@ func newTestServiceWith(t *testing.T, ffmpeg string) *Service {
 func createCamera(t *testing.T, svc *Service, name string, start bool) *CameraView {
 	t.Helper()
 	v, err := svc.CreateCamera(context.Background(), testActor, CreateCameraInput{
-		Name: name, ProfileID: "milesight/demo", ProfileVersion: "0.1.0", Start: start,
+		Name: name, ProfileID: "milesight/demo", ProfileVersion: "0.2.0", Start: start,
 	})
 	if err != nil {
 		t.Fatal(err)
