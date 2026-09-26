@@ -546,8 +546,22 @@ func (r *Runner) Answer(ctx context.Context, id, answer string) (Job, error) {
 	return ex.job, nil
 }
 
-// Prune deletes jobs finished before t, with their events.
+// Prune deletes jobs finished before t, with their events. Interrupted
+// jobs created before t that nobody resumed are canceled first, so what
+// they kept for resuming, such as an uploaded package, is removed too
+// (audit B14).
 func (r *Runner) Prune(ctx context.Context, before time.Time) (int, error) {
+	stale, err := r.cfg.Store.R().ListJobsByStatus(ctx, db.ListJobsByStatusParams{Status: string(Interrupted), Limit: 10_000})
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range stale {
+		if store.Time(row.CreatedAt).Before(before) {
+			if _, err := r.Cancel(ctx, row.ID); err != nil {
+				r.cfg.Log.Warn("cannot cancel an old interrupted job", "job", row.ID, "error", err)
+			}
+		}
+	}
 	ids, err := r.cfg.Store.R().ListFinishedJobsBefore(ctx, store.NullMillis(before))
 	if err != nil {
 		return 0, err

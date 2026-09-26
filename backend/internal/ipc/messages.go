@@ -31,6 +31,7 @@ const (
 	TypeFaultStop  = "fault.stop"
 	TypeStateSet   = "state.set"
 	TypeStop       = "stop"
+	TypeTargetTest = "target.test"
 )
 
 // HeartbeatInterval is how often cameras report; three missed heartbeats
@@ -184,4 +185,18 @@ type StateSet struct {
 // Stop asks the camera to shut down within a deadline.
 type Stop struct {
 	DeadlineMS int64 `json:"deadline_ms"`
+}
+
+// TargetTest asks the camera to send a test request to a target from its
+// own network, as its deliveries would.
+type TargetTest struct {
+	Target engine.Target `json:"target"`
+}
+
+// TargetTestResult is the reply to TargetTest.
+type TargetTestResult struct {
+	OK         bool   `json:"ok"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	LatencyMS  int64  `json:"latency_ms"`
+	Error      string `json:"error,omitempty"`
 }

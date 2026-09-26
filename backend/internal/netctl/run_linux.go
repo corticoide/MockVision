@@ -35,18 +35,19 @@ func RunMain(args []string, log *slog.Logger) int {
 		log.Error("mockvision run must start as root: it keeps the network capabilities for the helper and drops them everywhere else. For development without privileges use: mockvision serve --net local")
 		return 2
 	}
-	svcUID, svcGID, err := lookupUser(*serviceUser, 10001)
+	svcUID, svcGID, err := lookupUser(*serviceUser)
 	if err != nil {
 		log.Error("service user", "error", err)
 		return 2
 	}
-	camUID, camGID, err := lookupUser(*cameraUser, 10002)
+	camUID, camGID, err := lookupUser(*cameraUser)
 	if err != nil {
 		log.Error("camera user", "error", err)
 		return 2
 	}
 	if camUID == svcUID {
-		log.Warn("cameras and the service share a user; use separate users so a camera cannot touch the database")
+		log.Error("cameras and the service must run as different users, or a camera could read the database and the node key")
+		return 2
 	}
 	if err := prepareDataDir(*dataDir, svcUID, svcGID); err != nil {
 		log.Error("data directory", "error", err)
@@ -139,9 +140,10 @@ func envOr(key, def string) string {
 	return def
 }
 
-// lookupUser resolves a user name or numeric uid; when the name does not
-// exist, fallback is used as both uid and gid.
-func lookupUser(name string, fallback int) (int, int, error) {
+// lookupUser resolves a user name or a numeric uid, which is also used as
+// the gid. A name that does not exist is an error: guessing a uid could
+// hand the service's data to a real user of the host (audit B8).
+func lookupUser(name string) (int, int, error) {
 	if n, err := strconv.Atoi(name); err == nil {
 		if n <= 0 {
 			return 0, 0, fmt.Errorf("uid %d is not allowed", n)
@@ -150,7 +152,7 @@ func lookupUser(name string, fallback int) (int, int, error) {
 	}
 	u, err := user.Lookup(name)
 	if err != nil {
-		return fallback, fallback, nil
+		return 0, 0, fmt.Errorf("user %s does not exist: create it (see deploy/mockvision.service) or give a numeric uid", name)
 	}
 	uid, err1 := strconv.Atoi(u.Uid)
 	gid, err2 := strconv.Atoi(u.Gid)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,6 +76,8 @@ type Service struct {
 	opLocks  map[string]*sync.Mutex
 	exits    map[string]netctl.Exit
 	regens   map[string]*regenState
+	// netnsNames reserves namespace names, name to camera ID.
+	netnsNames map[string]string
 
 	// closing is set, under mu, when shutdown begins: no background work
 	// starts after that.
@@ -130,26 +133,27 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		opts:     opts,
-		log:      opts.Log,
-		store:    st,
-		box:      box,
-		lib:      lib,
-		catalog:  engines.Builtin(),
-		rt:       opts.Runtime,
-		pub:      pub,
-		node:     telemetry.NewNodeSampler(),
-		metrics:  telemetry.NewCameras(),
-		login:    newLoginGuard(),
-		hashes:   newHashLimiter(),
-		sessions: map[string]*session{},
-		retries:  map[string]*retryState{},
-		encodes:  map[string]*refMutex{},
-		opLocks:  map[string]*sync.Mutex{},
-		exits:    map[string]netctl.Exit{},
-		regens:   map[string]*regenState{},
-		baseCtx:  ctx,
-		cancel:   cancel,
+		opts:       opts,
+		log:        opts.Log,
+		store:      st,
+		box:        box,
+		lib:        lib,
+		catalog:    engines.Builtin(),
+		rt:         opts.Runtime,
+		pub:        pub,
+		node:       telemetry.NewNodeSampler(),
+		metrics:    telemetry.NewCameras(),
+		login:      newLoginGuard(),
+		hashes:     newHashLimiter(),
+		sessions:   map[string]*session{},
+		retries:    map[string]*retryState{},
+		encodes:    map[string]*refMutex{},
+		opLocks:    map[string]*sync.Mutex{},
+		exits:      map[string]netctl.Exit{},
+		regens:     map[string]*regenState{},
+		netnsNames: map[string]string{},
+		baseCtx:    ctx,
+		cancel:     cancel,
 	}
 	s.jobs = s.newRunner()
 	return s, nil
@@ -306,4 +310,42 @@ func (s *Service) applyRetention(ctx context.Context) {
 	}
 	_, _ = w.DeleteExpiredSessions(ctx, now.UnixMilli())
 	s.collectRenditions(ctx, now)
+	s.sweepJobFiles(ctx, now)
+}
+
+// sweepJobFiles removes files of the jobs directory that no open job
+// needs, once they are a day old: what a crash left between the upload and
+// the job that would have owned it.
+func (s *Service) sweepJobFiles(ctx context.Context, now time.Time) {
+	keep := map[string]bool{}
+	cursor := ""
+	for {
+		page, next, err := s.jobs.List(ctx, worker.Filter{Status: "active", Type: JobImport, Cursor: cursor, Limit: 200})
+		if err != nil {
+			return
+		}
+		for _, j := range page {
+			var p importParams
+			if j.DecodeParams(&p) == nil && p.Upload != "" {
+				keep[p.Upload] = true
+				keep[strings.TrimSuffix(p.Upload, ".upload")+".result.json"] = true
+			}
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	entries, err := os.ReadDir(s.jobsDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || keep[e.Name()] {
+			continue
+		}
+		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > 24*time.Hour {
+			_ = os.Remove(filepath.Join(s.jobsDir(), e.Name()))
+		}
+	}
 }

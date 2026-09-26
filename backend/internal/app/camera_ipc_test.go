@@ -3,11 +3,17 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/telemetry"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -115,6 +121,20 @@ func TestCameraReportsAreChecked(t *testing.T) {
 	if _, err := svc.GetEvent(ctx, skewed); err != nil {
 		t.Fatal("an event just received was deleted because of the camera's clock")
 	}
+
+	// A deleted camera leaves nothing in the service's memory (audit B14).
+	if _, err := svc.StartCamera(ctx, testActor, camB.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteCamera(ctx, testActor, camB.ID); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	_, lock := svc.opLocks[camB.ID]
+	svc.mu.Unlock()
+	if lock {
+		t.Fatal("the operation lock of a deleted camera is kept")
+	}
 }
 
 // A camera that floods heartbeats keeps one sample a second.
@@ -126,5 +146,57 @@ func TestHeartbeatSamplesAreBounded(t *testing.T) {
 	}
 	if n := len(c.History("cam", time.Time{})); n > telemetry.MaxSamples {
 		t.Fatalf("%d samples kept", n)
+	}
+}
+
+// A target is tested from a running camera that uses it, the way its
+// deliveries reach it; the node refuses to test itself (audit B7).
+func TestTargetTestLeavesFromACamera(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	var got atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("User-Agent"), "MockVision") {
+			got.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	name, url := "Receiver", srv.URL
+	tg, err := svc.CreateTarget(ctx, testActor, TargetInput{Name: &name, URL: &url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No camera runs: the request leaves from the node.
+	res, err := svc.TestTarget(ctx, tg.ID)
+	if err != nil || !res.OK || res.From != "node" {
+		t.Fatalf("from the node: %+v %v", res, err)
+	}
+	cam := createCamera(t, svc, "Tester", false)
+	ids := []string{tg.ID}
+	if _, err := svc.UpdateCamera(ctx, testActor, cam.ID, UpdateCameraInput{TargetIDs: &ids}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartCamera(ctx, testActor, cam.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, svc, cam.ID, domain.StateRunning)
+	res, err = svc.TestTarget(ctx, tg.ID)
+	if err != nil || !res.OK || res.From != "camera" || res.Camera != "Tester" || res.HTTPStatus != http.StatusNoContent {
+		t.Fatalf("from the camera: %+v %v", res, err)
+	}
+	if got.Load() != 2 {
+		t.Fatalf("the receiver saw %d requests", got.Load())
+	}
+}
+
+func TestNodeAddresses(t *testing.T) {
+	for ip, want := range map[string]bool{
+		"127.0.0.1": true, "::1": true, "169.254.169.254": true, "0.0.0.0": true, "224.0.0.1": true, "fe80::1": true,
+		"192.0.2.10": false, "2001:db8::10": false,
+	} {
+		if got := nodeAddress(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("%s: %v, want %v", ip, got, want)
+		}
 	}
 }

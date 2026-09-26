@@ -103,3 +103,28 @@ func TestRegenerationIsCoalesced(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// Cameras whose names give the same slug get distinct namespaces, even
+// when they start at once (audit B12).
+func TestNamespaceNamesAreReserved(t *testing.T) {
+	svc, _ := newBareService(t)
+	bundle := func(id, name string) *cameraBundle {
+		return &cameraBundle{cam: db.Camera{ID: id, Name: name}}
+	}
+	a := bundle("01J8Z3QK00000000000000AAAA", "Cam 1")
+	b := bundle("01J8Z3QK00000000000000BBBB", "cam-1")
+	na, nb := svc.netnsName(a), svc.netnsName(b)
+	if na == nb {
+		t.Fatalf("both cameras got %s", na)
+	}
+	if na != "sim-cam-1" || nb != "sim-cam-1-bbbb" {
+		t.Fatalf("names %s and %s", na, nb)
+	}
+	if again := svc.netnsName(a); again != na {
+		t.Fatalf("a camera keeps its name: %s, was %s", again, na)
+	}
+	svc.releaseNetns(a.cam.ID)
+	if got := svc.netnsName(bundle("01J8Z3QK00000000000000CCCC", "CAM 1")); got != "sim-cam-1" {
+		t.Fatalf("a released name is reused: %s", got)
+	}
+}

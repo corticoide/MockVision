@@ -241,6 +241,12 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		default:
 		}
 		return nil, nil
+	case ipc.TypeTargetTest:
+		var tt ipc.TargetTest
+		if err := msg.Decode(&tt); err != nil {
+			return nil, err
+		}
+		return r.probeTarget(ctx, tt.Target), nil
 	case ipc.TypeFaultStart, ipc.TypeFaultStop:
 		return nil, ipc.Errorf("unsupported", "fault injection is not available in this version")
 	}

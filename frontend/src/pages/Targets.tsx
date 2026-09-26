@@ -68,10 +68,12 @@ function TargetRow({ target }: { target: Target }) {
 
   const runTest = () =>
     test.mutate(target.id, {
-      onSuccess: (r) =>
-        r.ok
-          ? toast(t("{name}: HTTP {status} in {ms} ms", { name: target.name, status: r.http_status ?? 0, ms: r.latency_ms }), "ok")
-          : toast(t("{name}: {error} ({ms} ms)", { name: target.name, error: r.error ?? t("failed"), ms: r.latency_ms }), "error"),
+      onSuccess: (r) => {
+        const from = r.from === "camera" ? t("from camera {camera}", { camera: r.camera ?? "" }) : t("from the node");
+        return r.ok
+          ? toast(t("{name}: HTTP {status} in {ms} ms, {from}", { name: target.name, status: r.http_status ?? 0, ms: r.latency_ms, from }), "ok")
+          : toast(t("{name}: {error} ({ms} ms, {from})", { name: target.name, error: r.error ?? t("failed"), ms: r.latency_ms, from }), "error");
+      },
       onError: (err) => toast(errorMessage(err), "error"),
     });
 
@@ -99,7 +101,7 @@ function TargetRow({ target }: { target: Target }) {
       </TD>
       <TD>
         <div className="flex items-center justify-end gap-1">
-          <Button size="sm" variant="secondary" onClick={runTest} disabled={test.isPending} title={t("Send a test request from the node")}>
+          <Button size="sm" variant="secondary" onClick={runTest} disabled={test.isPending} title={t("Send a test request from a running camera that uses the target, or else from the node")}>
             <FlaskConical /> {test.isPending ? t("Testing…") : t("Test")}
           </Button>
           <Button

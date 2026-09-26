@@ -222,6 +222,7 @@ func (ss *session) run(b *cameraBundle) {
 			delete(s.sessions, ss.id)
 		}
 		s.mu.Unlock()
+		s.releaseNetns(ss.id)
 		close(ss.done)
 	}()
 	ctx := s.baseCtx
@@ -718,27 +719,45 @@ func (s *Service) defaultParent(ctx context.Context) string {
 	return info.DefaultInterface
 }
 
-// netnsName is sim-<camera>, readable for "ip netns exec" (unique among
-// running cameras).
+// netnsName is sim-<camera>, readable for "ip netns exec". The name is
+// reserved under the service lock until the camera's session ends, so two
+// cameras whose names give the same slug cannot ask for it at once (audit
+// B12); the one that comes second gets a suffix from its ID.
 func (s *Service) netnsName(b *cameraBundle) string {
 	base := "sim-" + domain.Slug(b.cam.Name, 30)
 	if base == "sim-" {
 		base = "sim-cam"
 	}
+	id := strings.ToLower(b.cam.ID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for id, ss := range s.sessions {
-		if id == b.cam.ID {
-			continue
-		}
-		ss.mu.Lock()
-		taken := ss.netns == base
-		ss.mu.Unlock()
-		if taken {
-			return base + "-" + strings.ToLower(b.cam.ID[len(b.cam.ID)-4:])
+	for name, owner := range s.netnsNames {
+		if owner == b.cam.ID {
+			delete(s.netnsNames, name)
 		}
 	}
-	return base
+	for _, name := range []string{base, base + "-" + id[len(id)-4:], base + "-" + id[len(id)-8:]} {
+		if owner, taken := s.netnsNames[name]; !taken || owner == b.cam.ID {
+			s.netnsNames[name] = b.cam.ID
+			return name
+		}
+	}
+	// Eight characters of a ULID's random part do not repeat in practice;
+	// the whole ID always is unique.
+	name := "sim-" + id
+	s.netnsNames[name] = b.cam.ID
+	return name
+}
+
+// releaseNetns frees the namespace name of a camera whose session ended.
+func (s *Service) releaseNetns(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, owner := range s.netnsNames {
+		if owner == id {
+			delete(s.netnsNames, name)
+		}
+	}
 }
 
 // buildConfigure assembles the full configuration sent to the camera.

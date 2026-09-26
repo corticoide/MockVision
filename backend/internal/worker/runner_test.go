@@ -513,3 +513,37 @@ func TestQueueIsBounded(t *testing.T) {
 		t.Fatalf("joining an open job: created %v, %v", created, err)
 	}
 }
+
+// An interrupted job nobody resumes is canceled, and cleaned up, once it
+// is older than the retention (audit B14).
+func TestPruneCancelsStaleInterruptedJobs(t *testing.T) {
+	st := openStore(t)
+	var mu sync.Mutex
+	var done []int
+	reached := make(chan struct{}, 1)
+	var cleaned atomic.Int32
+	kind := Kind{Handler: steps(&done, &mu, 1, reached), Cleanup: func(Job) { cleaned.Add(1) }}
+	h := newHarness(t, st, map[string]Kind{"steps": kind})
+	h.start()
+	j := h.submit(Spec{Type: "steps", Key: "stale"})
+	<-reached
+	h.stop()
+	if got := h.status(j.ID); got != Interrupted {
+		t.Fatalf("after the stop: %s", got)
+	}
+	h2 := newHarness(t, st, map[string]Kind{"steps": kind})
+	if _, err := h2.r.Prune(context.Background(), time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h2.status(j.ID); got != Interrupted {
+		t.Fatalf("a recent interrupted job must be kept: %s", got)
+	}
+	if _, err := h2.r.Prune(context.Background(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "cleanup", func() bool { return cleaned.Load() == 1 })
+	// Canceled past the retention, it is pruned in the same pass.
+	if _, err := h2.r.Get(context.Background(), j.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an old interrupted job must be gone: %v", err)
+	}
+}

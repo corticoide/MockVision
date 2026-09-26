@@ -101,7 +101,9 @@ start_node() {
 		MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN "${COMPOSE[@]}" up -d --no-build >/dev/null 2>&1 ||
 			fail "docker compose up failed"
 	else
+		# The test host has no mockvision users: numeric ones, as the image's.
 		MOCKVISION_DATA=$WORK/data MOCKVISION_LISTEN=127.0.0.1:$PORT MOCKVISION_PARENT_IF=$LAN \
+			MOCKVISION_SERVICE_USER=10001 MOCKVISION_CAMERA_USER=10002 \
 			"$BIN" run >>"$WORK/node.log" 2>&1 &
 		RUN_PID=$!
 	fi

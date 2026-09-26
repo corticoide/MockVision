@@ -897,6 +897,9 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 	if err != nil {
 		return store.NotFound(err)
 	}
+	// Runs after the unlock below: nothing about the camera stays in
+	// memory once it is gone (audit B14).
+	defer s.forgetCamera(id)
 	lock := s.opLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -917,6 +920,23 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 	s.pub.Publish("cameras", "deleted", map[string]string{"id": id})
 	s.pub.Forget("camera:" + id)
 	return nil
+}
+
+// forgetCamera drops what the service keeps in memory about a camera.
+func (s *Service) forgetCamera(id string) {
+	if _, err := s.store.R().GetCamera(context.Background(), id); err == nil {
+		return // the delete failed: the camera is still there
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.opLocks, id)
+	delete(s.exits, id)
+	delete(s.retries, id)
+	for name, owner := range s.netnsNames {
+		if owner == id {
+			delete(s.netnsNames, name)
+		}
+	}
 }
 
 // CameraConfig returns the camera's native parameters.

@@ -1300,11 +1300,16 @@ export interface components {
             password?: string;
             enabled?: boolean;
         };
+        /** @description The request leaves from a running camera that uses the target, across the same network as its deliveries; with none running it leaves from the node, which refuses its own and link-local addresses. */
         TargetTest: {
             ok: boolean;
             http_status?: number;
             latency_ms: number;
             error?: string;
+            /** @enum {string} */
+            from: "camera" | "node";
+            /** @description Name of the camera the request left from */
+            camera?: string;
         };
         Trigger: {
             /** @example line_crossing */

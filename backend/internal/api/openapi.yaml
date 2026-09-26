@@ -1403,12 +1403,18 @@ components:
         enabled: { type: boolean }
     TargetTest:
       type: object
-      required: [ok, latency_ms]
+      description: >
+        The request leaves from a running camera that uses the target, across
+        the same network as its deliveries; with none running it leaves from
+        the node, which refuses its own and link-local addresses.
+      required: [ok, latency_ms, from]
       properties:
         ok: { type: boolean }
         http_status: { type: integer }
         latency_ms: { type: integer }
         error: { type: string }
+        from: { type: string, enum: [camera, node] }
+        camera: { type: string, description: Name of the camera the request left from }
     Trigger:
       type: object
       required: [type]
