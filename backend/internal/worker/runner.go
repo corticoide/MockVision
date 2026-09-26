@@ -164,7 +164,15 @@ func (r *Runner) dispatch(ctx context.Context) {
 	if r.stopping {
 		return
 	}
-	free := r.cfg.MaxRunning() - len(r.running)
+	// A job waiting for an answer holds no slot: a question left open
+	// must not hold back the encodings cameras wait for.
+	busy := 0
+	for _, ex := range r.running {
+		if ex.job.Status != Waiting {
+			busy++
+		}
+	}
+	free := r.cfg.MaxRunning() - busy
 	if free <= 0 {
 		return
 	}

@@ -99,7 +99,9 @@ func (run *Run) StepContext(ctx context.Context) (context.Context, context.Cance
 
 // Ask puts the job in Waiting until the user answers the question or it
 // expires after timeout. On expiry the job goes on with the default
-// answer, or fails with ErrUnanswered when there is none.
+// answer, or fails with ErrUnanswered when there is none. While it waits
+// the job holds no slot, so after the answer more jobs than the limit may
+// run for a while.
 func (run *Run) Ask(ctx context.Context, q Question, timeout time.Duration) (string, error) {
 	r := run.r
 	q.ID = ulid.Make().String()
@@ -114,6 +116,7 @@ func (run *Run) Ask(ctx context.Context, q Question, timeout time.Duration) (str
 	_ = r.save(context.Background(), &run.ex.job)
 	r.event(context.Background(), run.ex.job.ID, EventQuestion, q)
 	r.mu.Unlock()
+	r.wake() // its slot is free while it waits
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

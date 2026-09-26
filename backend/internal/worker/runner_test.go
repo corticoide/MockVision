@@ -411,6 +411,36 @@ func TestQuestions(t *testing.T) {
 	}
 }
 
+// A job waiting for an answer does not hold back the queue.
+func TestWaitingHoldsNoSlot(t *testing.T) {
+	ran := make(chan struct{})
+	h := newHarness(t, openStore(t), map[string]Kind{
+		"ask": {Handler: func(ctx context.Context, run *Run) (any, error) {
+			return run.Ask(ctx, Question{Text: "Go on?", Options: []Option{{ID: "yes", Label: "Yes"}}, Default: "yes"}, time.Minute)
+		}},
+		"quick": {Handler: func(context.Context, *Run) (any, error) {
+			close(ran)
+			return nil, nil
+		}},
+	})
+	h.max.Store(1)
+	h.start()
+	asking := h.submit(Spec{Type: "ask"})
+	waitFor(t, "the question", func() bool { return h.status(asking.ID) == Waiting })
+	quick := h.submit(Spec{Type: "quick"})
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the queued job did not run while the other waited: %s", h.status(quick.ID))
+	}
+	if _, err := h.r.Answer(context.Background(), asking.ID, "yes"); err != nil {
+		t.Fatal(err)
+	}
+	if j := h.wait(asking.ID); j.Status != Completed {
+		t.Fatalf("after the answer: %+v", j)
+	}
+}
+
 func TestStepTimeoutAndPanic(t *testing.T) {
 	h := newHarness(t, openStore(t), map[string]Kind{
 		"slow": {Handler: func(ctx context.Context, run *Run) (any, error) {
