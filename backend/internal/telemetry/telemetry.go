@@ -269,8 +269,17 @@ func (c *Cameras) Add(id string, s CameraSample) {
 	for cut < len(list) && s.At.Sub(list[cut].At) > Retention {
 		cut++
 	}
+	// A camera reports every two seconds; whatever it sends, a camera
+	// keeps at most one sample a second of the window.
+	if n := len(list) - cut; n > MaxSamples {
+		cut += n - MaxSamples
+	}
 	c.byID[id] = list[cut:]
 }
+
+// MaxSamples bounds the samples kept per camera: one a second over the
+// retention window.
+const MaxSamples = int(Retention / time.Second)
 
 // Latest returns the last sample of a camera.
 func (c *Cameras) Latest(id string) (CameraSample, bool) {

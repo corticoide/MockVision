@@ -18,8 +18,8 @@ UPDATE targets SET name = @name, config_json = @config_json, secret_enc = @secre
 DELETE FROM targets WHERE id = @id;
 
 -- name: InsertEvent :exec
-INSERT INTO events (id, camera_id, type, at, data_json, rule_id, trigger_id)
-VALUES (@id, @camera_id, @type, @at, @data_json, @rule_id, @trigger_id);
+INSERT INTO events (id, camera_id, type, at, data_json, rule_id, trigger_id, received_at, expected_deliveries)
+VALUES (@id, @camera_id, @type, @at, @data_json, @rule_id, @trigger_id, @received_at, @expected_deliveries);
 
 -- name: GetEvent :one
 SELECT events.*, cameras.name AS camera_name
@@ -40,7 +40,7 @@ ORDER BY events.id DESC
 LIMIT @limit;
 
 -- name: DeleteEventsBefore :execrows
-DELETE FROM events WHERE at < @before;
+DELETE FROM events WHERE received_at < @before;
 
 -- name: InsertDelivery :exec
 INSERT INTO deliveries (id, event_id, target_id, attempt, at, status, http_status, latency_ms, error)

@@ -135,13 +135,15 @@ type Delivery struct {
 }
 
 type Event struct {
-	ID        string
-	CameraID  string
-	Type      string
-	At        int64
-	DataJson  string
-	RuleID    sql.NullString
-	TriggerID sql.NullString
+	ID                 string
+	CameraID           string
+	Type               string
+	At                 int64
+	DataJson           string
+	RuleID             sql.NullString
+	TriggerID          sql.NullString
+	ReceivedAt         int64
+	ExpectedDeliveries int64
 }
 
 type Job struct {

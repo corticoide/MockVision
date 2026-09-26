@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/netctl"
+	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/telemetry"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -46,6 +48,12 @@ type session struct {
 	// applied are the restart-only settings the process was launched
 	// with; the view compares them with the stored ones.
 	applied map[string]string
+
+	// lastSample and notices pace what the camera may send: a heartbeat
+	// counts once a second at most, and logs, gaps and client notices
+	// share a small budget (audit B1).
+	lastSample time.Time
+	notices    tokenBucket
 
 	stopCh   chan string
 	stopOnce sync.Once
@@ -169,7 +177,7 @@ func actorName(a Actor) string {
 func (s *Service) startSession(b *cameraBundle) *session {
 	ss := &session{
 		s: s, id: b.cam.ID, name: b.cam.Name, state: domain.StateStopped, applied: restartKeys(b),
-		stopCh: make(chan string, 1), done: make(chan struct{}),
+		stopCh: make(chan string, 1), done: make(chan struct{}), notices: tokenBucket{tokens: noticeBurst, at: time.Now()},
 		hello: make(chan ipc.Hello, 1), ready: make(chan ipc.Ready, 1), failed: make(chan string, 1),
 	}
 	s.mu.Lock()
@@ -481,9 +489,15 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		now := time.Now()
 		ss.mu.Lock()
 		ss.lastHB = now
+		sample := now.Sub(ss.lastSample) >= time.Second
+		if sample {
+			ss.lastSample = now
+		}
 		ss.mu.Unlock()
-		s.metrics.Add(ss.id, telemetry.CameraSample{At: now, CPUPercent: hb.CPUPercent, RSSBytes: hb.RSSBytes, Clients: hb.Clients,
-			BytesIn: hb.BytesIn, BytesOut: hb.BytesOut, Requests: hb.Requests})
+		if sample {
+			s.metrics.Add(ss.id, s.clampSample(telemetry.CameraSample{At: now, CPUPercent: hb.CPUPercent, RSSBytes: hb.RSSBytes, Clients: hb.Clients,
+				BytesIn: hb.BytesIn, BytesOut: hb.BytesOut, Requests: hb.Requests}))
+		}
 	case ipc.TypeEvent:
 		var ev ipc.EventMsg
 		if err := msg.Decode(&ev); err != nil {
@@ -502,22 +516,11 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, err
 		}
 		s.clientChanges(ctx, ss.id, sc.Changes)
-	case ipc.TypeClient:
-		var c ipc.ClientMsg
-		_ = msg.Decode(&c)
-		s.pub.Publish("camera:"+ss.id, "client", c)
-	case ipc.TypeGap:
-		var g ipc.Gap
-		_ = msg.Decode(&g)
-		s.log.Info("request unknown to the profile", "camera", ss.id, "protocol", g.Protocol, "client", g.ClientIP, "request", g.Summary, "count", g.Count)
-		s.pub.Publish("camera:"+ss.id, "gap", g)
-	case ipc.TypeLog:
-		var l ipc.Log
-		_ = msg.Decode(&l)
-		level := slog.LevelInfo
-		_ = level.UnmarshalText([]byte(l.Level))
-		s.log.Log(ctx, level, l.Msg, "camera", ss.id, "attrs", l.Attrs)
-		s.pub.Publish("camera:"+ss.id, "log", l)
+	case ipc.TypeClient, ipc.TypeGap, ipc.TypeLog:
+		if !ss.allowNotice() {
+			return nil, nil // over budget: dropped
+		}
+		ss.notice(ctx, msg)
 	case ipc.TypeBye:
 	default:
 		return nil, ipc.Errorf("unsupported", "unknown message type %q", msg.Type)
@@ -525,12 +528,115 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 	return nil, nil
 }
 
+// Budget of the notices a camera sends: logs, gaps and client changes.
+const (
+	noticeBurst = 50
+	noticeRate  = 10.0 // per second
+)
+
+// tokenBucket paces a stream of messages.
+type tokenBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+func (b *tokenBucket) take(now time.Time, burst, rate float64) bool {
+	b.tokens = min(burst, b.tokens+now.Sub(b.at).Seconds()*rate)
+	b.at = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (ss *session) allowNotice() bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.notices.take(time.Now(), noticeBurst, noticeRate)
+}
+
+// notice logs and publishes a client, gap or log message of the camera,
+// with its strings cut to a sane size.
+func (ss *session) notice(ctx context.Context, msg *ipc.Envelope) {
+	s := ss.s
+	switch msg.Type {
+	case ipc.TypeClient:
+		var c ipc.ClientMsg
+		_ = msg.Decode(&c)
+		c.Protocol, c.IP = truncate(c.Protocol, 16), truncate(c.IP, 64)
+		s.pub.Publish("camera:"+ss.id, "client", c)
+	case ipc.TypeGap:
+		var g ipc.Gap
+		_ = msg.Decode(&g)
+		g.Protocol, g.ClientIP, g.Summary = truncate(g.Protocol, 16), truncate(g.ClientIP, 64), truncate(g.Summary, 512)
+		s.log.Info("request unknown to the profile", "camera", ss.id, "protocol", g.Protocol, "client", g.ClientIP, "request", g.Summary, "count", g.Count)
+		s.pub.Publish("camera:"+ss.id, "gap", g)
+	case ipc.TypeLog:
+		var l ipc.Log
+		_ = msg.Decode(&l)
+		level := slog.LevelInfo
+		_ = level.UnmarshalText([]byte(l.Level))
+		l.Msg = truncate(l.Msg, 1024)
+		if raw, _ := json.Marshal(l.Attrs); len(raw) > 4096 {
+			l.Attrs = map[string]any{"attrs": "dropped: larger than 4 KiB"}
+		}
+		s.log.Log(ctx, level, l.Msg, "camera", ss.id, "attrs", l.Attrs)
+		s.pub.Publish("camera:"+ss.id, "log", l)
+	}
+}
+
+// clampSample keeps a camera's reported metrics within what the node can
+// hold, so a camera cannot skew admission or the dashboard.
+func (s *Service) clampSample(c telemetry.CameraSample) telemetry.CameraSample {
+	cpus := max(s.node.CPUCount(), 1)
+	c.CPUPercent = min(max(c.CPUPercent, 0), float64(100*cpus))
+	if total := s.node.Latest().MemTotal; total > 0 {
+		c.RSSBytes = min(c.RSSBytes, total)
+	}
+	c.Clients = max(c.Clients, 0)
+	return c
+}
+
+// maxChanges bounds the parameter changes of one message.
+const maxChanges = 256
+
 // clientChanges stores changes a client made through the emulated API.
-func (s *Service) clientChanges(ctx context.Context, id string, changes []engine.Change) {
+// The camera's report is checked against the profile again: unknown keys
+// and invalid values are dropped, and the binding comes from the profile,
+// not from the camera (audit B1).
+func (s *Service) clientChanges(ctx context.Context, id string, reported []engine.Change) {
+	if len(reported) == 0 {
+		return
+	}
+	b, err := s.loadBundle(ctx, id)
+	if err != nil {
+		return
+	}
+	if len(reported) > maxChanges {
+		reported = reported[:maxChanges]
+	}
+	var changes []engine.Change
+	for _, c := range reported {
+		p, ok := b.doc.State[c.Key]
+		if !ok {
+			s.log.Warn("camera reported a change of an unknown parameter", "camera", id, "key", truncate(c.Key, 64))
+			continue
+		}
+		v, err := profile.Coerce(p, c.Value)
+		if err != nil {
+			s.log.Warn("camera reported an invalid value", "camera", id, "key", c.Key, "error", err)
+			continue
+		}
+		changes = append(changes, engine.Change{Key: c.Key, Value: v, Bind: p.Bind, Origin: c.Origin})
+	}
 	if len(changes) == 0 {
 		return
 	}
-	ip := changes[0].Origin.IP
+	ip := ""
+	if a, err := netip.ParseAddr(changes[0].Origin.IP); err == nil {
+		ip = a.String()
+	}
 	if err := s.persistChanges(ctx, id, changes, "client:"+ip); err != nil {
 		s.log.Warn("cannot store camera change", "camera", id, "error", err)
 		return
