@@ -71,7 +71,9 @@ const (
 func Landlock(paths Paths) (bool, error) {
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if errno != 0 {
-		if errno == unix.ENOSYS || errno == unix.EOPNOTSUPP {
+		// ENOSYS and EOPNOTSUPP: the kernel has no Landlock, or it is off.
+		// EPERM: a container's seccomp profile refuses the call.
+		if errno == unix.ENOSYS || errno == unix.EOPNOTSUPP || errno == unix.EPERM {
 			return false, nil
 		}
 		return false, fmt.Errorf("sandbox: landlock version: %w", errno)
