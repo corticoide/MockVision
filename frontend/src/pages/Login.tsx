@@ -13,6 +13,7 @@ export function LoginPage({ mode }: { mode: "login" | "setup" }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [setupCode, setSetupCode] = useState("");
   const [localError, setLocalError] = useState("");
   const login = useLogin(mode);
   const t = useT();
@@ -24,7 +25,7 @@ export function LoginPage({ mode }: { mode: "login" | "setup" }) {
       setLocalError(t("The passwords do not match."));
       return;
     }
-    login.mutate({ username, password });
+    login.mutate(mode === "setup" ? { username, password, setup_code: setupCode } : { username, password });
   };
 
   return (
@@ -42,6 +43,22 @@ export function LoginPage({ mode }: { mode: "login" | "setup" }) {
           </div>
         </div>
         <form onSubmit={submit} className="flex flex-col gap-3">
+          {mode === "setup" && (
+            <Field
+              label={t("Setup code")}
+              hint={t("Printed in the node's log when it starts, and saved in the setup-code file of its data directory.")}
+            >
+              <Input
+                value={setupCode}
+                onChange={(e) => setSetupCode(e.target.value)}
+                autoComplete="one-time-code"
+                spellCheck={false}
+                className="font-mono"
+                required
+                autoFocus
+              />
+            </Field>
+          )}
           <Field label={t("Username")}>
             <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
           </Field>
@@ -52,7 +69,7 @@ export function LoginPage({ mode }: { mode: "login" | "setup" }) {
               onChange={(e) => setPassword(e.target.value)}
               autoComplete={mode === "setup" ? "new-password" : "current-password"}
               required
-              autoFocus
+              autoFocus={mode === "login"}
             />
           </Field>
           {mode === "setup" && (

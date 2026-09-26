@@ -42,7 +42,11 @@ func newTestNode(t *testing.T) *testNode {
 	srv := httptest.NewServer(New(Config{}, svc, hub, static, log).Handler())
 	t.Cleanup(srv.Close)
 	n := &testNode{t: t, url: srv.URL}
-	resp := n.do("POST", "/auth/setup", `{"username":"admin","password":"correct horse battery"}`, map[string]string{"X-MockVision-Request": "1"})
+	code, _, err := svc.SetupCode(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := n.do("POST", "/auth/setup", `{"username":"admin","password":"correct horse battery","setup_code":"`+code+`"}`, map[string]string{"X-MockVision-Request": "1"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("setup: %d", resp.StatusCode)
 	}

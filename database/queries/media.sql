@@ -35,3 +35,21 @@ UPDATE renditions SET status = @status, sha256 = @sha256, error = @error WHERE i
 
 -- name: ListRenditionsByStatus :many
 SELECT * FROM renditions WHERE status = @status ORDER BY created_at;
+
+-- name: ListRenditionsWithAsset :many
+SELECT renditions.*, assets.sha256 AS asset_sha256
+FROM renditions
+JOIN assets ON assets.id = renditions.asset_id;
+
+-- Renditions no camera stream points to, created before a time: the
+-- garbage collector removes them with their files.
+
+-- name: ListUnusedRenditions :many
+SELECT renditions.*, assets.sha256 AS asset_sha256
+FROM renditions
+JOIN assets ON assets.id = renditions.asset_id
+WHERE renditions.created_at < @before
+  AND NOT EXISTS (SELECT 1 FROM camera_streams WHERE camera_streams.rendition_id = renditions.id);
+
+-- name: DeleteRendition :exec
+DELETE FROM renditions WHERE id = @id;

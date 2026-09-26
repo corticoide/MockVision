@@ -162,6 +162,16 @@ func (s *Service) DeleteAsset(ctx context.Context, actor Actor, id string) error
 	if store.Bool(a.Builtin) {
 		return domain.Conflict("", "the built-in test pattern cannot be deleted")
 	}
+	// Its renditions go with it: the rows by cascade, the files here.
+	var dirs []string
+	if rows, err := s.store.R().ListRenditionsWithAsset(ctx); err == nil {
+		for _, r := range rows {
+			if r.AssetID == id {
+				key := renditionParams(db.Rendition{Codec: r.Codec, Width: r.Width, Height: r.Height, Fps: r.Fps, Gop: r.Gop, Bitrate: r.Bitrate}).Key(r.AssetSha256)
+				dirs = append(dirs, s.lib.RenditionFiles(key, r.Codec).Dir)
+			}
+		}
+	}
 	if _, err := s.store.W().DeleteAsset(ctx, id); err != nil {
 		if store.IsForeignKey(err) {
 			return domain.Conflict("", "the asset is used by cameras; change their image first")
@@ -169,6 +179,9 @@ func (s *Service) DeleteAsset(ctx context.Context, actor Actor, id string) error
 		return err
 	}
 	_ = os.Remove(s.lib.AssetPath(a.Sha256, assetExt(a)))
+	for _, d := range dirs {
+		_ = os.RemoveAll(d)
+	}
 	s.audit(ctx, actor, "asset.delete", "asset", id, map[string]string{"name": a.Filename})
 	return nil
 }
@@ -262,16 +275,36 @@ func assetExt(a db.Asset) string {
 }
 
 // encodeLock serializes the encoding of one rendition: a rendition job and
-// a batch that prepares many may reach the same one.
+// a batch that prepares many may reach the same one. Callers release their
+// use with dropEncodeLock, so the map does not grow with every rendition
+// ever encoded.
 func (s *Service) encodeLock(key string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.encodes[key]
 	if !ok {
-		m = &sync.Mutex{}
+		m = &refMutex{}
 		s.encodes[key] = m
 	}
-	return m
+	m.refs++
+	return &m.Mutex
+}
+
+// dropEncodeLock releases a use of an encode lock taken with encodeLock.
+func (s *Service) dropEncodeLock(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.encodes[key]; ok {
+		if m.refs--; m.refs <= 0 {
+			delete(s.encodes, key)
+		}
+	}
+}
+
+// refMutex is a mutex with the number of callers that hold or wait for it.
+type refMutex struct {
+	sync.Mutex
+	refs int
 }
 
 // renditionInfo loads a rendition, its asset and its cache key.
@@ -388,6 +421,7 @@ func (s *Service) runRendition(ctx context.Context, run *worker.Run) (any, error
 // progress between from and to.
 func (s *Service) encodeSteps(ctx context.Context, run *worker.Run, r db.Rendition, asset db.Asset, key string, from, to float64) error {
 	lock := s.encodeLock(key)
+	defer s.dropEncodeLock(key)
 	lock.Lock()
 	defer lock.Unlock()
 	if s.lib.Ready(key, r.Codec) {
@@ -485,9 +519,127 @@ func (s *Service) regenerateStreams(ctx context.Context, id string) {
 	}
 }
 
+// regenDebounce lets a burst of encoder changes settle before a camera's
+// streams are encoded again.
+const regenDebounce = 500 * time.Millisecond
+
+// regenState coalesces the re-encodings of one camera: at most one runs,
+// and changes that arrive meanwhile lead to a single further run with the
+// latest values. A client of the emulated API changing encoder settings in
+// a loop can then keep at most one encoding per stream busy, instead of
+// queuing one per value (audit A2).
+type regenState struct{ again bool }
+
 // regenerateStreamsLater re-encodes a camera's streams in the background.
 func (s *Service) regenerateStreamsLater(id string) {
-	s.goBackground(func(ctx context.Context) { s.regenerateStreams(ctx, id) })
+	s.mu.Lock()
+	if st := s.regens[id]; st != nil {
+		st.again = true
+		s.mu.Unlock()
+		return
+	}
+	st := &regenState{}
+	s.regens[id] = st
+	s.mu.Unlock()
+	started := s.goBackground(func(ctx context.Context) {
+		defer func() {
+			s.mu.Lock()
+			delete(s.regens, id)
+			s.mu.Unlock()
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(regenDebounce):
+			}
+			s.mu.Lock()
+			st.again = false
+			s.mu.Unlock()
+			s.regenerateStreams(ctx, id)
+			s.mu.Lock()
+			again := st.again
+			s.mu.Unlock()
+			if !again {
+				return
+			}
+		}
+	})
+	if !started {
+		s.mu.Lock()
+		delete(s.regens, id)
+		s.mu.Unlock()
+	}
+}
+
+// renditionGrace is how long a rendition no camera uses is kept: a camera
+// switching back to it soon finds it encoded.
+const renditionGrace = 24 * time.Hour
+
+// collectRenditions deletes renditions no camera stream uses, with their
+// files, and the directories of renditions that no longer exist (deleted
+// assets, older encoding recipes). Without it, every encoder setting ever
+// used stayed on disk (audit A2).
+func (s *Service) collectRenditions(ctx context.Context, now time.Time) {
+	unused, err := s.store.R().ListUnusedRenditions(ctx, now.Add(-renditionGrace).UnixMilli())
+	if err != nil {
+		s.log.Warn("cannot list unused renditions", "error", err)
+		return
+	}
+	removed := 0
+	for _, r := range unused {
+		key := renditionParams(db.Rendition{Codec: r.Codec, Width: r.Width, Height: r.Height, Fps: r.Fps, Gop: r.Gop, Bitrate: r.Bitrate}).Key(r.AssetSha256)
+		lock := s.encodeLock(key)
+		if !lock.TryLock() {
+			continue // being encoded right now
+		}
+		if err := s.store.W().DeleteRendition(ctx, r.ID); err == nil {
+			_ = os.RemoveAll(s.lib.RenditionFiles(key, r.Codec).Dir)
+			removed++
+		}
+		lock.Unlock()
+		s.dropEncodeLock(key)
+	}
+	if removed > 0 {
+		s.log.Info("removed unused renditions", "count", removed)
+	}
+	s.sweepRenditionDirs(ctx, now)
+}
+
+// sweepRenditionDirs removes rendition directories that match no rendition,
+// once they are an hour old so an encoding that just started is spared.
+func (s *Service) sweepRenditionDirs(ctx context.Context, now time.Time) {
+	rows, err := s.store.R().ListRenditionsWithAsset(ctx)
+	if err != nil {
+		return
+	}
+	known := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		known[renditionParams(db.Rendition{Codec: r.Codec, Width: r.Width, Height: r.Height, Fps: r.Fps, Gop: r.Gop, Bitrate: r.Bitrate}).Key(r.AssetSha256)] = true
+	}
+	entries, err := os.ReadDir(s.lib.RenditionsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || known[e.Name()] || !validKey(e.Name()) {
+			continue
+		}
+		if info, err := e.Info(); err != nil || now.Sub(info.ModTime()) < time.Hour {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(s.lib.RenditionsDir, e.Name()))
+	}
+}
+
+// validKey reports whether a directory name is a rendition key: 64 hex
+// digits, so nothing else in the directory is ever removed.
+func validKey(name string) bool {
+	if len(name) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(name)
+	return err == nil
 }
 
 // SnapshotFile returns the JPEG of a camera stream, the main one when

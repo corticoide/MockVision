@@ -190,6 +190,22 @@ func (s *Service) AuthenticateToken(ctx context.Context, secret, ip string) (Ses
 	}, nil
 }
 
+// CheckToken reports whether an API token is still valid, without
+// recording a use: open WebSockets are checked with it.
+func (s *Service) CheckToken(ctx context.Context, secret string) error {
+	if !strings.HasPrefix(secret, tokenPrefix) || len(secret) > 100 {
+		return ErrInvalidToken
+	}
+	row, err := s.store.R().GetAPITokenByHash(ctx, tokenID(secret))
+	if err != nil {
+		return ErrInvalidToken
+	}
+	if exp := store.NullTime(row.ExpiresAt); (!exp.IsZero() && time.Now().After(exp)) || store.Bool(row.Disabled) {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
 // normalizeScopes validates scopes; write implies read, and none means read.
 func normalizeScopes(in []string) ([]string, error) {
 	write := false

@@ -48,3 +48,6 @@ SELECT CAST(coalesce(max(seq), 0) AS INTEGER) AS seq FROM job_events WHERE job_i
 
 -- name: ListJobEvents :many
 SELECT * FROM job_events WHERE job_id = @job_id AND seq > @after ORDER BY seq LIMIT @limit;
+
+-- name: CountQueuedJobs :one
+SELECT count(*) FROM jobs WHERE status = 'queued';

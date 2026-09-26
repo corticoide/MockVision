@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,8 +286,8 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cw.Header().Set("Server", cc.cfg.Server)
 	}
 
-	user, stale := cc.auth.check(r)
-	if user == "" {
+	user, ok, stale := cc.auth.check(r)
+	if !ok {
 		routeID = "auth"
 		cc.auth.challenge(cw, stale)
 		cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -318,6 +319,12 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeID = route.route.ID
+	if roles := route.route.allowedRoles(); roles != nil && !slices.Contains(roles, user.Role) {
+		cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		cw.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(cw, "403 Forbidden\n")
+		return
+	}
 	e.run(cw, r, route, route.action, data)
 }
 

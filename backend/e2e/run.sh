@@ -162,9 +162,20 @@ setup=$(curl -s "$API/auth/me" | json 'd.get("setup_required")')
 [ "$setup" = True ] || fail "a fresh node must require setup"
 ok "first run asks for the administrator"
 
-step "first login creates the administrator"
-api POST /auth/setup -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' | json 'd["user"]["username"]' | grep -qx admin || fail "setup"
-ok "admin created and logged in"
+step "first login creates the administrator with the setup code"
+code=$(api POST /auth/setup -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' -o /dev/null -w '%{http_code}')
+[ "$code" = 403 ] || fail "setup without the setup code answered $code"
+if [ "$MODE" = compose ]; then
+	SETUP_CODE=$(node_exec cat /data/setup-code | tr -d '[:space:]')
+else
+	SETUP_CODE=$(tr -d '[:space:]' <"$WORK/data/setup-code")
+fi
+node_log | grep -q "setup_code=$SETUP_CODE" || fail "the setup code is not in the node's log"
+api POST /auth/setup -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"e2e-password-1\",\"setup_code\":\"$SETUP_CODE\"}" |
+	json 'd["user"]["username"]' | grep -qx admin || fail "setup"
+if [ "$MODE" = compose ]; then node_exec test ! -e /data/setup-code; else [ ! -e "$WORK/data/setup-code" ]; fi ||
+	fail "the setup code outlived the setup"
+ok "setup needs the one-time code from the log; admin created and logged in"
 
 step "import profiles/milesight-demo.yaml"
 level=$(api POST /packages -F "file=@$ROOT/profiles/milesight-demo.yaml" | json 'd["profile"]["level"]')
@@ -253,7 +264,9 @@ api PUT "/cameras/$CID/users" -H 'Content-Type: application/json' \
 probe e2e-cam-pw >/dev/null && fail "RTSP still accepts the old password"
 code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u viewer:e2e-view "http://$CAM_IP/snapshot.cgi")
 [ "$code" = 200 ] || fail "the new account got $code"
-ok "new password and new account work at once; the old password is refused"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u viewer:e2e-view "http://$CAM_IP/cgi-bin/operator/param.cgi?action=set&Image.Brightness=10")
+[ "$code" = 403 ] || fail "a viewer account changed a parameter ($code)"
+ok "new password and new account work at once; the old password is refused; a viewer cannot change settings"
 api PATCH "/cameras/$CID/streams/main" -H 'Content-Type: application/json' -d '{"resolution":"1280x720"}' >/dev/null
 for _ in $(seq 1 120); do
 	[ "$(probe e2e-new-pw)" = "h264,1280,720" ] && break

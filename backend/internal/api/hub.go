@@ -118,6 +118,18 @@ func (h *Hub) Forget(topic string) {
 	h.mu.Unlock()
 }
 
+// disconnect ends the connections that match, for example those opened
+// with a token just revoked or a session just closed.
+func (h *Hub) disconnect(match func(*wsClient) bool, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if match(c) {
+			c.end(reason)
+		}
+	}
+}
+
 func (h *Hub) add(c *wsClient) {
 	h.mu.Lock()
 	h.clients[c] = struct{}{}

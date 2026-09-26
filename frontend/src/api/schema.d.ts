@@ -13,7 +13,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create the first administrator (first run only) */
+        /**
+         * Create the first administrator (first run only)
+         * @description Needs the node's one-time setup code, printed in its log at start-up and kept in the `setup-code` file of the data directory until the administrator exists. Attempts count against the address's sign-in limit.
+         */
         post: operations["setup"];
         delete?: never;
         options?: never;
@@ -747,6 +750,12 @@ export interface components {
             username: string;
             password: string;
         };
+        SetupRequest: {
+            username: string;
+            password: string;
+            /** @description One-time code from the node's log or its setup-code file; case and spaces are ignored */
+            setup_code: string;
+        };
         Me: {
             user: {
                 id: string;
@@ -1384,7 +1393,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Credentials"];
+                "application/json": components["schemas"]["SetupRequest"];
             };
         };
         responses: {
@@ -1397,8 +1406,11 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     login: {
@@ -1425,6 +1437,7 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     logout: {

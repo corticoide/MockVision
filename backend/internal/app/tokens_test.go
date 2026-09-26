@@ -72,7 +72,11 @@ func newBareService(t *testing.T) (*Service, *recorder) {
 // actor.
 func adminActor(t *testing.T, svc *Service) Actor {
 	t.Helper()
-	_, sess, err := svc.Setup(context.Background(), "admin", "correct horse battery", "10.0.0.5", "test")
+	code, _, err := svc.SetupCode(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sess, err := svc.Setup(context.Background(), "admin", "correct horse battery", code, "10.0.0.5", "test")
 	if err != nil {
 		t.Fatal(err)
 	}

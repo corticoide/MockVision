@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -493,5 +494,22 @@ func TestListAndPrune(t *testing.T) {
 	}
 	if rows, _ := st.R().ListJobEvents(context.Background(), db.ListJobEventsParams{JobID: a.ID, Limit: 10}); len(rows) != 0 {
 		t.Fatal("events outlive their job")
+	}
+}
+
+// Anything that queues work without limit is refused once the queue is
+// full; joining an open job still works.
+func TestQueueIsBounded(t *testing.T) {
+	h := newHarness(t, openStore(t), map[string]Kind{"noop": {Handler: func(context.Context, *Run) (any, error) { return nil, nil }}})
+	for i := range MaxQueued {
+		h.submit(Spec{Type: "noop", Key: fmt.Sprintf("k%d", i)})
+	}
+	_, _, err := h.r.Submit(context.Background(), Spec{Type: "noop", Key: "one-too-many"})
+	var cerr *domain.ConflictError
+	if !errors.As(err, &cerr) {
+		t.Fatalf("want a conflict, got %v", err)
+	}
+	if _, created, err := h.r.Submit(context.Background(), Spec{Type: "noop", Key: "k7"}); err != nil || created {
+		t.Fatalf("joining an open job: created %v, %v", created, err)
 	}
 }

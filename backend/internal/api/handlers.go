@@ -57,13 +57,21 @@ func meFrom(sess app.Session) meResponse {
 	return m
 }
 
+// setupRequest creates the first administrator with the node's one-time
+// setup code.
+type setupRequest struct {
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	SetupCode string `json:"setup_code"`
+}
+
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	var c credentials
+	var c setupRequest
 	if err := decode(r, &c); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	token, sess, err := s.svc.Setup(r.Context(), c.Username, c.Password, clientIP(r), r.UserAgent())
+	token, sess, err := s.svc.Setup(r.Context(), c.Username, c.Password, c.SetupCode, clientIP(r), r.UserAgent())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -88,8 +96,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 		_ = s.svc.Logout(r.Context(), c.Value)
+		s.hub.disconnect(func(wc *wsClient) bool { return wc.session == c.Value }, "logged out")
 	}
 	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
@@ -134,10 +143,12 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	if err := s.svc.RevokeToken(r.Context(), actor(r), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	if err := s.svc.RevokeToken(r.Context(), actor(r), id); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	s.hub.disconnect(func(wc *wsClient) bool { return wc.tokenID == id }, "the API token was revoked")
 	w.WriteHeader(http.StatusNoContent)
 }
 

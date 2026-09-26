@@ -37,6 +37,9 @@ export const es: Record<string, string> = {
   Name: "Nombre",
   Username: "Usuario",
   Password: "Contraseña",
+  "Setup code": "Código de setup",
+  "Printed in the node's log when it starts, and saved in the setup-code file of its data directory.":
+    "Se imprime en el log del nodo al arrancar y se guarda en el archivo setup-code de su directorio de datos.",
   Profile: "Perfil",
   Role: "Rol",
   Port: "Puerto",

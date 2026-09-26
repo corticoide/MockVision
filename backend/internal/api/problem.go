@@ -10,9 +10,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/app"
 	"github.com/corticoide/mockvision/backend/internal/domain"
@@ -50,6 +53,18 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, app.ErrInvalidToken) {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 	}
+	var (
+		locked  *app.LockedError
+		limited *app.RateLimitError
+	)
+	switch {
+	case errors.As(err, &locked):
+		w.Header().Set("Retry-After", retryAfter(time.Until(locked.Until)))
+	case errors.As(err, &limited):
+		w.Header().Set("Retry-After", retryAfter(limited.RetryAfter))
+	case errors.Is(err, app.ErrBusy):
+		w.Header().Set("Retry-After", "5")
+	}
 	writeProblem(w, r, p)
 }
 
@@ -61,6 +76,7 @@ func (s *Server) problemFor(r *http.Request, err error) Problem {
 		rerr   *domain.RejectedError
 		ierr   *app.ImportError
 		locked *app.LockedError
+		limit  *app.RateLimitError
 		berr   *badRequest
 	)
 	switch {
@@ -87,6 +103,13 @@ func (s *Server) problemFor(r *http.Request, err error) Problem {
 		return Problem{Type: problemType + "unauthenticated", Title: "Authentication required", Status: http.StatusUnauthorized, Detail: "wrong username or password"}
 	case errors.As(err, &locked):
 		return Problem{Type: problemType + "locked", Title: "Too many attempts", Status: http.StatusTooManyRequests, Detail: locked.Error()}
+	case errors.As(err, &limit):
+		return Problem{Type: problemType + "rate-limited", Title: "Too many attempts", Status: http.StatusTooManyRequests, Detail: limit.Error()}
+	case errors.Is(err, app.ErrBusy):
+		return Problem{Type: problemType + "busy", Title: "Busy", Status: http.StatusServiceUnavailable, Detail: err.Error()}
+	case errors.Is(err, app.ErrSetupCode):
+		return Problem{Type: problemType + "setup-code", Title: "Wrong setup code", Status: http.StatusForbidden, Detail: err.Error(),
+			Errors: []domain.FieldError{{Field: "setup_code", Message: "is missing or wrong"}}}
 	case errors.Is(err, app.ErrSetupDone):
 		return Problem{Type: problemType + "setup-done", Title: "Setup already completed", Status: http.StatusConflict}
 	case errors.Is(err, context.DeadlineExceeded):
@@ -102,6 +125,11 @@ type badRequest struct{ msg string }
 func (b *badRequest) Error() string { return b.msg }
 
 func badReq(msg string) error { return &badRequest{msg: msg} }
+
+// retryAfter formats a Retry-After value in whole seconds, at least one.
+func retryAfter(d time.Duration) string {
+	return strconv.Itoa(max(int(math.Ceil(d.Seconds())), 1))
+}
 
 // maxJSONBody bounds JSON request bodies.
 const maxJSONBody = 1 << 20

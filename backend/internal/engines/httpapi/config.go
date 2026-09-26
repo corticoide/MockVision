@@ -33,6 +33,28 @@ type Route struct {
 	ID     string `json:"id"`
 	Match  Match  `json:"match"`
 	Action Action `json:"action"`
+	// Roles are the camera account roles allowed to use the route. Empty
+	// means every role, except for routes that change parameters, which
+	// admin and operator accounts only may use (audit M5).
+	Roles []string `json:"roles,omitempty"`
+}
+
+// Camera account roles.
+const (
+	RoleAdmin    = "admin"
+	RoleOperator = "operator"
+	RoleViewer   = "viewer"
+)
+
+// allowedRoles returns the roles that may use a route.
+func (r Route) allowedRoles() []string {
+	if len(r.Roles) > 0 {
+		return r.Roles
+	}
+	if r.Action.Handler == HandlerStateSet {
+		return []string{RoleAdmin, RoleOperator}
+	}
+	return nil
 }
 
 // Match selects requests. Query and header values are exact, "~regex" for a
@@ -103,6 +125,7 @@ const configSchema = `{
       "required": ["id", "match", "action"],
       "properties": {
         "id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+        "roles": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"enum": ["admin", "operator", "viewer"]}},
         "match": {
           "type": "object",
           "additionalProperties": false,
@@ -171,6 +194,13 @@ func validate(raw json.RawMessage) []engine.Problem {
 			add(base+"/id", "route id %q is duplicated (first used by route %d)", r.ID, prev)
 		}
 		ids[r.ID] = i
+		for j, role := range r.Roles {
+			switch role {
+			case RoleAdmin, RoleOperator, RoleViewer:
+			default:
+				add(base+"/roles/"+strconv.Itoa(j), "unknown role %q; use admin, operator or viewer", role)
+			}
+		}
 		if r.Match.Method != "" && !methodPattern.MatchString(r.Match.Method) {
 			add(base+"/match/method", "invalid method %q", r.Match.Method)
 		}

@@ -187,6 +187,9 @@ engines:
           method: GET
           path: /cgi-bin/operator/param.cgi
           query: { action: set }
+        # Changing parameters needs an admin or operator account; viewers
+        # may only read, as on the real device.
+        roles: [admin, operator]
         action:
           handler: state.set
           from: query

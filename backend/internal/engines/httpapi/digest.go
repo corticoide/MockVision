@@ -58,19 +58,28 @@ func newAuthenticator(scheme, realm string, users func() []engine.User) *authent
 	}
 }
 
-// check returns the authenticated username, or "" and whether the nonce was
-// merely stale.
-func (a *authenticator) check(r *http.Request) (user string, stale bool) {
+// anonymous is the account of requests to a camera without authentication:
+// the profile chose to let anyone do anything.
+var anonymous = engine.User{Username: "anonymous", Role: RoleAdmin}
+
+// check returns the authenticated account, or ok false and whether the
+// nonce was merely stale.
+func (a *authenticator) check(r *http.Request) (user engine.User, ok, stale bool) {
 	h := r.Header.Get("Authorization")
+	var name string
 	switch {
 	case a.scheme == SchemeNone:
-		return "anonymous", false
+		return anonymous, true, false
 	case a.scheme == SchemeBasic && len(h) > 6 && strings.EqualFold(h[:6], "basic "):
-		return a.checkBasic(h[6:]), false
+		name = a.checkBasic(h[6:])
 	case a.scheme == SchemeDigest && len(h) > 7 && strings.EqualFold(h[:7], "digest "):
-		return a.checkDigest(r, h[7:])
+		name, stale = a.checkDigest(r, h[7:])
 	}
-	return "", false
+	if name == "" {
+		return engine.User{}, false, stale
+	}
+	u, found := a.lookup(name)
+	return u, found, false
 }
 
 // challenge writes the 401 response headers.

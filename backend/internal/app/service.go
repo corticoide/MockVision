@@ -64,18 +64,23 @@ type Service struct {
 	node    *telemetry.NodeSampler
 	metrics *telemetry.Cameras
 	login   *loginGuard
+	hashes  *hashLimiter
 	jobs    *worker.Runner
 
 	mu       sync.Mutex
 	sessions map[string]*session
 	retries  map[string]*retryState
-	encodes  map[string]*sync.Mutex
+	encodes  map[string]*refMutex
 	opLocks  map[string]*sync.Mutex
 	exits    map[string]netctl.Exit
+	regens   map[string]*regenState
 
 	// closing is set, under mu, when shutdown begins: no background work
 	// starts after that.
 	closing bool
+
+	setupMu   sync.Mutex
+	setupCode string
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -129,11 +134,13 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		node:     telemetry.NewNodeSampler(),
 		metrics:  telemetry.NewCameras(),
 		login:    newLoginGuard(),
+		hashes:   newHashLimiter(),
 		sessions: map[string]*session{},
 		retries:  map[string]*retryState{},
-		encodes:  map[string]*sync.Mutex{},
+		encodes:  map[string]*refMutex{},
 		opLocks:  map[string]*sync.Mutex{},
 		exits:    map[string]netctl.Exit{},
+		regens:   map[string]*regenState{},
 		baseCtx:  ctx,
 		cancel:   cancel,
 	}
@@ -151,6 +158,7 @@ func (s *Service) RuntimeKind() string { return s.rt.Kind() }
 // notices and retention. It blocks until ctx is done, then stops every
 // camera.
 func (s *Service) Run(ctx context.Context) error {
+	s.announceSetup(ctx)
 	if err := s.bootCameras(ctx); err != nil {
 		return err
 	}
@@ -178,17 +186,18 @@ func (s *Service) goLoop(fn func(context.Context)) {
 
 // goBackground runs work that outlives a request, such as re-encoding a
 // camera's streams. Shutdown cancels its context and waits for it.
-func (s *Service) goBackground(fn func(context.Context)) {
+func (s *Service) goBackground(fn func(context.Context)) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closing {
-		return
+		return false
 	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		fn(s.baseCtx)
 	}()
+	return true
 }
 
 // bootCameras applies RN-15: after a restart only cameras with autostart
@@ -289,4 +298,5 @@ func (s *Service) applyRetention(ctx context.Context) {
 		s.log.Info("retention: deleted jobs", "count", n)
 	}
 	_, _ = w.DeleteExpiredSessions(ctx, now.UnixMilli())
+	s.collectRenditions(ctx, now)
 }

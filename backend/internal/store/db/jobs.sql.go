@@ -10,6 +10,17 @@ import (
 	"database/sql"
 )
 
+const countQueuedJobs = `-- name: CountQueuedJobs :one
+SELECT count(*) FROM jobs WHERE status = 'queued'
+`
+
+func (q *Queries) CountQueuedJobs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countQueuedJobs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteJob = `-- name: DeleteJob :exec
 DELETE FROM jobs WHERE id = ?1
 `

@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +27,14 @@ type Config struct {
 	AllowedOrigins []string
 	// SecureCookies marks session cookies Secure (behind HTTPS).
 	SecureCookies bool
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For names
+	// the client; without them every client of a proxy would share its
+	// address, and one of them could lock the others out (audit M3).
+	TrustedProxies []netip.Prefix
+	// AllowedHosts, when set, are the only Host names the panel answers
+	// to, which stops DNS rebinding (audit M1). IP literals are always
+	// accepted.
+	AllowedHosts []string
 }
 
 // Server wires the HTTP API to the service.
@@ -48,7 +58,10 @@ const sessionCookie = "mv_session"
 
 type ctxKey int
 
-const sessionKey ctxKey = 1
+const (
+	sessionKey ctxKey = iota + 1
+	clientIPKey
+)
 
 func sessionFrom(ctx context.Context) (app.Session, bool) {
 	s, ok := ctx.Value(sessionKey).(app.Session)
@@ -83,12 +96,90 @@ func bearerToken(r *http.Request) (token string, ok bool) {
 	return strings.TrimSpace(token), true
 }
 
+// clientIP is the address of the client that made a request, as the
+// withClientIP middleware resolved it.
 func clientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(clientIPKey).(string); ok {
+		return ip
+	}
+	return remoteIP(r)
+}
+
+func remoteIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// resolveClientIP returns the peer address or, when the peer is a trusted
+// proxy, the rightmost X-Forwarded-For address that is not one: entries
+// further left were written by the client and prove nothing.
+func (s *Server) resolveClientIP(r *http.Request) string {
+	peer := remoteIP(r)
+	if !s.trusted(peer) {
+		return peer
+	}
+	var hops []string
+	for _, h := range r.Header.Values("X-Forwarded-For") {
+		for _, part := range strings.Split(h, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				hops = append(hops, part)
+			}
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(hops[i])
+		if err != nil {
+			return peer
+		}
+		if !s.trusted(a.Unmap().String()) {
+			return a.Unmap().String()
+		}
+	}
+	return peer
+}
+
+func (s *Server) trusted(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	for _, p := range s.cfg.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkHost refuses requests for a Host name outside AllowedHosts: a page
+// that rebinds its own name to the node's address cannot reach the panel.
+func (s *Server) checkHost(next http.Handler) http.Handler {
+	if len(s.cfg.AllowedHosts) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
+		if _, err := netip.ParseAddr(host); err != nil && !slices.ContainsFunc(s.cfg.AllowedHosts, func(a string) bool { return strings.EqualFold(a, host) }) {
+			writeProblem(w, r, Problem{Type: problemType + "misdirected", Title: "Unknown host name", Status: http.StatusMisdirectedRequest,
+				Detail: "this node does not answer to " + host + "; add it to MOCKVISION_ALLOWED_HOSTS"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) withClientIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientIPKey, s.resolveClientIP(r))))
+	})
 }
 
 // Handler returns the root handler.
@@ -171,7 +262,7 @@ func (s *Server) Handler() http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/", s.csrf(api))
 	root.Handle("/", spaHandler(s.static))
-	return s.recoverer(securityHeaders(root))
+	return s.recoverer(s.withClientIP(securityHeaders(s.checkHost(root))))
 }
 
 // requireAuth accepts an API token (Authorization: Bearer) or a session

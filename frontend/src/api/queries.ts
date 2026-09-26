@@ -72,8 +72,12 @@ export function useMe() {
 export function useLogin(mode: "login" | "setup") {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { username: string; password: string }) =>
-      unwrap(mode === "setup" ? await api.POST("/auth/setup", { body }) : await api.POST("/auth/login", { body })),
+    mutationFn: async ({ setup_code, ...body }: { username: string; password: string; setup_code?: string }) =>
+      unwrap(
+        mode === "setup"
+          ? await api.POST("/auth/setup", { body: { ...body, setup_code: setup_code ?? "" } })
+          : await api.POST("/auth/login", { body }),
+      ),
     onSuccess: () => qc.invalidateQueries(),
   });
 }

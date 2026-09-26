@@ -47,6 +47,11 @@ type Config struct {
 	Log         *slog.Logger
 }
 
+// MaxQueued bounds the jobs waiting in the queue. Anything that can queue
+// work without limit, such as clients of a camera's emulated API changing
+// its encoder settings, would otherwise grow it forever (audit A2).
+const MaxQueued = 500
+
 // ErrUnanswered ends a job whose question expired with no default.
 var ErrUnanswered = errors.New("nobody answered the job's question in time")
 
@@ -331,6 +336,11 @@ func (r *Runner) Submit(ctx context.Context, spec Spec) (Job, bool, error) {
 		if !errors.Is(store.NotFound(err), domain.ErrNotFound) {
 			return Job{}, false, err
 		}
+	}
+	if n, err := r.cfg.Store.R().CountQueuedJobs(ctx); err != nil {
+		return Job{}, false, err
+	} else if n >= MaxQueued {
+		return Job{}, false, domain.Conflict("", "the job queue is full (%d jobs waiting); try again when some have run", n)
 	}
 	now := time.Now()
 	row := db.InsertJobParams{

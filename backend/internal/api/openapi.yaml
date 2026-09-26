@@ -37,16 +37,24 @@ paths:
       tags: [auth]
       operationId: setup
       summary: Create the first administrator (first run only)
+      description: >
+        Needs the node's one-time setup code, printed in its log at start-up
+        and kept in the `setup-code` file of the data directory until the
+        administrator exists. Attempts count against the address's sign-in
+        limit.
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Credentials" }
+            schema: { $ref: "#/components/schemas/SetupRequest" }
       responses:
         "201": { description: Created and logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
   /auth/login:
     post:
       tags: [auth]
@@ -61,6 +69,7 @@ paths:
         "200": { description: Logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
   /auth/logout:
     post:
       tags: [auth]
@@ -783,6 +792,13 @@ components:
       properties:
         username: { type: string }
         password: { type: string }
+    SetupRequest:
+      type: object
+      required: [username, password, setup_code]
+      properties:
+        username: { type: string }
+        password: { type: string, minLength: 10 }
+        setup_code: { type: string, description: "One-time code from the node's log or its setup-code file; case and spaces are ignored" }
     Me:
       type: object
       required: [user, expires_at]
