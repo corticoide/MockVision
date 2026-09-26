@@ -144,6 +144,33 @@ type Event struct {
 	TriggerID sql.NullString
 }
 
+type Job struct {
+	ID             string
+	Type           string
+	Title          string
+	Status         string
+	Progress       float64
+	Step           string
+	ParamsJson     string
+	CheckpointJson string
+	QuestionJson   sql.NullString
+	ResultJson     string
+	DedupeKey      sql.NullString
+	CreatedBy      string
+	CreatedAt      int64
+	StartedAt      sql.NullInt64
+	FinishedAt     sql.NullInt64
+	Error          string
+}
+
+type JobEvent struct {
+	JobID       string
+	Seq         int64
+	At          int64
+	Kind        string
+	PayloadJson string
+}
+
 type Package struct {
 	ID              string
 	Kind            string
