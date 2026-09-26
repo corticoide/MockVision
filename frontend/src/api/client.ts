@@ -32,6 +32,11 @@ export type AuditPage = Schemas["AuditPage"];
 export type BulkAction = Schemas["BulkAction"];
 export type BulkResult = Schemas["BulkResult"];
 export type NodeSample = Schemas["NodeSample"];
+export type Job = Schemas["Job"];
+export type JobStatus = Job["status"];
+export type JobDetail = Schemas["JobDetail"];
+export type JobEvent = Schemas["JobEvent"];
+export type JobPage = Schemas["JobPage"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.

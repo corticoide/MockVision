@@ -1,7 +1,7 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
-import type { AuditEntry, AuditPage, Camera, EventItem, EventPage, NodeMetrics, NodeSample } from "./client";
-import { type AuditFilter, auditMatches, keys } from "./queries";
+import type { AuditEntry, AuditPage, Camera, EventItem, EventPage, Job, JobDetail, JobEvent, JobPage, NodeMetrics, NodeSample } from "./client";
+import { type AuditFilter, auditMatches, type JobFilter, jobMatches, keys } from "./queries";
 
 /** A message of the WebSocket: every topic numbers its messages. */
 interface Message {
@@ -14,7 +14,7 @@ interface Message {
 
 type Status = "connecting" | "open" | "closed";
 
-const topics = ["cameras", "events", "node", "profiles", "audit"];
+const topics = ["cameras", "events", "node", "profiles", "audit", "jobs"];
 
 /** How long the dashboard's charts reach back. */
 const historyWindow = 10 * 60_000;
@@ -133,7 +133,14 @@ export class LiveClient {
       case "audit":
         if (m.type === "entry") this.onAudit(m.data as AuditEntry);
         break;
+      case "jobs":
+        if (m.type === "job") this.onJob(m.data as Job);
+        break;
       default:
+        if (m.topic.startsWith("job:") && m.type === "event") {
+          this.onJobEvent(m.data as JobEvent);
+          break;
+        }
         if (m.topic.startsWith("camera:") && m.type === "config") {
           // A client of the emulated API or the panel changed parameters.
           this.qc.invalidateQueries({ queryKey: keys.cameraConfig(m.topic.slice("camera:".length)) });
@@ -146,7 +153,15 @@ export class LiveClient {
       this.qc.invalidateQueries({ queryKey: keys.cameraConfig(topic.slice("camera:".length)) });
       return;
     }
+    if (topic.startsWith("job:")) {
+      this.qc.invalidateQueries({ queryKey: keys.job(topic.slice("job:".length)) });
+      return;
+    }
     switch (topic) {
+      case "node":
+        // Samples were missed: reload the charts' ten minutes.
+        this.qc.invalidateQueries({ queryKey: keys.nodeHistory });
+        break;
       case "cameras":
         this.qc.invalidateQueries({ queryKey: keys.cameras });
         break;
@@ -159,7 +174,36 @@ export class LiveClient {
       case "audit":
         this.qc.invalidateQueries({ queryKey: ["audit"] });
         break;
+      case "jobs":
+        this.qc.invalidateQueries({ queryKey: ["jobs"] });
+        break;
     }
+  }
+
+  /** A job changed: update its detail and every loaded list it belongs to. */
+  private onJob(job: Job) {
+    this.qc.setQueryData<JobDetail>(keys.job(job.id), (d) => d && { ...d, ...job });
+    for (const [key, page] of this.qc.getQueriesData<JobPage>({ queryKey: ["jobs"] })) {
+      if (!page) continue;
+      const filter = key[1] as JobFilter;
+      const i = page.items.findIndex((j) => j.id === job.id);
+      const belongs = jobMatches(filter, job);
+      let items = page.items;
+      if (i >= 0) {
+        items = belongs ? items.map((j) => (j.id === job.id ? job : j)) : items.filter((j) => j.id !== job.id);
+      } else if (belongs) {
+        items = [job, ...items];
+      } else {
+        continue;
+      }
+      this.qc.setQueryData<JobPage>(key, { ...page, items });
+    }
+  }
+
+  private onJobEvent(e: JobEvent) {
+    this.qc.setQueryData<JobDetail>(keys.job(e.job_id), (d) =>
+      d && !d.events.some((x) => x.seq === e.seq) ? { ...d, events: [...d.events, e] } : d,
+    );
   }
 
   private onMetrics(m: NodeMetrics) {
@@ -290,6 +334,11 @@ function watchTopic(topic: string) {
 /** Follows the topic of one camera while the component is mounted. */
 export function useCameraTopic(id: string) {
   useEffect(() => watchTopic(`camera:${id}`), [id]);
+}
+
+/** Follows the history of one job while the component is mounted. */
+export function useJobTopic(id: string | null) {
+  useEffect(() => (id ? watchTopic(`job:${id}`) : undefined), [id]);
 }
 
 const closed = () => "closed" as Status;

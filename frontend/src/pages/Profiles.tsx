@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, Empty, Notice, PageHeader } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useT } from "@/lib/i18n";
+import { navigate } from "@/lib/router";
 import { cn, formatTime } from "@/lib/utils";
 
 export function ProfilesPage() {
@@ -23,6 +24,12 @@ export function ProfilesPage() {
     setReport(null);
     importer.mutate(file, {
       onSuccess: (res) => {
+        if ("job" in res) {
+          // Still queued or running after a minute: it goes on as a job.
+          toast(t("The import of {name} goes on in the background; follow it in Jobs.", { name: file.name }), "info");
+          navigate("/jobs");
+          return;
+        }
         const id = `${res.profile.profile_id}@${res.profile.version}`;
         setReport({
           report: res.report,

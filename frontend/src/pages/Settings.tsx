@@ -42,7 +42,7 @@ function LimitsCard() {
   if (!form) return <Card className="p-4 text-muted">{t("Loading…")}</Card>;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm({ ...form, [k]: v });
-  const num = (k: "max_cameras" | "max_ram_percent" | "max_cpu_percent" | "events_retention_days") => ({
+  const num = (k: "max_cameras" | "max_ram_percent" | "max_cpu_percent" | "events_retention_days" | "max_jobs" | "job_step_timeout_seconds") => ({
     type: "number",
     value: String(form[k]),
     onChange: (e: { target: { value: string } }) => set(k, Number(e.target.value)),
@@ -77,6 +77,12 @@ function LimitsCard() {
         </Field>
         <Field label={t("Maximum sustained CPU (%)")} error={fieldErrors["max_cpu_percent"]} hint={t("One-minute average of the node.")}>
           <Input {...num("max_cpu_percent")} min={10} max={100} />
+        </Field>
+        <Field label={t("Jobs at once")} error={fieldErrors["max_jobs"]} hint={t("Encodings and imports beyond it wait in the queue.")}>
+          <Input {...num("max_jobs")} min={1} max={16} />
+        </Field>
+        <Field label={t("Job step timeout (s)")} error={fieldErrors["job_step_timeout_seconds"]} hint={t("A step that takes longer fails its job.")}>
+          <Input {...num("job_step_timeout_seconds")} min={10} max={3600} />
         </Field>
         <Field
           label={t("Parent interface")}

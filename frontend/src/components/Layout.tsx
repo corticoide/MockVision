@@ -1,8 +1,8 @@
-import { Activity, Boxes, Camera, Cpu, Image, LayoutDashboard, LogOut, MemoryStick, ScrollText, Send, Settings, Wifi, WifiOff } from "lucide-react";
+import { Activity, Boxes, Camera, CircleHelp, Cpu, Image, LayoutDashboard, ListChecks, Loader2, LogOut, MemoryStick, ScrollText, Send, Settings, Wifi, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLiveStatus } from "@/api/live";
-import { useLogout, useNode, useNodeMetrics } from "@/api/queries";
-import { useT } from "@/lib/i18n";
+import { useJobs, useLogout, useNode, useNodeMetrics } from "@/api/queries";
+import { plural, useT } from "@/lib/i18n";
 import { Link, usePath } from "@/lib/router";
 import { cn, formatBytes, formatPercent } from "@/lib/utils";
 import { Badge } from "./badges";
@@ -16,6 +16,7 @@ const nav = [
   { href: "/profiles", label: "Profiles", icon: <Boxes /> },
   { href: "/assets", label: "Assets", icon: <Image /> },
   { href: "/targets", label: "Targets", icon: <Send /> },
+  { href: "/jobs", label: "Jobs", icon: <ListChecks /> },
   { href: "/audit", label: "Audit", icon: <ScrollText /> },
   { href: "/settings", label: "Settings", icon: <Settings /> },
 ];
@@ -106,6 +107,7 @@ function TopBar({ username }: { username: string }) {
         value={m ? t("{running} running / {total}", { running: m.camera_counts.running, total: m.camera_counts.total }) : "—"}
       />
       {node?.runtime === "local" && <Badge tone="warn">{t("local mode")}</Badge>}
+      <JobsIndicator />
       <div className="ml-auto flex items-center gap-3">
         {live === "open" ? (
           <Badge tone="ok" icon={<Wifi />}>
@@ -123,6 +125,30 @@ function TopBar({ username }: { username: string }) {
         </Button>
       </div>
     </header>
+  );
+}
+
+/** Jobs at work, and those that wait for an answer, linking to Jobs. */
+function JobsIndicator() {
+  const { data } = useJobs({ status: "active" });
+  const t = useT();
+  const jobs = data?.items ?? [];
+  const waiting = jobs.filter((j) => j.status === "waiting").length;
+  const busy = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
+  if (!waiting && !busy) return null;
+  return (
+    <Link href="/jobs" className="flex items-center gap-2">
+      {busy > 0 && (
+        <Badge tone="info" icon={<Loader2 className="animate-spin" />}>
+          {plural(t, busy, "1 job", "{n} jobs")}
+        </Badge>
+      )}
+      {waiting > 0 && (
+        <Badge tone="warn" icon={<CircleHelp />}>
+          {plural(t, waiting, "1 waiting for you", "{n} waiting for you")}
+        </Badge>
+      )}
+    </Link>
   );
 }
 

@@ -13,6 +13,9 @@ import {
   type CreateCamera,
   type EventPage,
   type ImportResult,
+  type Job,
+  type JobDetail,
+  type JobPage,
   type Settings,
   type TargetInput,
   type TokenInput,
@@ -29,6 +32,8 @@ export const keys = {
   tokens: ["tokens"] as const,
   audit: (f: AuditFilter) => ["audit", f] as const,
   failedEvents: ["events", "failed"] as const,
+  jobs: (f: JobFilter) => ["jobs", f] as const,
+  job: (id: string) => ["job", id] as const,
   settings: ["settings"] as const,
   cameras: ["cameras"] as const,
   camera: (id: string) => ["cameras", id] as const,
@@ -329,10 +334,13 @@ export function useProfileAction() {
   });
 }
 
+/** An import's answer: the result, or the job when it goes on in the background (202). */
+export type ImportAnswer = ImportResult | { job: Job };
+
 export function useImportPackage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => upload<ImportResult>("/packages", file),
+    mutationFn: (file: File) => upload<ImportAnswer>("/packages", file),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
   });
 }
@@ -467,6 +475,77 @@ export function useAudit(filter: AuditFilter) {
     queryFn: async ({ pageParam }): Promise<AuditPage> =>
       unwrap(await api.GET("/audit", { params: { query: { ...filter, cursor: pageParam || undefined, limit: 50 } } })),
     getNextPageParam: (last) => last.next_cursor || undefined,
+  });
+}
+
+// --- Jobs ---
+
+/** Filters of the job list. Status is a status, "active" or "finished". */
+export interface JobFilter {
+  status?: string;
+  type?: Job["type"];
+}
+
+/** Whether a job belongs to a filtered list, as the node decides it. */
+export function jobMatches(f: JobFilter, j: Job): boolean {
+  if (f.type && j.type !== f.type) return false;
+  switch (f.status) {
+    case undefined:
+    case "":
+      return true;
+    case "active":
+      return ["queued", "running", "waiting", "interrupted"].includes(j.status);
+    case "finished":
+      return ["completed", "failed", "canceled"].includes(j.status);
+  }
+  return j.status === f.status;
+}
+
+/** Jobs, newest first; the jobs topic keeps them current. */
+export function useJobs(filter: JobFilter, limit = 100) {
+  return useQuery({
+    queryKey: keys.jobs(filter),
+    queryFn: async (): Promise<JobPage> =>
+      unwrap(
+        await api.GET("/jobs", {
+          params: { query: { status: filter.status || undefined, type: filter.type, limit } },
+        }),
+      ),
+  });
+}
+
+/** A job with its history; its topic appends new events. */
+export function useJob(id: string | null) {
+  return useQuery({
+    queryKey: keys.job(id ?? "none"),
+    enabled: !!id,
+    queryFn: async (): Promise<JobDetail> => unwrap(await api.GET("/jobs/{id}", { params: { path: { id: id! } } })),
+  });
+}
+
+export function useCreateJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { type: "renditions.prepare"; params?: { asset_id?: string } }) =>
+      unwrap(await api.POST("/jobs", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useJobAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; action: "cancel" | "resume" | "answer"; answer?: string }) =>
+      unwrap(
+        await api.POST("/jobs/{id}/actions/{action}", {
+          params: { path: { id: v.id, action: v.action } },
+          body: v.action === "answer" ? { answer: v.answer } : undefined,
+        }),
+      ),
+    onSuccess: (job) => {
+      qc.invalidateQueries({ queryKey: keys.job(job.id) });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
   });
 }
 

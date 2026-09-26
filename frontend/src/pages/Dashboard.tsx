@@ -1,8 +1,8 @@
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, KeyRound, RotateCw, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CircleHelp, KeyRound, RotateCw, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Camera, CameraState, EventItem } from "@/api/client";
-import { useCameras, useEvents, useFailedEvents, useNode, useNodeHistory, useNodeMetrics, useTokens } from "@/api/queries";
-import { Badge, DeliveryBadge, Mono, StateBadge } from "@/components/badges";
+import { useCameras, useEvents, useFailedEvents, useJobs, useNode, useNodeHistory, useNodeMetrics, useTokens } from "@/api/queries";
+import { Badge, DeliveryBadge, JobStatusBadge, Mono, StateBadge } from "@/components/badges";
 import { CopyButton } from "@/components/CopyButton";
 import { type Segment, Sparkline, StackedBar } from "@/components/Sparkline";
 import { Card, CardHeader, Empty, PageHeader } from "@/components/ui/card";
@@ -166,16 +166,30 @@ function Attention() {
   const t = useT();
   const { data: cameras } = useCameras();
   const { data: failed } = useFailedEvents();
+  const { data: activeJobs } = useJobs({ status: "active" });
   const troubled = (cameras ?? []).filter((c) => c.status.state === "error" || c.status.state === "degraded" || c.status.pending_restart.length > 0);
   const deliveries = failed?.items ?? [];
-  const nothing = troubled.length === 0 && deliveries.length === 0;
+  const jobs = (activeJobs?.items ?? []).filter((j) => j.status === "waiting" || j.status === "interrupted");
+  const nothing = troubled.length === 0 && deliveries.length === 0 && jobs.length === 0;
   return (
     <Card>
-      <CardHeader title={t("Needs attention")} description={t("Cameras in error or degraded, changes waiting for a restart, and deliveries that gave up.")} />
+      <CardHeader title={t("Needs attention")} description={t("Cameras in error or degraded, changes waiting for a restart, deliveries that gave up and jobs that need you.")} />
       {nothing ? (
         <Empty icon={<CheckCircle2 className="text-ok" />} title={t("Nothing needs attention")} />
       ) : (
         <ul className="divide-y divide-border/70 text-[13px]">
+          {jobs.map((j) => (
+            <li key={j.id} className="flex items-center gap-3 px-4 py-2">
+              <CircleHelp className="size-4 shrink-0 text-warn" />
+              <Link href="/jobs" className="min-w-0 flex-1 truncate font-medium hover:underline" title={j.title}>
+                {j.title}
+              </Link>
+              <span className="min-w-0 truncate text-muted" title={j.question?.text}>
+                {j.status === "waiting" ? j.question?.text : t("Stopped by a restart; resume it from Jobs.")}
+              </span>
+              <JobStatusBadge status={j.status} />
+            </li>
+          ))}
           {troubled.map((c) => (
             <li key={c.id} className="flex items-center gap-3 px-4 py-2">
               <CameraProblem camera={c} t={t} />

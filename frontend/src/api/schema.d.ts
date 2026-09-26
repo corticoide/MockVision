@@ -144,7 +144,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Import a .mvpkg package or a loose profile.yaml (draft) */
+        /**
+         * Import a .mvpkg package or a loose profile.yaml (draft)
+         * @description The import runs as a job. The call waits up to a minute for it and
+         *     answers with the result; when the job is still queued or running it
+         *     answers 202 with the job, to follow at /jobs/{id}.
+         */
         post: operations["importPackage"];
         delete?: never;
         options?: never;
@@ -241,6 +246,63 @@ export interface paths {
         post?: never;
         /** Revoke an API token (panel session only) */
         delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Background jobs, newest first (D72, D74) */
+        get: operations["listJobs"];
+        put?: never;
+        /** Start a job; for now renditions.prepare, which encodes what the cameras need */
+        post: operations["createJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** A job with its history */
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/actions/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                action: "cancel" | "resume" | "answer";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a job, resume an interrupted one, or answer its question ({"answer":"<option id>"}) */
+        post: operations["jobAction"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -744,6 +806,10 @@ export interface components {
             max_cpu_percent: number;
             parent_interface: string;
             events_retention_days: number;
+            /** @description Jobs that run at once (D72) */
+            max_jobs: number;
+            /** @description Bound of each step of a job (D72) */
+            job_step_timeout_seconds: number;
         };
         SettingsPatch: {
             max_cameras?: number;
@@ -751,6 +817,8 @@ export interface components {
             max_cpu_percent?: number;
             parent_interface?: string;
             events_retention_days?: number;
+            max_jobs?: number;
+            job_step_timeout_seconds?: number;
         };
         NodeMetrics: {
             /** Format: date-time */
@@ -937,6 +1005,68 @@ export interface components {
             profile: components["schemas"]["Profile"];
             report: components["schemas"]["ImportReport"];
             created: boolean;
+            /** @description The import job */
+            job_id?: string;
+        };
+        Job: {
+            id: string;
+            /** @enum {string} */
+            type: "rendition" | "import" | "renditions.prepare";
+            title: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "waiting" | "completed" | "failed" | "canceled" | "interrupted";
+            progress: number;
+            step: string;
+            /** @description The decision the job waits for; unanswered, it takes the default when it expires */
+            question: null | components["schemas"]["JobQuestion"];
+            result: {
+                [key: string]: unknown;
+            };
+            error: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+        };
+        JobQuestion: {
+            id: string;
+            text: string;
+            options: {
+                id: string;
+                label: string;
+            }[];
+            default: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        JobEvent: {
+            job_id: string;
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            kind: "status" | "step" | "log" | "question" | "answer";
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        JobDetail: components["schemas"]["Job"] & {
+            events: components["schemas"]["JobEvent"][];
+        };
+        JobPage: {
+            items: components["schemas"]["Job"][];
+            next_cursor?: string;
+        };
+        JobInput: {
+            /** @enum {string} */
+            type: "renditions.prepare";
+            params?: {
+                /** @description Only the renditions of this image */
+                asset_id?: string;
+            };
         };
         CameraUser: {
             username: string;
@@ -1468,6 +1598,17 @@ export interface operations {
                     "application/json": components["schemas"]["ImportResult"];
                 };
             };
+            /** @description The import goes on as a job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["Job"];
+                    };
+                };
+            };
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
@@ -1614,6 +1755,113 @@ export interface operations {
             };
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: {
+                /** @description A status */
+                status?: string;
+                type?: "rendition" | "import" | "renditions.prepare";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Jobs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPage"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    createJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobInput"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    jobAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                action: "cancel" | "resume" | "answer";
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    answer?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     listAudit: {

@@ -83,3 +83,15 @@ export function sinceText(iso: string | null | undefined): string {
   if (h < 24) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+
+/** A duration between two times, such as 850 ms, 12 s or 3m 5s. */
+export function formatDuration(from: string | null | undefined, to: string | null | undefined): string {
+  if (!from) return "—";
+  const ms = Math.max(0, (to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime());
+  if (ms < 1000) return `${ms} ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}

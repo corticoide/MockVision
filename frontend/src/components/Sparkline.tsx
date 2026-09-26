@@ -60,3 +60,23 @@ export function StackedBar({ segments, label }: { segments: Segment[]; label: st
     </svg>
   );
 }
+
+/** A progress bar from 0 to 1, drawn as SVG like the charts. */
+export function ProgressBar({ value, label, className }: { value: number; label: string; className?: string }) {
+  const width = Math.min(Math.max(value, 0), 1) * 100;
+  return (
+    <svg
+      viewBox="0 0 100 6"
+      preserveAspectRatio="none"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(width)}
+      className={cn("h-1.5 w-full overflow-hidden rounded-sm", className)}
+    >
+      <rect x={0} y={0} width={100} height={6} className="fill-surface-2" />
+      <rect x={0} y={0} width={width} height={6} fill="currentColor" />
+    </svg>
+  );
+}

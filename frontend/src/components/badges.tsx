@@ -1,8 +1,10 @@
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   CircleDashed,
   CircleDot,
+  CircleHelp,
   CircleSlash,
   Clock,
   Loader2,
@@ -10,7 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CameraState } from "@/api/client";
+import type { CameraState, JobStatus } from "@/api/client";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +58,26 @@ export function StateBadge({ state, reason }: { state: CameraState; reason?: str
   const s = states[state] ?? states.stopped;
   return (
     <Badge tone={s.tone} icon={s.icon} title={reason || undefined}>
+      {t(s.label)}
+    </Badge>
+  );
+}
+
+const jobStates: Record<JobStatus, { tone: Tone; label: string; icon: ReactNode }> = {
+  queued: { tone: "muted", label: "Queued", icon: <Clock /> },
+  running: { tone: "info", label: "In progress", icon: <Loader2 className="animate-spin" /> },
+  waiting: { tone: "warn", label: "Waiting for you", icon: <CircleHelp /> },
+  completed: { tone: "ok", label: "Completed", icon: <CheckCircle2 /> },
+  failed: { tone: "error", label: "Failed", icon: <XCircle /> },
+  canceled: { tone: "muted", label: "Canceled", icon: <Ban /> },
+  interrupted: { tone: "warn", label: "Interrupted", icon: <PauseCircle /> },
+};
+
+export function JobStatusBadge({ status }: { status: JobStatus }) {
+  const t = useT();
+  const s = jobStates[status] ?? jobStates.queued;
+  return (
+    <Badge tone={s.tone} icon={s.icon}>
       {t(s.label)}
     </Badge>
   );
