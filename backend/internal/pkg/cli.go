@@ -19,6 +19,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/corticoide/mockvision/backend/internal/profile"
+	"github.com/corticoide/mockvision/backend/internal/sandbox"
 )
 
 // Main is the entry point of "mockvision pkg".
@@ -81,6 +82,13 @@ func inspectCmd(args []string, engines profile.EngineCatalog) int {
 	name := fs.String("name", "profile.yaml", "original file name")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// The package is hostile until proven otherwise: before reading it,
+	// the validator gives up the file system and the system calls it does
+	// not need, so taking it over reaches nothing (audit B9).
+	if err := confine(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	data, err := io.ReadAll(io.LimitReader(os.Stdin, MaxPackageBytes+1))
 	if err != nil {
@@ -217,4 +225,17 @@ func Build(dir string) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// confine applies no_new_privs, the seccomp filter and a Landlock ruleset
+// that allows no file at all; stdin and stdout are open already.
+func confine() error {
+	if err := sandbox.NoNewPrivs(); err != nil {
+		return err
+	}
+	if err := sandbox.Seccomp(); err != nil {
+		return err
+	}
+	_, err := sandbox.Landlock(sandbox.Paths{NoBind: true})
+	return err
 }

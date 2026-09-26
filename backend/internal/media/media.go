@@ -49,6 +49,11 @@ const MaxMJPEGSize = 2040
 // MaxImageBytes bounds uploaded images.
 const MaxImageBytes = 20 << 20
 
+// MaxImagePixels bounds the pixels of an uploaded image: an 8K picture,
+// the largest rendition. A small file can hold a huge picture, and FFmpeg
+// decodes all of it (audit B2).
+const MaxImagePixels = 7680 * 4320
+
 // Params define a rendition.
 type Params struct {
 	Codec   string
@@ -104,6 +109,15 @@ type Library struct {
 	FFmpeg        string
 	Timeout       time.Duration
 	Threads       int
+	// Sandbox is the MockVision binary: when set, FFmpeg runs through its
+	// sandbox-exec command, confined to the image it reads and the
+	// directory it writes (audit B9).
+	Sandbox string
+}
+
+// access is what one FFmpeg run may read and write.
+type access struct {
+	read, write []string
 }
 
 // NewLibrary prepares the directories under dataDir.
@@ -206,7 +220,7 @@ func (l *Library) EncodeStream(ctx context.Context, src string, p Params, key st
 			args = append([]string{"-progress", "pipe:1", "-nostats"}, args...)
 			out = &progressWriter{fn: progress}
 		}
-		err = l.runTo(ctx, args, out)
+		err = l.runTo(ctx, args, out, access{read: []string{src}, write: []string{files.Dir}})
 	}
 	if err != nil {
 		return fmt.Errorf("encode stream: %w", err)
@@ -229,10 +243,12 @@ func (l *Library) gopArgs(src string, p Params, dst string) []string {
 	rate := fmt.Sprintf("%dk", p.Bitrate)
 	args := []string{
 		"-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-		"-loop", "1", "-framerate", strconv.Itoa(p.FPS), "-i", src,
-		"-vf", scaleFilter(p) + ",format=yuv420p",
+		"-loop", "1", "-framerate", strconv.Itoa(p.FPS)}
+	args = append(args, imageInput(src)...)
+	args = append(args,
+		"-vf", scaleFilter(p)+",format=yuv420p",
 		"-frames:v", gop,
-	}
+	)
 	switch p.Codec {
 	case CodecH265:
 		args = append(args,
@@ -288,13 +304,13 @@ const (
 // tables must be the standard ones: RTP receivers rebuild the JPEG headers
 // with them (RFC 2435).
 func (l *Library) jpegAt(ctx context.Context, src string, p Params, q int, dst string) (int, error) {
-	args := []string{
-		"-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-		"-i", src, "-vf", scaleFilter(p) + ",format=yuvj420p", "-frames:v", "1",
+	args := append([]string{"-hide_banner", "-nostdin", "-loglevel", "error", "-y"}, imageInput(src)...)
+	args = append(args,
+		"-vf", scaleFilter(p)+",format=yuvj420p", "-frames:v", "1",
 		"-c:v", "mjpeg", "-huffman", "default", "-q:v", strconv.Itoa(q),
 		"-threads", strconv.Itoa(l.Threads), "-f", "mjpeg", dst,
-	}
-	if err := l.run(ctx, args); err != nil {
+	)
+	if err := l.runTo(ctx, args, nil, access{read: []string{src}, write: []string{filepath.Dir(dst)}}); err != nil {
 		return 0, err
 	}
 	st, err := os.Stat(dst)
@@ -311,11 +327,9 @@ func (l *Library) EncodeSnapshot(ctx context.Context, src string, p Params, key 
 		return err
 	}
 	tmpJPEG := files.Snapshot + ".tmp.jpg"
-	snapArgs := []string{
-		"-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-		"-i", src, "-vf", scaleFilter(p), "-frames:v", "1", "-q:v", "3", "-threads", strconv.Itoa(l.Threads), tmpJPEG,
-	}
-	if err := l.run(ctx, snapArgs); err != nil {
+	snapArgs := append([]string{"-hide_banner", "-nostdin", "-loglevel", "error", "-y"}, imageInput(src)...)
+	snapArgs = append(snapArgs, "-vf", scaleFilter(p), "-frames:v", "1", "-q:v", "3", "-threads", strconv.Itoa(l.Threads), tmpJPEG)
+	if err := l.runTo(ctx, snapArgs, nil, access{read: []string{src}, write: []string{files.Dir}}); err != nil {
 		return fmt.Errorf("encode snapshot: %w", err)
 	}
 	return publish(tmpJPEG, files.Snapshot)
@@ -363,19 +377,35 @@ func (l *Library) TestPattern(ctx context.Context, dst string) error {
 		"-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=1",
 		"-frames:v", "1", "-q:v", "2", dst,
 	}
-	return l.run(ctx, args)
+	return l.runTo(ctx, args, nil, access{write: []string{filepath.Dir(dst)}})
 }
 
-func (l *Library) run(ctx context.Context, args []string) error {
-	return l.runTo(ctx, args, nil)
+// imageInput reads src as a still image from a local file: the demuxer is
+// forced and only the file protocol is allowed, so a crafted upload cannot
+// make FFmpeg read other files or reach the network (audit B2).
+func imageInput(src string) []string {
+	return []string{"-protocol_whitelist", "file", "-f", "image2", "-i", src}
 }
 
-// runTo runs FFmpeg, sending its standard output to stdout when set.
-func (l *Library) runTo(ctx context.Context, args []string, stdout io.Writer) error {
+// runTo runs FFmpeg, sending its standard output to stdout when set, and
+// confined to what acc names when the library has a sandbox.
+func (l *Library) runTo(ctx context.Context, args []string, stdout io.Writer, acc access) error {
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, l.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, l.FFmpeg, args...)
+	name := l.FFmpeg
+	if l.Sandbox != "" {
+		wrapped := []string{"sandbox-exec"}
+		for _, p := range acc.read {
+			wrapped = append(wrapped, "--read", p)
+		}
+		for _, p := range acc.write {
+			wrapped = append(wrapped, "--write", p)
+		}
+		args = append(append(wrapped, "--", l.FFmpeg), args...)
+		name = l.Sandbox
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = stdout
 	// Once FFmpeg is killed, do not wait for its output pipes: a child it
 	// left behind may still hold them.
@@ -392,7 +422,8 @@ func (l *Library) runTo(ctx context.Context, args []string, stdout io.Writer) er
 	}
 	if err != nil {
 		var ee *exec.Error
-		if errors.As(err, &ee) {
+		var exit *exec.ExitError
+		if errors.As(err, &ee) || (l.Sandbox != "" && errors.As(err, &exit) && exit.ExitCode() == 127) {
 			return fmt.Errorf("ffmpeg not found (%s): install FFmpeg or set MOCKVISION_FFMPEG", l.FFmpeg)
 		}
 		msg := strings.TrimSpace(stderr.String())
@@ -457,6 +488,9 @@ func ProbeImage(r io.Reader) (ImageInfo, error) {
 	}
 	if info.Width < 16 || info.Height < 16 || info.Width > 16384 || info.Height > 16384 {
 		return ImageInfo{}, fmt.Errorf("image is %dx%d; it must be between 16x16 and 16384x16384", info.Width, info.Height)
+	}
+	if info.Width*info.Height > MaxImagePixels {
+		return ImageInfo{}, fmt.Errorf("image is %dx%d; at most %d megapixels (an 8K picture) are accepted", info.Width, info.Height, MaxImagePixels/1_000_000)
 	}
 	return info, nil
 }

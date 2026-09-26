@@ -1,11 +1,14 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -261,5 +264,29 @@ func TestMJPEGLimits(t *testing.T) {
 	}
 	if _, err := ParseStream(CodecMJPEG, []byte{0xFF, 0xD8, 0xFF, 0xDB, 0, 67}); err == nil {
 		t.Fatal("a truncated JPEG was accepted")
+	}
+}
+
+// A small file may describe a huge picture: the header alone is enough to
+// refuse it (audit B2).
+func TestProbeImageRefusesHugePictures(t *testing.T) {
+	header := func(w, h uint32) []byte {
+		ihdr := make([]byte, 13)
+		binary.BigEndian.PutUint32(ihdr[0:], w)
+		binary.BigEndian.PutUint32(ihdr[4:], h)
+		ihdr[8], ihdr[9] = 8, 0 // 8-bit grayscale
+		var b bytes.Buffer
+		b.WriteString("\x89PNG\r\n\x1a\n")
+		_ = binary.Write(&b, binary.BigEndian, uint32(len(ihdr)))
+		chunk := append([]byte("IHDR"), ihdr...)
+		b.Write(chunk)
+		_ = binary.Write(&b, binary.BigEndian, crc32.ChecksumIEEE(chunk))
+		return b.Bytes()
+	}
+	if _, err := ProbeImage(bytes.NewReader(header(7680, 4320))); err != nil {
+		t.Fatalf("an 8K picture must be accepted: %v", err)
+	}
+	if _, err := ProbeImage(bytes.NewReader(header(16000, 16000))); err == nil {
+		t.Fatal("a 256-megapixel picture must be refused")
 	}
 }

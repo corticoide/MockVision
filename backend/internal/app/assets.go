@@ -102,7 +102,11 @@ func assetView(a db.Asset, cameras int64) AssetView {
 
 // ensureBuiltinAsset creates the test pattern used when a camera has no
 // uploaded image.
+// Start-up and the first camera may both need it at once: one creates it
+// and the other finds it, each with a file of its own meanwhile.
 func (s *Service) ensureBuiltinAsset(ctx context.Context) (*AssetView, error) {
+	s.builtinMu.Lock()
+	defer s.builtinMu.Unlock()
 	rows, err := s.store.R().ListAssets(ctx)
 	if err != nil {
 		return nil, err
@@ -113,12 +117,17 @@ func (s *Service) ensureBuiltinAsset(ctx context.Context) (*AssetView, error) {
 			return &v, nil
 		}
 	}
-	tmp := filepath.Join(s.lib.AssetsDir, "builtin.tmp.jpg")
+	f, err := os.CreateTemp(s.lib.AssetsDir, "builtin-*.tmp.jpg")
+	if err != nil {
+		return nil, err
+	}
+	tmp := f.Name()
+	f.Close()
+	defer os.Remove(tmp)
 	if err := s.lib.TestPattern(ctx, tmp); err != nil {
 		s.log.Warn("cannot create the default image", "error", err)
 		return nil, err
 	}
-	defer os.Remove(tmp)
 	data, err := os.ReadFile(tmp)
 	if err != nil {
 		return nil, err

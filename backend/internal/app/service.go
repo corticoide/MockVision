@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -81,6 +82,7 @@ type Service struct {
 
 	setupMu   sync.Mutex
 	setupCode string
+	builtinMu sync.Mutex
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -115,6 +117,11 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 	lib, err := media.NewLibrary(opts.DataDir, opts.FFmpeg)
 	if err != nil {
 		return nil, err
+	}
+	if runtime.GOOS == "linux" {
+		// FFmpeg decodes uploaded images: it runs confined to the image
+		// and the rendition it writes (audit B9).
+		lib.Sandbox = opts.Exe
 	}
 	for _, dir := range []string{"packages", "jobs"} {
 		if err := os.MkdirAll(filepath.Join(opts.DataDir, dir), 0o750); err != nil {
