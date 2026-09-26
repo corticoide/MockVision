@@ -518,7 +518,7 @@ en este orden. Cada commit lleva sus tests.
 | A1 | Argon2id corre de a dos como máximo, con una cola corta (si se llena, `503` con `Retry-After`); el setup responde "ya hecho" antes de calcular el hash | `9ff291b` |
 | A2 | Los cambios del codificador de una cámara se agrupan: una regeneración a la vez y, como mucho, una más con los últimos valores. La cola admite hasta 500 jobs, y un recolector borra cada hora las renditions sin uso de más de un día, con sus archivos y los directorios huérfanos | `9ff291b` |
 | M1 | Crear el administrador requiere un código de un solo uso, impreso en el log y guardado en `<data>/setup-code` hasta usarse. Nueva variable opcional `MOCKVISION_ALLOWED_HOSTS` contra el DNS rebinding | `9ff291b` |
-| M2 | Cada `range` y cada llamada a `template` pasan por un presupuesto de 100 000 pasos por render, que además corta el render cuando vence su tiempo | `9ff291b` |
+| M2 | Cada `range` y cada llamada a `template` pasan por un presupuesto de 100 000 pasos por render, y cada iteración comprueba si el render ya venció, así que se corta aunque el bucle no escriba nada | `9ff291b`, ver abajo |
 | M3 | Cada dirección tiene 10 intentos por minuto sea cual sea el usuario (IPv6 por /64). La tabla de bloqueos desaloja entradas viejas en vez de vaciarse. Nueva variable `MOCKVISION_TRUSTED_PROXIES` para leer `X-Forwarded-For` | `9ff291b` |
 | M4 | El WebSocket se revalida en cada ping sin extender la sesión, y se cierra al instante al revocar el token o cerrar la sesión | `9ff291b` |
 | M5 | Las rutas del perfil aceptan `roles`; `state.set` exige `admin` u `operator` por defecto | `9ff291b` |
@@ -552,6 +552,12 @@ en este orden. Cada commit lleva sus tests.
   borrada justo después de arrancar podía seguir respondiendo en su IP e
   incluso volver a anunciarla. Ahora el borrado elimina la interfaz y cancela
   ese anuncio (`245a47d`). Lo detectó el e2e.
+- **Bucles que no escriben:** la primera versión de M2 sólo comprobaba el
+  vencimiento al entrar en un `range`, en cada llamada a `template` y al
+  escribir. Un `range` cuyo cuerpo sólo asigna variables seguía corriendo
+  después del timeout. Ahora cada iteración empieza con una llamada al guard.
+  Lo detectó el CI: el test pasaba en local sólo por cómo se contaban las
+  goroutines.
 
 ### Verificación
 

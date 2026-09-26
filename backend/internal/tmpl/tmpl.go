@@ -6,10 +6,10 @@
 // evaluated as a template.
 //
 // text/template cannot be interrupted, so a timeout alone would leave a
-// render that loops without writing running forever (audit M2). Every range
-// and every template call therefore goes through a guard, added to the
-// parse tree, that counts the iterations and calls of a render and stops it
-// past MaxSteps or once its time is up.
+// render that loops without writing running forever (audit M2). Every range,
+// every range iteration and every template call therefore goes through a
+// guard, added to the parse tree, that counts the iterations and calls of a
+// render and stops it past MaxSteps or once its time is up.
 package tmpl
 
 import (
@@ -45,10 +45,11 @@ const (
 	MaxSteps = 100_000
 )
 
-// Names of the guard functions the compiler adds to every range and
-// template call.
+// Names of the guard functions the compiler adds to every range, range
+// iteration and template call.
 const (
 	guardRange = "__mockvisionRange"
+	guardTick  = "__mockvisionTick"
 	guardCall  = "__mockvisionCall"
 )
 
@@ -103,7 +104,7 @@ func Check(name, text string) error {
 
 func parse(name, text string, funcs template.FuncMap) (*template.Template, error) {
 	g := &guard{}
-	all := template.FuncMap{guardRange: g.bound, guardCall: g.call}
+	all := template.FuncMap{guardRange: g.bound, guardTick: g.tick, guardCall: g.call}
 	for k, v := range funcs {
 		all[k] = v
 	}
@@ -120,7 +121,8 @@ func parse(name, text string, funcs template.FuncMap) (*template.Template, error
 }
 
 // guardTree routes every range pipeline and template call of a tree
-// through the guard functions.
+// through the guard functions, and starts every range iteration with a
+// call to the guard.
 func guardTree(tr *tparse.Tree) {
 	cmd := func(pos tparse.Pos, fn string) *tparse.CommandNode {
 		return &tparse.CommandNode{NodeType: tparse.NodeCommand, Pos: pos,
@@ -146,6 +148,12 @@ func guardTree(tr *tparse.Tree) {
 			n.Pipe.Cmds = append(n.Pipe.Cmds, cmd(n.Pos, guardRange))
 			walk(n.List)
 			walk(n.ElseList)
+			// The body may only assign variables and so never write: the
+			// tick is what stops such a loop once the render is aborted.
+			tick := &tparse.ActionNode{NodeType: tparse.NodeAction, Pos: n.Pos, Line: n.Line,
+				Pipe: &tparse.PipeNode{NodeType: tparse.NodePipe, Pos: n.Pos, Line: n.Line,
+					Cmds: []*tparse.CommandNode{cmd(n.Pos, guardTick)}}}
+			n.List.Nodes = append([]tparse.Node{tick}, n.List.Nodes...)
 		case *tparse.TemplateNode:
 			if n.Pipe == nil {
 				n.Pipe = &tparse.PipeNode{NodeType: tparse.NodePipe, Pos: n.Pos}
@@ -205,6 +213,12 @@ func (g *guard) bound(v any) (any, error) {
 	return v, nil
 }
 
+// tick starts every range iteration: it writes nothing and fails once the
+// render is aborted.
+func (g *guard) tick() (string, error) {
+	return "", g.take(0)
+}
+
 // call counts a template call and passes its argument through.
 func (g *guard) call(args ...any) (any, error) {
 	if err := g.take(1); err != nil {
@@ -252,7 +266,7 @@ func (c *compiled) Render(ctx context.Context, data engine.TemplateData) ([]byte
 		return nil, err
 	}
 	g := &guard{abort: &w.abort}
-	t.Funcs(template.FuncMap{guardRange: g.bound, guardCall: g.call})
+	t.Funcs(template.FuncMap{guardRange: g.bound, guardTick: g.tick, guardCall: g.call})
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
