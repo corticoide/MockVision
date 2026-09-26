@@ -23,6 +23,7 @@ tags:
   - name: auth
   - name: tokens
   - name: audit
+  - name: jobs
   - name: node
   - name: profiles
   - name: cameras
@@ -128,6 +129,10 @@ paths:
       tags: [profiles]
       operationId: importPackage
       summary: Import a .mvpkg package or a loose profile.yaml (draft)
+      description: |
+        The import runs as a job. The call waits up to a minute for it and
+        answers with the result; when the job is still queued or running it
+        answers 202 with the job, to follow at /jobs/{id}.
       requestBody:
         required: true
         content:
@@ -140,6 +145,15 @@ paths:
       responses:
         "200": { description: Already installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
         "201": { description: Installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "202":
+          description: The import goes on as a job
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job]
+                properties:
+                  job: { $ref: "#/components/schemas/Job" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /profiles:
@@ -220,6 +234,62 @@ paths:
         "204": { description: Revoked }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: Background jobs, newest first (D72, D74)
+      parameters:
+        - { name: status, in: query, description: A status, active (queued, running, waiting or interrupted) or finished, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [rendition, import, renditions.prepare] } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: Jobs, content: { application/json: { schema: { $ref: "#/components/schemas/JobPage" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [jobs]
+      operationId: createJob
+      summary: Start a job; for now renditions.prepare, which encodes what the cameras need
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JobInput" }
+      responses:
+        "202": { description: Queued, or the open job doing the same work, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: A job with its history
+      responses:
+        "200": { description: Job, content: { application/json: { schema: { $ref: "#/components/schemas/JobDetail" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}/actions/{action}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: action, in: path, required: true, schema: { type: string, enum: [cancel, resume, answer] } }
+    post:
+      tags: [jobs]
+      operationId: jobAction
+      summary: Cancel a job, resume an interrupted one, or answer its question ({"answer":"<option id>"})
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answer: { type: string }
+      responses:
+        "200": { description: Job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /audit:
     get:
@@ -656,7 +726,8 @@ x-websocket:
     is too old the server answers type "resync" and the client reloads that
     state through REST. Topics: node (metrics), cameras (created, updated,
     deleted, status), camera:<id> (status, config, client, gap, log),
-    events (event), profiles (installed), audit (entry).
+    events (event), profiles (installed), audit (entry), jobs (job: every
+    change of a job), job:<id> (event: its history as it grows).
 
 components:
   securitySchemes:
@@ -770,13 +841,15 @@ components:
         started_at: { type: string, format: date-time }
     Settings:
       type: object
-      required: [max_cameras, max_ram_percent, max_cpu_percent, parent_interface, events_retention_days]
+      required: [max_cameras, max_ram_percent, max_cpu_percent, parent_interface, events_retention_days, max_jobs, job_step_timeout_seconds]
       properties:
         max_cameras: { type: integer }
         max_ram_percent: { type: number }
         max_cpu_percent: { type: number }
         parent_interface: { type: string }
         events_retention_days: { type: integer }
+        max_jobs: { type: integer, minimum: 1, maximum: 16, description: Jobs that run at once (D72) }
+        job_step_timeout_seconds: { type: integer, minimum: 10, maximum: 3600, description: Bound of each step of a job (D72) }
     SettingsPatch:
       type: object
       properties:
@@ -785,6 +858,8 @@ components:
         max_cpu_percent: { type: number }
         parent_interface: { type: string }
         events_retention_days: { type: integer }
+        max_jobs: { type: integer }
+        job_step_timeout_seconds: { type: integer }
     NodeMetrics:
       type: object
       required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
@@ -996,6 +1071,75 @@ components:
         profile: { $ref: "#/components/schemas/Profile" }
         report: { $ref: "#/components/schemas/ImportReport" }
         created: { type: boolean }
+        job_id: { type: string, description: The import job, with the steps in its history }
+    Job:
+      type: object
+      required: [id, type, title, status, progress, step, question, result, error, created_by, created_at, started_at, finished_at]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [rendition, import, renditions.prepare] }
+        title: { type: string }
+        status: { type: string, enum: [queued, running, waiting, completed, failed, canceled, interrupted] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        step: { type: string }
+        question:
+          description: The decision the job waits for; unanswered, it takes the default when it expires
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/JobQuestion"
+        result: { type: object, additionalProperties: true }
+        error: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+    JobQuestion:
+      type: object
+      required: [id, text, options, default, expires_at]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: { type: string }
+              label: { type: string }
+        default: { type: string }
+        expires_at: { type: string, format: date-time }
+    JobEvent:
+      type: object
+      required: [job_id, seq, at, kind, data]
+      properties:
+        job_id: { type: string }
+        seq: { type: integer }
+        at: { type: string, format: date-time }
+        kind: { type: string, enum: [status, step, log, question, answer] }
+        data: { type: object, additionalProperties: true }
+    JobDetail:
+      allOf:
+        - $ref: "#/components/schemas/Job"
+        - type: object
+          required: [events]
+          properties:
+            events: { type: array, items: { $ref: "#/components/schemas/JobEvent" } }
+    JobPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Job" } }
+        next_cursor: { type: string }
+    JobInput:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [renditions.prepare] }
+        params:
+          type: object
+          properties:
+            asset_id: { type: string, description: Only the renditions of this image }
     CameraUser:
       type: object
       required: [username, role]

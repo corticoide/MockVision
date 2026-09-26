@@ -247,3 +247,87 @@ func TestBulkEndpointReportsEachCamera(t *testing.T) {
 		t.Fatalf("unknown action: %d", r.StatusCode)
 	}
 }
+
+func TestJobsEndpoints(t *testing.T) {
+	n := newTestNode(t) // the node does not run jobs: they stay queued
+	read := n.token("read")
+	if r := n.do("GET", "/jobs?status=active", "", bearer(read)); r.StatusCode != http.StatusOK {
+		t.Fatalf("list with a read token: %d", r.StatusCode)
+	}
+	if r := n.do("POST", "/jobs", `{"type":"renditions.prepare"}`, bearer(read)); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("create with a read token: %d", r.StatusCode)
+	}
+	if r := n.panel("POST", "/jobs", `{"type":"import"}`); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("import through /jobs: %d", r.StatusCode)
+	}
+	if r := n.panel("GET", "/jobs?status=bogus", ""); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown status filter: %d", r.StatusCode)
+	}
+
+	r := n.panel("POST", "/jobs", `{"type":"renditions.prepare"}`)
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("create: %d", r.StatusCode)
+	}
+	var job struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Title  string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "queued" || job.Title == "" {
+		t.Fatalf("created: %+v", job)
+	}
+	// Asking for the same work again joins the open job.
+	var again struct{ ID string }
+	_ = json.NewDecoder(n.panel("POST", "/jobs", `{"type":"renditions.prepare","params":{}}`).Body).Decode(&again)
+	if again.ID != job.ID {
+		t.Fatalf("second request: %s, want %s", again.ID, job.ID)
+	}
+
+	var detail struct {
+		ID     string `json:"id"`
+		Events []struct {
+			Kind string `json:"kind"`
+		} `json:"events"`
+	}
+	if err := json.NewDecoder(n.panel("GET", "/jobs/"+job.ID, "").Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.ID != job.ID || len(detail.Events) != 1 || detail.Events[0].Kind != "status" {
+		t.Fatalf("detail: %+v", detail)
+	}
+	for action, want := range map[string]int{"answer": http.StatusConflict, "resume": http.StatusConflict, "explode": http.StatusNotFound} {
+		body := ""
+		if action == "answer" {
+			body = `{"answer":"skip"}`
+		}
+		if r := n.panel("POST", "/jobs/"+job.ID+"/actions/"+action, body); r.StatusCode != want {
+			t.Fatalf("%s: %d, want %d", action, r.StatusCode, want)
+		}
+	}
+	if r := n.panel("POST", "/jobs/"+job.ID+"/actions/cancel", ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("cancel: %d", r.StatusCode)
+	}
+	_ = json.NewDecoder(n.panel("GET", "/jobs/"+job.ID, "").Body).Decode(&job)
+	if job.Status != "canceled" {
+		t.Fatalf("after cancel: %s", job.Status)
+	}
+	if r := n.panel("GET", "/jobs/01J8Z3QK0000000000000000AB", ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing job: %d", r.StatusCode)
+	}
+	// The audit names the job.
+	var audit struct {
+		Items []struct {
+			Action string `json:"action"`
+			Entity struct {
+				Name string `json:"name"`
+			} `json:"entity"`
+		} `json:"items"`
+	}
+	_ = json.NewDecoder(n.panel("GET", "/audit?action=job", "").Body).Decode(&audit)
+	if len(audit.Items) != 2 || audit.Items[0].Action != "job.cancel" || audit.Items[0].Entity.Name != job.Title {
+		t.Fatalf("audit: %+v", audit.Items)
+	}
+}

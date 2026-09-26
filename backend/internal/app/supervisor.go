@@ -218,8 +218,14 @@ func (ss *session) run(b *cameraBundle) {
 	}()
 	ctx := s.baseCtx
 
-	// Provisioning: streams and network identity.
-	streams, err := s.prepareStreams(ctx, b)
+	// Provisioning: streams and network identity. A stop that comes while
+	// the streams encode ends the wait at once; the encoding job goes on
+	// for whoever needs it next.
+	streams, stopReason, err := ss.prepareStreamsUnlessStopped(ctx, b)
+	if stopReason != "" {
+		ss.finishStopped(stopReason)
+		return
+	}
 	if err != nil {
 		ss.fail(fmt.Sprintf("stream: %v", err), false)
 		return
@@ -320,6 +326,33 @@ func (ss *session) run(b *cameraBundle) {
 				return
 			}
 		}
+	}
+}
+
+// prepareStreamsUnlessStopped prepares the streams, giving up when the
+// camera is stopped meanwhile; it then returns the stop's reason.
+func (ss *session) prepareStreamsUnlessStopped(ctx context.Context, b *cameraBundle) ([]ipc.Stream, string, error) {
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopped := make(chan string, 1)
+	watching := make(chan struct{})
+	go func() {
+		defer close(watching)
+		select {
+		case reason := <-ss.stopCh:
+			stopped <- reason
+			cancel()
+		case <-pctx.Done():
+		}
+	}()
+	streams, err := ss.s.prepareStreams(pctx, b)
+	cancel()
+	<-watching
+	select {
+	case reason := <-stopped:
+		return nil, reason, err
+	default:
+		return streams, "", err
 	}
 }
 

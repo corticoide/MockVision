@@ -19,6 +19,10 @@ type Settings struct {
 	MaxCPUPercent       float64 `json:"max_cpu_percent"`
 	ParentInterface     string  `json:"parent_interface"`
 	EventsRetentionDays int     `json:"events_retention_days"`
+	// MaxJobs is how many background jobs run at once (D72).
+	MaxJobs int `json:"max_jobs"`
+	// JobStepTimeoutSeconds bounds each step of a job (D72).
+	JobStepTimeoutSeconds int `json:"job_step_timeout_seconds"`
 }
 
 // SettingsPatch changes some settings.
@@ -28,13 +32,16 @@ type SettingsPatch struct {
 	MaxCPUPercent       *float64 `json:"max_cpu_percent,omitempty"`
 	ParentInterface     *string  `json:"parent_interface,omitempty"`
 	EventsRetentionDays *int     `json:"events_retention_days,omitempty"`
+	MaxJobs             *int     `json:"max_jobs,omitempty"`
+	JobStepTimeoutSecs  *int     `json:"job_step_timeout_seconds,omitempty"`
 }
 
 const settingsKey = "node"
 
 func defaultSettings() Settings {
 	l := domain.DefaultAdmissionLimits()
-	return Settings{MaxCameras: l.MaxCameras, MaxRAMPercent: l.MaxRAMPercent, MaxCPUPercent: l.MaxCPUPercent, EventsRetentionDays: 7}
+	return Settings{MaxCameras: l.MaxCameras, MaxRAMPercent: l.MaxRAMPercent, MaxCPUPercent: l.MaxCPUPercent, EventsRetentionDays: 7,
+		MaxJobs: 2, JobStepTimeoutSeconds: 600}
 }
 
 // Settings returns the current settings.
@@ -84,6 +91,18 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 			v.Add("events_retention_days", "must be between 1 and 365")
 		}
 		set.EventsRetentionDays = *p.EventsRetentionDays
+	}
+	if p.MaxJobs != nil {
+		if *p.MaxJobs < 1 || *p.MaxJobs > 16 {
+			v.Add("max_jobs", "must be between 1 and 16")
+		}
+		set.MaxJobs = *p.MaxJobs
+	}
+	if p.JobStepTimeoutSecs != nil {
+		if *p.JobStepTimeoutSecs < 10 || *p.JobStepTimeoutSecs > 3600 {
+			v.Add("job_step_timeout_seconds", "must be between 10 and 3600")
+		}
+		set.JobStepTimeoutSeconds = *p.JobStepTimeoutSecs
 	}
 	if err := v.Err(); err != nil {
 		return before, err

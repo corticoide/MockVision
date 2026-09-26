@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -21,6 +22,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
+	"github.com/corticoide/mockvision/backend/internal/worker"
 )
 
 const builtinAssetName = "MockVision test pattern"
@@ -148,11 +150,7 @@ func (s *Service) AssetFile(ctx context.Context, id string) (string, string, err
 	if err != nil {
 		return "", "", store.NotFound(err)
 	}
-	ext := ".jpg"
-	if a.Mime == "image/png" {
-		ext = ".png"
-	}
-	return s.lib.AssetPath(a.Sha256, ext), a.Mime, nil
+	return s.lib.AssetPath(a.Sha256, assetExt(a)), a.Mime, nil
 }
 
 // DeleteAsset removes an unused asset (RN-12).
@@ -170,11 +168,7 @@ func (s *Service) DeleteAsset(ctx context.Context, actor Actor, id string) error
 		}
 		return err
 	}
-	ext := ".jpg"
-	if a.Mime == "image/png" {
-		ext = ".png"
-	}
-	_ = os.Remove(s.lib.AssetPath(a.Sha256, ext))
+	_ = os.Remove(s.lib.AssetPath(a.Sha256, assetExt(a)))
 	s.audit(ctx, actor, "asset.delete", "asset", id, map[string]string{"name": a.Filename})
 	return nil
 }
@@ -197,82 +191,154 @@ func (s *Service) ensureRenditionRow(ctx context.Context, asset db.Asset, set pr
 	return s.store.R().GetRenditionByParams(ctx, p)
 }
 
-type encodeJob struct {
-	done  chan struct{}
-	files media.Files
-	err   error
-}
-
 func renditionParams(r db.Rendition) media.Params {
 	return media.Params{Codec: r.Codec, Width: int(r.Width), Height: int(r.Height), FPS: int(r.Fps), GOP: int(r.Gop), Bitrate: int(r.Bitrate)}
 }
 
-// encodeRendition makes sure a rendition is encoded, running FFmpeg once
-// even when several cameras need it at the same time.
-func (s *Service) encodeRendition(ctx context.Context, id string) (media.Files, error) {
+func assetExt(a db.Asset) string {
+	if a.Mime == "image/png" {
+		return ".png"
+	}
+	return ".jpg"
+}
+
+// encodeLock serializes the encoding of one rendition: a rendition job and
+// a batch that prepares many may reach the same one.
+func (s *Service) encodeLock(key string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.encodes[key]
+	if !ok {
+		m = &sync.Mutex{}
+		s.encodes[key] = m
+	}
+	return m
+}
+
+// renditionInfo loads a rendition, its asset and its cache key.
+func (s *Service) renditionInfo(ctx context.Context, id string) (db.Rendition, db.Asset, string, error) {
 	r, err := s.store.R().GetRendition(ctx, id)
 	if err != nil {
-		return media.Files{}, store.NotFound(err)
+		return r, db.Asset{}, "", store.NotFound(err)
 	}
 	asset, err := s.store.R().GetAsset(ctx, r.AssetID)
 	if err != nil {
+		return r, asset, "", err
+	}
+	return r, asset, renditionParams(r).Key(asset.Sha256), nil
+}
+
+func renditionTitle(r db.Rendition, a db.Asset) string {
+	return fmt.Sprintf("Encode %dx%d %s at %d fps from %s", r.Width, r.Height, r.Codec, r.Fps, a.Filename)
+}
+
+type renditionJobParams struct {
+	RenditionID string `json:"rendition_id"`
+}
+
+// renditionJob queues the encoding of a rendition, or joins the job that
+// is already on it: many cameras may need the same one at once.
+func (s *Service) renditionJob(ctx context.Context, r db.Rendition, asset db.Asset, key string) (worker.Job, error) {
+	j, _, err := s.jobs.Submit(ctx, worker.Spec{
+		Type: JobRendition, Title: renditionTitle(r, asset), Params: renditionJobParams{RenditionID: r.ID},
+		Key: "rendition:" + key, CreatedBy: "node",
+	})
+	return j, err
+}
+
+// encodeRendition makes sure a rendition is encoded and returns its files.
+// The work runs as a job; ctx only bounds the wait.
+func (s *Service) encodeRendition(ctx context.Context, id string) (media.Files, error) {
+	r, asset, key, err := s.renditionInfo(ctx, id)
+	if err != nil {
 		return media.Files{}, err
 	}
-	params := renditionParams(r)
-	key := params.Key(asset.Sha256)
 	if s.lib.Ready(key) {
 		if r.Status != string(domain.RenditionReady) {
 			_ = s.store.W().SetRenditionStatus(ctx, db.SetRenditionStatusParams{ID: id, Status: string(domain.RenditionReady), Sha256: key})
 		}
 		return s.lib.RenditionFiles(key), nil
 	}
-	s.mu.Lock()
-	job, running := s.encodes[key]
-	if !running {
-		job = &encodeJob{done: make(chan struct{})}
-		s.encodes[key] = job
+	j, err := s.renditionJob(ctx, r, asset, key)
+	if err != nil {
+		return media.Files{}, err
 	}
-	s.mu.Unlock()
-	if !running {
-		go func() {
-			defer func() {
-				s.mu.Lock()
-				delete(s.encodes, key)
-				s.mu.Unlock()
-				close(job.done)
-			}()
-			ext := ".jpg"
-			if asset.Mime == "image/png" {
-				ext = ".png"
-			}
-			start := time.Now()
-			job.files, job.err = s.lib.Encode(s.baseCtx, s.lib.AssetPath(asset.Sha256, ext), params, key)
-			st := domain.RenditionReady
-			msg := ""
-			if job.err != nil {
-				st, msg = domain.RenditionFailed, job.err.Error()
-				s.log.Error("rendition failed", "rendition", id, "error", job.err)
-			} else {
-				s.log.Info("rendition encoded", "rendition", id, "size", fmt.Sprintf("%dx%d", params.Width, params.Height), "took", time.Since(start).Round(time.Millisecond))
-			}
-			_ = s.store.W().SetRenditionStatus(context.Background(), db.SetRenditionStatusParams{ID: id, Status: string(st), Sha256: key, Error: msg})
-		}()
+	if j, err = s.jobs.Wait(ctx, j.ID); err != nil {
+		return media.Files{}, err
 	}
-	select {
-	case <-job.done:
-		return job.files, job.err
-	case <-ctx.Done():
-		return media.Files{}, ctx.Err()
+	if j.Status != worker.Completed {
+		if j.Error != "" {
+			return media.Files{}, errors.New(j.Error)
+		}
+		return media.Files{}, fmt.Errorf("the encoding job was %s", j.Status)
+	}
+	return s.lib.RenditionFiles(key), nil
+}
+
+// encodeAsync queues the encoding of a rendition without waiting for it.
+func (s *Service) encodeAsync(id string) {
+	r, asset, key, err := s.renditionInfo(s.baseCtx, id)
+	if err != nil || s.lib.Ready(key) {
+		return
+	}
+	if _, err := s.renditionJob(s.baseCtx, r, asset, key); err != nil {
+		s.log.Warn("cannot queue a rendition", "rendition", id, "error", err)
 	}
 }
 
-// encodeAsync starts encoding a rendition in the background.
-func (s *Service) encodeAsync(id string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(s.baseCtx, 10*time.Minute)
-		defer cancel()
-		_, _ = s.encodeRendition(ctx, id)
-	}()
+// runRendition is the rendition job: it encodes the stream, then the
+// snapshot. The stream file on disk is its checkpoint, so a job resumed
+// after a restart goes straight to the snapshot.
+func (s *Service) runRendition(ctx context.Context, run *worker.Run) (any, error) {
+	var p renditionJobParams
+	if err := run.Params(&p); err != nil {
+		return nil, err
+	}
+	r, asset, key, err := s.renditionInfo(ctx, p.RenditionID)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	err = s.encodeSteps(ctx, run, r, asset, key, 0, 1)
+	result := map[string]any{"rendition_id": r.ID, "resolution": fmt.Sprintf("%dx%d", r.Width, r.Height), "codec": r.Codec, "fps": r.Fps}
+	switch {
+	case err == nil:
+		_ = s.store.W().SetRenditionStatus(ctx, db.SetRenditionStatusParams{ID: r.ID, Status: string(domain.RenditionReady), Sha256: key})
+		s.log.Info("rendition encoded", "rendition", r.ID, "size", fmt.Sprintf("%dx%d", r.Width, r.Height), "took", time.Since(start).Round(time.Millisecond))
+	case ctx.Err() == nil:
+		// A stop or a cancel leaves the rendition pending for the next try.
+		_ = s.store.W().SetRenditionStatus(ctx, db.SetRenditionStatusParams{ID: r.ID, Status: string(domain.RenditionFailed), Sha256: key, Error: err.Error()})
+	}
+	return result, err
+}
+
+// encodeSteps encodes what a rendition still lacks, reporting the job's
+// progress between from and to.
+func (s *Service) encodeSteps(ctx context.Context, run *worker.Run, r db.Rendition, asset db.Asset, key string, from, to float64) error {
+	lock := s.encodeLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	if s.lib.Ready(key) {
+		return nil
+	}
+	params := renditionParams(r)
+	src := s.lib.AssetPath(asset.Sha256, assetExt(asset))
+	span := to - from
+	if !s.lib.StreamReady(key) {
+		run.Step(fmt.Sprintf("Stream %dx%d", r.Width, r.Height), from)
+		sctx, cancel := run.StepContext(ctx)
+		err := s.lib.EncodeStream(sctx, src, params, key, func(frames int) {
+			run.Progress(from + span*0.85*float64(frames)/float64(params.GOP))
+		})
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	run.Step("Snapshot", from+span*0.85)
+	sctx, cancel := run.StepContext(ctx)
+	defer cancel()
+	return s.lib.EncodeSnapshot(sctx, src, params, key)
 }
 
 // prepareStreams computes each stream's settings from the camera state,
@@ -281,22 +347,9 @@ func (s *Service) prepareStreams(ctx context.Context, b *cameraBundle) ([]ipc.St
 	values := b.values()
 	var out []ipc.Stream
 	for _, st := range b.streams {
-		set, err := b.model.StreamFor(st.Stream, values)
+		set, rend, err := s.streamRendition(ctx, b, st, values)
 		if err != nil {
 			return nil, err
-		}
-		asset, err := s.store.R().GetAsset(ctx, st.AssetID)
-		if err != nil {
-			return nil, fmt.Errorf("asset %s: %w", st.AssetID, err)
-		}
-		rend, err := s.ensureRenditionRow(ctx, asset, set)
-		if err != nil {
-			return nil, err
-		}
-		if !st.RenditionID.Valid || st.RenditionID.String != rend.ID {
-			if err := s.store.W().UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: b.cam.ID, Stream: st.Stream, AssetID: asset.ID, RenditionID: store.NullString(rend.ID)}); err != nil {
-				return nil, err
-			}
 		}
 		files, err := s.encodeRendition(ctx, rend.ID)
 		if err != nil {
@@ -313,10 +366,33 @@ func (s *Service) prepareStreams(ctx context.Context, b *cameraBundle) ([]ipc.St
 	return out, nil
 }
 
+// streamRendition is the rendition a camera stream needs with the current
+// parameter values; the stream is pointed at it.
+func (s *Service) streamRendition(ctx context.Context, b *cameraBundle, st db.CameraStream, values map[string]any) (profile.StreamSettings, db.Rendition, error) {
+	set, err := b.model.StreamFor(st.Stream, values)
+	if err != nil {
+		return set, db.Rendition{}, err
+	}
+	asset, err := s.store.R().GetAsset(ctx, st.AssetID)
+	if err != nil {
+		return set, db.Rendition{}, fmt.Errorf("asset %s: %w", st.AssetID, err)
+	}
+	rend, err := s.ensureRenditionRow(ctx, asset, set)
+	if err != nil {
+		return set, rend, err
+	}
+	if !st.RenditionID.Valid || st.RenditionID.String != rend.ID {
+		if err := s.store.W().UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: b.cam.ID, Stream: st.Stream, AssetID: asset.ID, RenditionID: store.NullString(rend.ID)}); err != nil {
+			return set, rend, err
+		}
+	}
+	return set, rend, nil
+}
+
 // regenerateStreams re-encodes streams after an effective parameter
 // changed and hands them to the running camera.
-func (s *Service) regenerateStreams(id string) {
-	ctx, cancel := context.WithTimeout(s.baseCtx, 10*time.Minute)
+func (s *Service) regenerateStreams(ctx context.Context, id string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	b, err := s.loadBundle(ctx, id)
 	if err != nil {
@@ -335,6 +411,11 @@ func (s *Service) regenerateStreams(id string) {
 	if v, err := s.GetCamera(ctx, id); err == nil {
 		s.pub.Publish("cameras", "updated", v)
 	}
+}
+
+// regenerateStreamsLater re-encodes a camera's streams in the background.
+func (s *Service) regenerateStreamsLater(id string) {
+	s.goBackground(func(ctx context.Context) { s.regenerateStreams(ctx, id) })
 }
 
 // SnapshotFile returns the JPEG of a camera's main stream, the preview of

@@ -37,10 +37,15 @@ func (c *wsClient) subscribed(topic string) bool {
 	return c.topics[topic]
 }
 
-func (c *wsClient) addTopic(topic string) {
+// addTopic subscribes the client to a topic, up to maxTopics in all.
+func (c *wsClient) addTopic(topic string) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.topics[topic] && len(c.topics) >= maxTopics {
+		return false
+	}
 	c.topics[topic] = true
-	c.mu.Unlock()
+	return true
 }
 
 func (c *wsClient) removeTopic(topic string) {

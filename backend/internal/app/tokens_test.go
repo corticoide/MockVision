@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 // recorder keeps what the service publishes.
 type recorder struct {
+	mu   sync.Mutex
 	msgs []published
 }
 
@@ -27,8 +29,25 @@ type published struct {
 }
 
 func (r *recorder) Publish(topic, typ string, data any) {
+	r.mu.Lock()
 	r.msgs = append(r.msgs, published{topic, typ, data})
+	r.mu.Unlock()
 }
+
+// published returns a copy of what was published on topic.
+func (r *recorder) on(topic string) []published {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []published
+	for _, m := range r.msgs {
+		if m.topic == topic {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (r *recorder) Forget(string) {}
 
 // newBareService builds a service that is not running: enough for users,
 // tokens and the audit log, without FFmpeg or cameras.
@@ -255,8 +274,8 @@ func TestAuditRecordsOrigin(t *testing.T) {
 	}
 
 	live := 0
-	for _, m := range rec.msgs {
-		if m.topic == "audit" && m.typ == "entry" {
+	for _, m := range rec.on("audit") {
+		if m.typ == "entry" {
 			live++
 		}
 	}

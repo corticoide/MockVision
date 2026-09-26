@@ -49,6 +49,12 @@ var testActor = Actor{Type: "user", ID: "test", Name: "test", IP: "127.0.0.1"}
 // imported. Cameras are real processes answering on 127.0.0.1.
 func newTestService(t *testing.T) *Service {
 	t.Helper()
+	return newTestServiceWith(t, "ffmpeg")
+}
+
+// newTestServiceWith is newTestService with another FFmpeg binary.
+func newTestServiceWith(t *testing.T, ffmpeg string) *Service {
+	t.Helper()
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -60,7 +66,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rt := netctl.NewLocalRuntime(testExe, log)
-	svc, err := New(Options{DataDir: dir, FFmpeg: "ffmpeg", Exe: testExe, Runtime: rt, Log: log}, st, nil)
+	svc, err := New(Options{DataDir: dir, FFmpeg: ffmpeg, Exe: testExe, Runtime: rt, Log: log}, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

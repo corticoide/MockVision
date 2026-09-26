@@ -172,6 +172,10 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	if err := domain.ValidateCameraName(in.Name); err != nil {
 		return nil, err
 	}
+	cleanTags, err := domain.NormalizeTags(in.Tags)
+	if err != nil {
+		return nil, err
+	}
 	prof, err := s.store.R().GetProfileByRef(ctx, db.GetProfileByRefParams{ProfileID: in.ProfileID, Version: in.ProfileVersion})
 	if err != nil {
 		if notFound(err) {
@@ -269,7 +273,7 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	if in.Autostart != nil {
 		autostart = *in.Autostart
 	}
-	tags, _ := json.Marshal(nonNil(in.Tags))
+	tags, _ := json.Marshal(cleanTags)
 	now := time.Now()
 	serial := serialFor(id, doc.Identity.Serial)
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
@@ -784,7 +788,11 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 	}
 	tags := b.cam.TagsJson
 	if in.Tags != nil {
-		raw, _ := json.Marshal(nonNil(*in.Tags))
+		clean, err := domain.NormalizeTags(*in.Tags)
+		if err != nil {
+			return nil, err
+		}
+		raw, _ := json.Marshal(clean)
 		tags = string(raw)
 	}
 	if in.TargetIDs != nil {
@@ -874,6 +882,7 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 	s.metrics.Remove(id)
 	s.audit(ctx, actor, "camera.delete", "camera", id, map[string]string{"name": cam.Name})
 	s.pub.Publish("cameras", "deleted", map[string]string{"id": id})
+	s.pub.Forget("camera:" + id)
 	return nil
 }
 
@@ -977,7 +986,7 @@ func (s *Service) afterChanges(id string, changes []engine.Change) {
 	}
 	s.pub.Publish("camera:"+id, "config", changes)
 	if media {
-		go s.regenerateStreams(id)
+		s.regenerateStreamsLater(id)
 	}
 }
 

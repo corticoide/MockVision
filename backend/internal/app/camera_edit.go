@@ -363,7 +363,7 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 		}
 		s.pub.Publish("camera:"+id, "config", changes)
 	}
-	go s.regenerateStreams(id)
+	s.regenerateStreamsLater(id)
 	return s.publishCamera(ctx, id)
 }
 
@@ -465,7 +465,7 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 	if ss := s.session(id); ss != nil {
 		return s.RestartCamera(ctx, actor, id)
 	}
-	go s.regenerateStreams(id)
+	s.regenerateStreamsLater(id)
 	return s.publishCamera(ctx, id)
 }
 

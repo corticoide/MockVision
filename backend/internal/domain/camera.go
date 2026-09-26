@@ -120,6 +120,37 @@ func ValidateCameraName(name string) error {
 	return nil
 }
 
+// Limits of camera tags.
+const (
+	MaxCameraTags = 20
+	MaxTagLength  = 32
+)
+
+// NormalizeTags trims tags, drops empty ones and repeats (ignoring case,
+// keeping the first spelling) and checks their limits.
+func NormalizeTags(tags []string) ([]string, error) {
+	out := make([]string, 0, len(tags))
+	seen := map[string]bool{}
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[strings.ToLower(t)] {
+			continue
+		}
+		if utf8.RuneCountInString(t) > MaxTagLength {
+			return nil, Invalid("tags", "%q is longer than %d characters", t, MaxTagLength)
+		}
+		if strings.IndexFunc(t, unicode.IsControl) >= 0 || strings.Contains(t, ",") {
+			return nil, Invalid("tags", "%q must not contain commas or control characters", t)
+		}
+		seen[strings.ToLower(t)] = true
+		out = append(out, t)
+	}
+	if len(out) > MaxCameraTags {
+		return nil, Invalid("tags", "a camera can have at most %d tags", MaxCameraTags)
+	}
+	return out, nil
+}
+
 // Slug turns a name into a lowercase ASCII identifier made of letters,
 // digits and dashes, at most max characters long. It is used for network
 // namespace names such as sim-front-door.

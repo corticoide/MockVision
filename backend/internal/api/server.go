@@ -123,6 +123,11 @@ func (s *Server) Handler() http.Handler {
 
 	auth("GET /api/v1/audit", s.handleListAudit)
 
+	auth("GET /api/v1/jobs", s.handleListJobs)
+	auth("POST /api/v1/jobs", s.handleCreateJob)
+	auth("GET /api/v1/jobs/{id}", s.handleGetJob)
+	auth("POST /api/v1/jobs/{id}/actions/{action}", s.handleJobAction)
+
 	auth("GET /api/v1/cameras", s.handleListCameras)
 	auth("POST /api/v1/cameras", s.handleCreateCamera)
 	auth("POST /api/v1/cameras/actions/bulk", s.handleBulkCameras)

@@ -200,6 +200,8 @@ type ImportResult struct {
 	Profile ProfileView `json:"profile"`
 	Report  pkg.Report  `json:"report"`
 	Created bool        `json:"created"`
+	// JobID is the import job, whose history keeps the steps.
+	JobID string `json:"job_id,omitempty"`
 }
 
 // ImportError carries the report of a rejected package.

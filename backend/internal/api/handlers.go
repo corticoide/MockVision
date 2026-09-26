@@ -14,6 +14,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/app"
 	"github.com/corticoide/mockvision/backend/internal/media"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
+	"github.com/corticoide/mockvision/backend/internal/worker"
 )
 
 // --- Authentication ---
@@ -138,6 +139,78 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Jobs ---
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, err := limitParam(q.Get("limit"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	page, err := s.svc.ListJobs(r.Context(), app.JobFilter{Status: q.Get("status"), Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: limit})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	var in app.JobInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	j, err := s.svc.CreateJob(r.Context(), actor(r), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	j, err := s.svc.GetJob(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
+}
+
+func (s *Server) handleJobAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var (
+		j   worker.Job
+		err error
+	)
+	switch r.PathValue("action") {
+	case "cancel":
+		j, err = s.svc.CancelJob(r.Context(), actor(r), id)
+	case "resume":
+		j, err = s.svc.ResumeJob(r.Context(), actor(r), id)
+	case "answer":
+		var body struct {
+			Answer string `json:"answer"`
+		}
+		if err := decode(r, &body); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		j, err = s.svc.AnswerJob(r.Context(), actor(r), id, body.Answer)
+	default:
+		writeProblem(w, r, Problem{Type: problemType + "not-found", Title: "Unknown action", Status: http.StatusNotFound,
+			Detail: "available actions: cancel, resume, answer"})
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
 }
 
 // --- Audit ---
@@ -287,17 +360,32 @@ func readUpload(w http.ResponseWriter, r *http.Request, limit int64) (string, []
 	return r.URL.Query().Get("filename"), data, nil
 }
 
+// handleImportPackage queues the import as a job and waits for it: the
+// answer is the result, as before, unless the job is still queued or
+// running after a minute; then it is 202 with the job to follow.
 func (s *Server) handleImportPackage(w http.ResponseWriter, r *http.Request) {
 	name, data, err := readUpload(w, r, pkg.MaxPackageBytes)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	res, err := s.svc.ImportPackage(r.Context(), actor(r), name, data)
+	job, err := s.svc.SubmitImport(r.Context(), actor(r), name, data)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), app.ImportWait)
+	defer cancel()
+	if job, err = s.svc.WaitJob(ctx, job.ID); err != nil && job.Status.Busy() {
+		writeJSON(w, http.StatusAccepted, map[string]any{"job": job})
+		return
+	}
+	res, err := app.ImportOutcome(job)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	res.JobID = job.ID
 	status := http.StatusOK
 	if res.Created {
 		status = http.StatusCreated

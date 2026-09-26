@@ -19,6 +19,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/secret"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/telemetry"
+	"github.com/corticoide/mockvision/backend/internal/worker"
 )
 
 // Options configure the service.
@@ -37,14 +38,18 @@ type Options struct {
 	Log     *slog.Logger
 }
 
-// Publisher pushes live updates to the panel (WebSocket topics).
+// Publisher pushes live updates to the panel (WebSocket topics). Forget
+// drops what a topic keeps for reconnecting clients, once nothing more will
+// be published on it.
 type Publisher interface {
 	Publish(topic, typ string, data any)
+	Forget(topic string)
 }
 
 type nopPublisher struct{}
 
 func (nopPublisher) Publish(string, string, any) {}
+func (nopPublisher) Forget(string)               {}
 
 // Service is the main service.
 type Service struct {
@@ -59,13 +64,18 @@ type Service struct {
 	node    *telemetry.NodeSampler
 	metrics *telemetry.Cameras
 	login   *loginGuard
+	jobs    *worker.Runner
 
 	mu       sync.Mutex
 	sessions map[string]*session
 	retries  map[string]*retryState
-	encodes  map[string]*encodeJob
+	encodes  map[string]*sync.Mutex
 	opLocks  map[string]*sync.Mutex
 	exits    map[string]netctl.Exit
+
+	// closing is set, under mu, when shutdown begins: no background work
+	// starts after that.
+	closing bool
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -101,11 +111,13 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(opts.DataDir, "packages"), 0o750); err != nil {
-		return nil, err
+	for _, dir := range []string{"packages", "jobs"} {
+		if err := os.MkdirAll(filepath.Join(opts.DataDir, dir), 0o750); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Service{
+	s := &Service{
 		opts:     opts,
 		log:      opts.Log,
 		store:    st,
@@ -119,12 +131,14 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		login:    newLoginGuard(),
 		sessions: map[string]*session{},
 		retries:  map[string]*retryState{},
-		encodes:  map[string]*encodeJob{},
+		encodes:  map[string]*sync.Mutex{},
 		opLocks:  map[string]*sync.Mutex{},
 		exits:    map[string]netctl.Exit{},
 		baseCtx:  ctx,
 		cancel:   cancel,
-	}, nil
+	}
+	s.jobs = s.newRunner()
+	return s, nil
 }
 
 // SetPublisher sets where live updates go.
@@ -140,6 +154,12 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.bootCameras(ctx); err != nil {
 		return err
 	}
+	// Jobs cut short by the last stop wait to be resumed (D74); the queue
+	// runs before cameras start, since they wait for their renditions.
+	if err := s.jobs.Recover(ctx); err != nil {
+		return err
+	}
+	s.goLoop(s.jobs.Run)
 	s.measureInterface(ctx)
 	s.goLoop(func(ctx context.Context) { s.node.Run(ctx, 2*time.Second) })
 	s.goLoop(s.publishNodeMetrics)
@@ -153,6 +173,17 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) goLoop(fn func(context.Context)) {
+	s.goBackground(fn)
+}
+
+// goBackground runs work that outlives a request, such as re-encoding a
+// camera's streams. Shutdown cancels its context and waits for it.
+func (s *Service) goBackground(fn func(context.Context)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		return
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -185,6 +216,7 @@ func (s *Service) bootCameras(ctx context.Context) error {
 
 func (s *Service) shutdown() {
 	s.mu.Lock()
+	s.closing = true
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, ss := range s.sessions {
 		sessions = append(sessions, ss)
@@ -221,8 +253,8 @@ func (s *Service) opLock(id string) *sync.Mutex {
 	return m
 }
 
-// retentionLoop deletes events, deliveries, sessions and audit entries
-// older than their retention (D33, audit 90 days).
+// retentionLoop deletes events, deliveries, sessions, audit entries and
+// finished jobs older than their retention (D33, audit 90 days, jobs 30).
 func (s *Service) retentionLoop(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -248,5 +280,8 @@ func (s *Service) applyRetention(ctx context.Context) {
 		s.log.Info("retention: deleted events", "count", n)
 	}
 	_, _ = w.DeleteAuditBefore(ctx, now.Add(-AuditRetention).UnixMilli())
+	if n, err := s.jobs.Prune(ctx, now.Add(-JobRetention)); err == nil && n > 0 {
+		s.log.Info("retention: deleted jobs", "count", n)
+	}
 	_, _ = w.DeleteExpiredSessions(ctx, now.UnixMilli())
 }
