@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox, Field, Input } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
 import { useT } from "@/lib/i18n";
+import { streamLabel, streamSummary } from "@/lib/media";
 import { Link } from "@/lib/router";
 import { formatBytes, formatPercent, formatTime, sinceText } from "@/lib/utils";
 import { EndpointList, Info, isRunning, SaveBar, SectionTitle, SnapshotPreview } from "./parts";
@@ -130,26 +131,28 @@ export function GeneralTab({ camera }: { camera: Camera }) {
 }
 
 function StatusCard({ camera }: { camera: Camera }) {
+  const t = useT();
   const { data: metrics } = useNodeMetrics();
   const m = metrics?.cameras[camera.id];
   const running = isRunning(camera);
-  const stream = camera.streams[0];
   return (
     <Card className="p-4">
-      <SectionTitle>Status</SectionTitle>
+      <SectionTitle>{t("Status")}</SectionTitle>
       <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[13px]">
-        <Info label="Serial" value={<Mono>{camera.serial}</Mono>} />
-        <Info label="Profile" value={<Mono>{`${camera.profile.id}@${camera.profile.version}`}</Mono>} />
-        <Info label="Stream" value={stream ? `${stream.codec.toUpperCase()} ${stream.resolution} @ ${stream.fps} fps` : "—"} />
-        <Info label="Up for" value={running ? sinceText(camera.status.started_at) : "—"} />
-        <Info label="Last heartbeat" value={formatTime(camera.status.last_heartbeat)} />
-        <Info label="PID / namespace" value={camera.status.pid ? <Mono>{[camera.status.pid, camera.status.netns].filter(Boolean).join(" · ")}</Mono> : "—"} />
-        <Info label="CPU" value={<Mono>{running && m ? formatPercent(m.cpu_percent) : "—"}</Mono>} />
-        <Info label="RAM" value={<Mono>{running && m ? formatBytes(m.rss_bytes) : "—"}</Mono>} />
-        <Info label="Clients" value={<Mono>{running && m ? m.clients : "—"}</Mono>} />
-        <Info label="Created" value={formatTime(camera.created_at)} />
-        <Info label="Updated" value={formatTime(camera.updated_at)} />
-        <Info label="Retries" value={camera.status.retries || "—"} />
+        <Info label={t("Serial")} value={<Mono>{camera.serial}</Mono>} />
+        <Info label={t("Profile")} value={<Mono>{`${camera.profile.id}@${camera.profile.version}`}</Mono>} />
+        <Info label={t("Up for")} value={running ? sinceText(camera.status.started_at) : "—"} />
+        {camera.streams.map((s) => (
+          <Info key={s.name} label={streamLabel(s.name, t)} value={streamSummary(s)} />
+        ))}
+        <Info label={t("Last heartbeat")} value={formatTime(camera.status.last_heartbeat)} />
+        <Info label={t("PID / namespace")} value={camera.status.pid ? <Mono>{[camera.status.pid, camera.status.netns].filter(Boolean).join(" · ")}</Mono> : "—"} />
+        <Info label={t("CPU")} value={<Mono>{running && m ? formatPercent(m.cpu_percent) : "—"}</Mono>} />
+        <Info label={t("RAM")} value={<Mono>{running && m ? formatBytes(m.rss_bytes) : "—"}</Mono>} />
+        <Info label={t("Clients")} value={<Mono>{running && m ? m.clients : "—"}</Mono>} />
+        <Info label={t("Created")} value={formatTime(camera.created_at)} />
+        <Info label={t("Updated")} value={formatTime(camera.updated_at)} />
+        <Info label={t("Retries")} value={camera.status.retries || "—"} />
       </div>
     </Card>
   );

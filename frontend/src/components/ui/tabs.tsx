@@ -60,7 +60,7 @@ export function Tabs({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.id)}
             className={cn(
-              "-mb-px flex h-9 cursor-pointer items-center gap-1.5 border-b-2 border-transparent px-3 text-[13px] text-muted hover:text-text",
+              "-mb-px flex h-9 cursor-pointer items-center gap-1.5 border-b-2 border-transparent px-3 text-[13px] whitespace-nowrap text-muted hover:text-text",
               selected && "border-brand text-text",
             )}
           >

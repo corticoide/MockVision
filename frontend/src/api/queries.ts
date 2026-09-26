@@ -8,6 +8,7 @@ import {
   type AuditPage,
   type BulkAction,
   type Camera,
+  type CameraStream,
   type CameraUserInput,
   type CloneCamera,
   type CreateCamera,
@@ -242,7 +243,15 @@ export function useSetCameraProtocols(id: string) {
 export function useUpdateStream(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { stream: string; asset_id?: string; resolution?: string; fps?: number }) => {
+    mutationFn: async (v: {
+      stream: string;
+      asset_id?: string;
+      codec?: CameraStream["codec"];
+      resolution?: string;
+      fps?: number;
+      bitrate?: number;
+      gop?: number;
+    }) => {
       const { stream, ...body } = v;
       return unwrap(await api.PATCH("/cameras/{id}/streams/{stream}", { params: { path: { id, stream } }, body }));
     },

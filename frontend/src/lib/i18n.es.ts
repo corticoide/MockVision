@@ -617,4 +617,38 @@ export const es: Record<string, string> = {
   "Job step timeout (s)": "Tiempo máximo por paso (s)",
   "A step that takes longer fails its job.": "Un paso que tarda más hace fallar su trabajo.",
   URL: "URL",
+  CPU: "CPU",
+  RAM: "RAM",
+
+  // Streams and codecs
+  Streams: "Streams",
+  "Main stream": "Stream principal",
+  "Sub stream": "Stream secundario",
+  "Third stream": "Tercer stream",
+  "Best quality, for recording and full-screen viewing.": "La mejor calidad, para grabar y ver a pantalla completa.",
+  "A light copy for grids of many cameras, phones and slow links.":
+    "Una copia liviana para mosaicos de muchas cámaras, celulares y enlaces lentos.",
+  "An extra stream, often MJPEG, for simple clients and web pages.":
+    "Un stream extra, a menudo MJPEG, para clientes simples y páginas web.",
+  "A camera encodes the same picture several times, one stream per use. Recorders and viewers pick the stream they need by its RTSP address.":
+    "Una cámara codifica la misma imagen varias veces, un stream por uso. Grabadores y visores eligen el que necesitan por su dirección RTSP.",
+  "Snapshot of the {stream}": "Instantánea del {stream}",
+  "The same picture every client gets from this stream, at its resolution.":
+    "La misma imagen que recibe cada cliente de este stream, a su resolución.",
+  "No RTSP protocol serves this stream; its snapshot is still available.":
+    "Ningún protocolo RTSP sirve este stream; su instantánea sigue disponible.",
+  "H.264 plays everywhere; H.265 needs about half the bitrate but not every client plays it; MJPEG sends each frame as a JPEG.":
+    "H.264 se reproduce en todos lados; H.265 necesita cerca de la mitad del bitrate pero no todos los clientes lo reproducen; MJPEG envía cada cuadro como un JPEG.",
+  "Bitrate (kbit/s)": "Bitrate (kbit/s)",
+  "Bandwidth the stream uses. Between {min} and {max}.": "Ancho de banda que usa el stream. Entre {min} y {max}.",
+  "GOP (frames)": "GOP (cuadros)",
+  "Every MJPEG frame is a whole picture: there is no GOP.": "Cada cuadro MJPEG es una imagen completa: no hay GOP.",
+  "Frames from one keyframe to the next ({seconds} s). A client that connects shows the picture from a keyframe.":
+    "Cuadros de un cuadro clave al siguiente ({seconds} s). Un cliente que se conecta muestra la imagen desde un cuadro clave.",
+  Now: "Ahora",
+  "Of the main stream.": "Del stream principal.",
+  "H.264 plays in every client; H.265 uses less bandwidth.": "H.264 se reproduce en todos los clientes; H.265 usa menos ancho de banda.",
+  "It also serves {streams}, with the same picture.": "También sirve {streams}, con la misma imagen.",
+  "Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect (RN-09).":
+    "Se aplica sin reiniciar: el stream se codifica una vez y la cámara cambia a él; sus visores se reconectan (RN-09).",
 };

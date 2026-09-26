@@ -3,6 +3,7 @@ import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
 export type Camera = Schemas["Camera"];
+export type CameraStream = Schemas["Stream"];
 export type CameraState = Camera["status"]["state"];
 export type Profile = Schemas["Profile"];
 export type ProfileDetail = Schemas["ProfileDetail"];

@@ -4,6 +4,7 @@ import { Badge, Mono } from "@/components/badges";
 import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/lib/i18n";
+import { streamLabel } from "@/lib/media";
 
 export function isRunning(camera: Camera) {
   return camera.status.state === "running" || camera.status.state === "degraded";
@@ -22,8 +23,9 @@ export function Info({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-/** The main stream's snapshot, refreshed every 5 s while the camera runs. */
-export function SnapshotPreview({ camera }: { camera: Camera }) {
+/** A stream's snapshot, the main one by default, refreshed every 5 s while
+ * the camera runs. */
+export function SnapshotPreview({ camera, stream: name = "main" }: { camera: Camera; stream?: string }) {
   const t = useT();
   const running = isRunning(camera);
   const [tick, setTick] = useState(0);
@@ -32,12 +34,12 @@ export function SnapshotPreview({ camera }: { camera: Camera }) {
     const timer = setInterval(() => setTick((n) => n + 1), 5000);
     return () => clearInterval(timer);
   }, [running]);
-  const stream = camera.streams[0];
+  const stream = camera.streams.find((s) => s.name === name);
   // A new rendition means a new picture: reload it at once.
   const version = `${stream?.rendition_id ?? ""}-${tick}`;
   return stream?.rendition_status === "ready" ? (
     <img
-      src={`/api/v1/cameras/${camera.id}/snapshot?v=${version}`}
+      src={`/api/v1/cameras/${camera.id}/snapshot?stream=${encodeURIComponent(name)}&v=${version}`}
       alt={t("Snapshot of {name}", { name: camera.name })}
       className="aspect-video w-full rounded-sm border border-border bg-black object-contain"
     />
@@ -48,16 +50,23 @@ export function SnapshotPreview({ camera }: { camera: Camera }) {
   );
 }
 
+/** Where the camera answers; RTSP lists the address of every stream. */
 export function EndpointList({ camera }: { camera: Camera }) {
   const t = useT();
   if (camera.endpoints.length === 0) return <p className="text-[13px] text-muted">{t("No protocol is enabled.")}</p>;
+  const rows = camera.endpoints.flatMap((e) => {
+    const streams = e.protocol === "rtsp" ? camera.streams.filter((s) => s.url) : [];
+    if (streams.length === 0) return [{ key: e.instance, protocol: e.protocol, url: e.url, note: "" }];
+    return streams.map((s) => ({ key: `${e.instance}-${s.name}`, protocol: e.protocol, url: s.url!, note: streamLabel(s.name, t) }));
+  });
   return (
     <div className="flex flex-col gap-1.5">
-      {camera.endpoints.map((e) => (
-        <div key={e.instance} className="flex items-center gap-2">
-          <Badge tone="info">{e.protocol.toUpperCase()}</Badge>
-          <Mono className="select-all">{e.url}</Mono>
-          <CopyButton text={e.url} label={t("Copy URL")} />
+      {rows.map((r) => (
+        <div key={r.key} className="flex items-center gap-2">
+          <Badge tone="info">{r.protocol.toUpperCase()}</Badge>
+          <Mono className="select-all">{r.url}</Mono>
+          <CopyButton text={r.url} label={t("Copy URL")} />
+          {r.note && <span className="text-xs text-muted">{r.note}</span>}
         </div>
       ))}
     </div>

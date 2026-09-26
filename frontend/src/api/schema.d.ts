@@ -487,7 +487,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** @description Changes the picture, resolution or frame rate of a stream. The stream is encoded again and a running camera switches to it without restarting. */
+        /** @description Changes the picture of a stream or its encoding: codec, resolution, frame rate, bitrate and GOP, each through the profile parameter bound to it. The stream is encoded again and a running camera switches to it without restarting; RTSP clients of that stream reconnect. */
         patch: operations["updateCameraStream"];
         trace?: never;
     };
@@ -549,7 +549,10 @@ export interface paths {
     };
     "/cameras/{id}/snapshot": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description main (the default), sub or third */
+                stream?: string;
+            };
             header?: never;
             path: {
                 id: components["parameters"]["ID"];
@@ -954,6 +957,8 @@ export interface components {
             resolutions: string[];
             fps_min: number;
             fps_max: number;
+            bitrate_min?: number;
+            bitrate_max?: number;
             default: {
                 codec: string;
                 resolution: string;
@@ -1103,8 +1108,12 @@ export interface components {
             url: string;
         };
         Stream: {
-            name: string;
-            codec: string;
+            /** @enum {string} */
+            name: "main" | "sub" | "third";
+            /** @description RTSP URL of the stream */
+            url?: string;
+            /** @enum {string} */
+            codec: "h264" | "h265" | "mjpeg";
             resolution: string;
             fps: number;
             gop: number;
@@ -1175,8 +1184,11 @@ export interface components {
             profile_version: string;
             network?: components["schemas"]["NetworkInput"];
             users?: components["schemas"]["CameraUserInput"][];
+            /** @description The main stream; sub and third start from the profile defaults with the same picture. */
             stream?: {
                 asset_id?: string;
+                /** @enum {string} */
+                codec?: "h264" | "h265" | "mjpeg";
                 resolution?: string;
                 fps?: number;
             };
@@ -2207,8 +2219,14 @@ export interface operations {
             content: {
                 "application/json": {
                     asset_id?: string;
+                    /** @enum {string} */
+                    codec?: "h264" | "h265" | "mjpeg";
                     resolution?: string;
                     fps?: number;
+                    /** @description kbit/s */
+                    bitrate?: number;
+                    /** @description Frames between keyframes */
+                    gop?: number;
                 };
             };
         };
@@ -2333,7 +2351,10 @@ export interface operations {
     };
     getSnapshot: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description main (the default), sub or third */
+                stream?: string;
+            };
             header?: never;
             path: {
                 id: components["parameters"]["ID"];

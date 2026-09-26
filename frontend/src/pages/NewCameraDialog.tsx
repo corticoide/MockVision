@@ -7,6 +7,7 @@ import { Notice } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
+import { codecLabel, streamLabel } from "@/lib/media";
 import { navigate } from "@/lib/router";
 
 export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -26,12 +27,14 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
   }, [profileKey]);
   const { data: profile } = useProfile(ref);
   const stream = profile?.streams.find((s) => s.name === "main");
+  const bound = (field: string) => profile?.params.some((p) => p.bind === `media.main.${field}`) ?? false;
 
   const [name, setName] = useState("");
   const [ip, setIp] = useState("");
   const [netmask, setNetmask] = useState("255.255.255.0");
   const [gateway, setGateway] = useState("");
   const [resolution, setResolution] = useState("");
+  const [codec, setCodec] = useState("");
   const [assetId, setAssetId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -44,7 +47,10 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
     if (!profileKey && available.length > 0) setProfileKey(`${available[0].profile_id}@${available[0].version}`);
   }, [available, profileKey]);
   useEffect(() => {
-    if (stream) setResolution(stream.default.resolution);
+    if (stream) {
+      setResolution(stream.default.resolution);
+      setCodec(stream.default.codec);
+    }
     if (profile && !username) setUsername(profile.factory_users[0]?.username ?? "admin");
   }, [stream, profile, username]);
   useEffect(() => {
@@ -65,7 +71,12 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
       profile_id: ref.id,
       profile_version: ref.version,
       network: local ? undefined : { ip: ip.trim(), netmask: netmask.trim() || undefined, gateway: gateway.trim() || undefined },
-      stream: { resolution: resolution || undefined, asset_id: assetId || undefined },
+      // Only what differs from the profile: a profile may not let either change.
+      stream: {
+        resolution: resolution && resolution !== stream?.default.resolution ? resolution : undefined,
+        codec: codec && codec !== stream?.default.codec ? (codec as NonNullable<CreateCamera["stream"]>["codec"]) : undefined,
+        asset_id: assetId || undefined,
+      },
       users: password ? [{ username: username.trim() || "admin", password, role: "admin" }] : undefined,
       target_ids: targetIds,
       autostart,
@@ -144,12 +155,30 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
             </>
           )}
 
-          <Field label={t("Resolution")} error={fieldErrors["stream.resolution"]}>
-            <Select value={resolution} onChange={(e) => setResolution(e.target.value)}>
+          <Field
+            label={t("Resolution")}
+            error={fieldErrors["stream.resolution"]}
+            hint={bound("resolution") ? t("Of the main stream.") : t("Fixed by the profile.")}
+          >
+            <Select value={resolution} onChange={(e) => setResolution(e.target.value)} disabled={!bound("resolution")}>
               {stream?.resolutions.map((r) => (
                 <option key={r} value={r}>
                   {r}
                   {r === stream.default.resolution ? t(" (default)") : ""}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label={t("Codec")}
+            error={fieldErrors["stream.codec"]}
+            hint={bound("codec") ? t("H.264 plays in every client; H.265 uses less bandwidth.") : t("Fixed by the profile.")}
+          >
+            <Select value={codec} onChange={(e) => setCodec(e.target.value)} disabled={!bound("codec")}>
+              {stream?.codecs.map((c) => (
+                <option key={c} value={c}>
+                  {codecLabel(c)}
+                  {c === stream.default.codec ? t(" (default)") : ""}
                 </option>
               ))}
             </Select>
@@ -166,6 +195,16 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
                 ))}
             </Select>
           </Field>
+          <p className="self-end pb-1 text-xs text-muted">
+            {profile && profile.streams.length > 1
+              ? t("It also serves {streams}, with the same picture.", {
+                  streams: profile.streams
+                    .filter((s) => s.name !== "main")
+                    .map((s) => `${streamLabel(s.name, t).toLowerCase()} (${codecLabel(s.default.codec)} ${s.default.resolution})`)
+                    .join(t(" and ")),
+                })
+              : ""}
+          </p>
 
           <Field label={t("Camera user")} error={fieldErrors["users[0].username"]}>
             <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
