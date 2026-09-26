@@ -7,8 +7,9 @@
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
 # and camera processes, editing a running camera (accounts, stream and
-# address), API tokens with bulk actions and the audit log, background
-# jobs, clean stop, and cameras coming back after a restart.
+# address), sub and third streams in H.264, H.265 and MJPEG, API tokens
+# with bulk actions and the audit log, background jobs, clean stop, and
+# cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
@@ -173,7 +174,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.1.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.2.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -262,6 +263,35 @@ done
 [ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "the camera restarted"
 ok "ffprobe reads 1280x720 from the same camera process (pid $PID)"
 
+step "streams and codecs: sub and third streams, H.265 on the fly (D35)"
+probe_path() { # path -> codec,width,height
+	client ffprobe -v error -rtsp_transport tcp -select_streams v:0 \
+		-show_entries stream=codec_name,width,height -of csv=p=0 "rtsp://admin:e2e-new-pw@$CAM_IP:554$1" 2>/dev/null
+}
+urls=$(api GET "/cameras/$CID" | json '" ".join(s["name"] + "=" + s.get("url", "") for s in d["streams"])')
+[ "$urls" = "main=rtsp://$CAM_IP/main sub=rtsp://$CAM_IP/sub third=rtsp://$CAM_IP/third" ] || fail "stream URLs: $urls"
+[ "$(probe_path /sub)" = "h264,640,360" ] || fail "sub stream: $(probe_path /sub)"
+[ "$(probe_path /third)" = "mjpeg,640,360" ] || fail "third stream: $(probe_path /third)"
+ok "the camera serves /main, /sub (H.264 640x360) and /third (MJPEG 640x360)"
+client ffmpeg -v error -rtsp_transport tcp -i "rtsp://admin:e2e-new-pw@$CAM_IP:554/third" -frames:v 10 -f null - 2>"$WORK/third.err" ||
+	fail "decoding the MJPEG stream: $(cat "$WORK/third.err")"
+[ ! -s "$WORK/third.err" ] || fail "decoding the MJPEG stream: $(cat "$WORK/third.err")"
+ok "10 MJPEG frames decode without errors"
+api PATCH "/cameras/$CID/streams/sub" -H 'Content-Type: application/json' -d '{"codec":"h265","resolution":"320x180"}' >/dev/null
+for _ in $(seq 1 120); do
+	[ "$(probe_path /sub)" = "hevc,320,180" ] && break
+	sleep 0.5
+done
+[ "$(probe_path /sub)" = "hevc,320,180" ] || fail "the sub stream did not switch to H.265: $(probe_path /sub)"
+client ffmpeg -v error -rtsp_transport tcp -i "rtsp://admin:e2e-new-pw@$CAM_IP:554/sub" -frames:v 25 -f null - 2>"$WORK/sub.err" ||
+	fail "decoding the H.265 stream: $(cat "$WORK/sub.err")"
+[ ! -s "$WORK/sub.err" ] || fail "decoding the H.265 stream: $(cat "$WORK/sub.err")"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "the camera restarted"
+ok "the sub stream switched to H.265 320x180 and decodes past its GOP, same process"
+code=$(api GET "/cameras/$CID/snapshot?stream=third" -o "$WORK/third.jpg" -w '%{http_code}')
+[ "$code" = 200 ] && head -c 2 "$WORK/third.jpg" | od -An -tx1 | grep -q "ff d8" || fail "snapshot of the third stream: $code"
+ok "the panel shows the snapshot of each stream"
+
 step "the main service and the camera hold no capabilities"
 check_privileges() { # pid, label
 	local status caps uid
@@ -286,7 +316,7 @@ metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.1.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.2.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null

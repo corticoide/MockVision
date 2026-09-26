@@ -81,8 +81,9 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   itself, since it has no manifest.
 - **The official catalog is not bundled** (D81): profiles are imported by
   hand, as the acceptance criteria ask.
-- **H.264 only**, one stream per camera (`main`). No H.265, MJPEG streams or
-  substreams.
+- **H.264 only**, one stream per camera (`main`), in the demo itself. Since
+  v1 feature 5 cameras serve main, sub and third streams in H.264, H.265 or
+  MJPEG.
 - The RTSP Digest realm is `ipcam`, fixed by the RTSP library; the profile's
   realm applies to the HTTP API.
 

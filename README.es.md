@@ -19,8 +19,10 @@ reemplaza.
 - Una cámara creada desde el panel aparece en la LAN con su propia IP y MAC
   (macvlan). Antes de tomar la IP hace un sondeo ARP, y se anuncia con ARP
   gratuito.
-- RTSP H.264 a la resolución configurada, en bucle a partir de una imagen.
-  La imagen se codifica una sola vez y el bucle casi no usa CPU.
+- Streams RTSP en bucle a partir de una imagen: principal, secundario y
+  tercero, como los define el perfil, en H.264, H.265 o MJPEG. Cada imagen
+  se codifica una sola vez por configuración de stream y el bucle casi no
+  usa CPU.
 - Una API HTTP definida en un perfil YAML, con autenticación Digest:
   snapshot, información del equipo y lectura y escritura de un parámetro.
 - Un evento de cruce de línea, disparado desde el panel y enviado a un
@@ -66,7 +68,7 @@ Desde **otro equipo** de la misma LAN (la IP `192.168.1.50` y la contraseña
 ```sh
 ping 192.168.1.50
 ip neigh show 192.168.1.50   # la MAC propia de la cámara, no la del nodo
-ffprobe rtsp://admin:secret@192.168.1.50:554/main
+ffprobe rtsp://admin:secret@192.168.1.50:554/main   # también /sub y /third
 curl --digest -u admin:secret -o snapshot.jpg http://192.168.1.50/snapshot.cgi
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/operator.cgi?action=get.system.information"
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/param.cgi?action=set&Image.Brightness=70"
@@ -113,7 +115,27 @@ cortado por un reinicio queda *Interrumpido* hasta que lo reanudas desde su
 último punto de control. **Preparar variantes** codifica de antemano todos
 los streams que necesitan las cámaras, así arrancar muchas no espera nada;
 si una falla, pregunta si reintentar, omitirla o detenerse, y la omite si
-nadie responde en diez minutos.
+nadie responde en diez minutos. Un trabajo que espera tu respuesta no
+frena a los demás.
+
+### Streams y códecs
+
+Como una cámara real, cada cámara codifica la misma imagen una vez por uso:
+el stream **principal** para grabar, uno **secundario** liviano para
+mosaicos y celulares, y un **tercero**, a menudo MJPEG, para clientes
+simples. Cada uno tiene su dirección RTSP (`rtsp://<ip>/main`, `/sub`,
+`/third` con el perfil demo), que la pestaña **Medios** de la cámara muestra
+junto a su instantánea. El códec, la resolución, los cuadros por segundo, el
+bitrate y el GOP se cambian ahí, o desde la API propia de la cámara, cuando
+el perfil les vincula un parámetro; el stream se codifica de nuevo y la
+cámara cambia a él sin reiniciarse.
+
+- **H.264** se reproduce en todos los clientes. **H.265** necesita cerca de
+  la mitad del bitrate para la misma imagen, pero no todos los clientes lo
+  reproducen. **MJPEG** envía cada cuadro como un JPEG; por RTSP admite a lo
+  sumo 2040×2040 en múltiplos de 8.
+- Un cliente que se conecta recibe un cuadro clave enseguida, como de un
+  codificador real.
 
 ### Configuración
 

@@ -19,8 +19,9 @@ the outside; it does not replace one.
 - A camera created in the panel appears on the LAN with its own IP and MAC
   (macvlan). Before taking the IP it runs an ARP probe, and it announces
   itself with gratuitous ARP.
-- RTSP H.264 at the configured resolution, looped from a picture. The picture
-  is encoded once and the loop costs almost no CPU.
+- RTSP streams looped from a picture: main, sub and third, as the profile
+  defines them, in H.264, H.265 or MJPEG. Each picture is encoded once per
+  stream setting and the loop costs almost no CPU.
 - An HTTP API from a YAML profile, with Digest authentication: snapshot,
   device information and reading and writing a parameter.
 - A line-crossing event, triggered from the panel and sent to a target with
@@ -64,7 +65,7 @@ From **another device** on the same LAN (IP `192.168.1.50` and password
 ```sh
 ping 192.168.1.50
 ip neigh show 192.168.1.50   # the camera's own MAC, not the node's
-ffprobe rtsp://admin:secret@192.168.1.50:554/main
+ffprobe rtsp://admin:secret@192.168.1.50:554/main   # also /sub and /third
 curl --digest -u admin:secret -o snapshot.jpg http://192.168.1.50/snapshot.cgi
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/operator.cgi?action=get.system.information"
 curl --digest -u admin:secret "http://192.168.1.50/cgi-bin/operator/param.cgi?action=set&Image.Brightness=70"
@@ -109,7 +110,24 @@ Closing the browser stops nothing, and a job cut short by a restart stays
 *Interrupted* until you resume it from its last checkpoint. **Prepare
 renditions** encodes up front every stream the cameras need, so starting
 many of them waits for nothing; when one fails it asks whether to retry,
-skip it or stop, and skips it if nobody answers within ten minutes.
+skip it or stop, and skips it if nobody answers within ten minutes. A job
+waiting for an answer does not hold back the others.
+
+### Streams and codecs
+
+A camera encodes the same picture once per use, as real ones do: the
+**main** stream for recording, a light **sub** stream for grids and phones,
+and a **third** one, often MJPEG, for simple clients. Each has its RTSP
+address (`rtsp://<ip>/main`, `/sub`, `/third` with the demo profile), shown
+in the camera's **Media** tab with its snapshot. Codec, resolution, frame
+rate, bitrate and GOP change there, or from the camera's own API, when the
+profile binds a parameter to them; the stream is encoded again and the
+camera switches to it without restarting.
+
+- **H.264** plays in every client. **H.265** needs about half the bitrate for
+  the same picture, but not every client plays it. **MJPEG** sends every
+  frame as a JPEG; over RTSP it carries at most 2040×2040 in multiples of 8.
+- A client that connects gets a keyframe at once, as from a real encoder.
 
 ### Configuration
 
