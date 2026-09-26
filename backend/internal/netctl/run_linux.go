@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/corticoide/mockvision/backend/internal/netctl/privdrop"
 )
 
 // RunMain is the entry point of "mockvision run", the process started by
@@ -82,6 +84,14 @@ func RunMain(args []string, log *slog.Logger) int {
 		return 1
 	}
 	serviceEnd.Close()
+	// From here on the helper only starts cameras, as an unprivileged user:
+	// with an empty bounding set, nothing it executes can hold a
+	// capability. The helper keeps the ones it uses itself.
+	if err := privdrop.DropBounding(); err != nil {
+		log.Error("cannot empty the capability bounding set", "error", err)
+		_ = cmd.Process.Kill()
+		return 1
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

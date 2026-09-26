@@ -40,13 +40,24 @@ type Helper struct {
 	cams map[string]*camProc
 }
 
+// camProc is a camera the helper created or is creating. ns, cmd and
+// deleting are guarded by the helper's mutex: create sets them while
+// delete and list read them (audit M6).
 type camProc struct {
 	spec     CameraSpec
 	ns       *namespace
 	cmd      *exec.Cmd
-	done     chan struct{}
+	done     chan struct{} // closed when the process ends
+	created  chan struct{} // closed when create is over, whatever its outcome
 	deleting bool
 }
+
+// testHookCreating, when set by a test, runs once a camera is registered
+// and before anything is created for it.
+var testHookCreating func()
+
+// maxHelperRequests bounds the requests the helper handles at once.
+const maxHelperRequests = 64
 
 // createResult is the reply to camera.create.
 type createResult struct {
@@ -91,12 +102,17 @@ func (h *Helper) Serve(ctx context.Context) error {
 		<-ctx.Done()
 		h.conn.close()
 	}()
+	slots := make(chan struct{}, maxHelperRequests)
 	for {
 		env, fds, err := h.conn.recv()
 		if err != nil {
 			return err
 		}
-		go h.handle(env, fds)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots }()
+			h.handle(env, fds)
+		}()
 	}
 }
 
@@ -161,28 +177,53 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 		h.mu.Unlock()
 		return createResult{}, errorf(CodeAlreadyExist, "camera %s already exists", spec.ID)
 	}
-	cp := &camProc{spec: spec, done: make(chan struct{})}
+	cp := &camProc{spec: spec, done: make(chan struct{}), created: make(chan struct{})}
 	h.cams[spec.ID] = cp
 	h.mu.Unlock()
+	defer close(cp.created)
+	if testHookCreating != nil {
+		testHookCreating()
+	}
 
+	// fail undoes a creation that did not finish. A delete that came
+	// meanwhile waits for it and finds nothing left to do.
 	fail := func(err error) (createResult, error) {
-		if cp.ns != nil {
-			_ = cp.ns.delete()
-		}
 		h.mu.Lock()
-		delete(h.cams, spec.ID)
+		ns := cp.ns
+		cp.ns = nil
+		if h.cams[spec.ID] == cp {
+			delete(h.cams, spec.ID)
+		}
 		h.mu.Unlock()
+		if ns != nil {
+			_ = ns.delete()
+		}
 		return createResult{}, err
 	}
+	// deleted reports whether a delete came while the camera was created.
+	deleted := func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return cp.deleting
+	}
+	errDeleted := errorf(CodeInvalid, "camera %s was deleted while it was being created", spec.ID)
 
 	start := time.Now()
 	ns, err := createNamespace(spec.Netns)
 	if err != nil {
 		return fail(err)
 	}
+	h.mu.Lock()
 	cp.ns = ns
+	h.mu.Unlock()
+	if deleted() {
+		return fail(errDeleted)
+	}
 	if err := setupInterface(h.host, ns, &spec); err != nil {
 		return fail(err)
+	}
+	if deleted() {
+		return fail(errDeleted)
 	}
 	files, flags, err := openSockets(ns, spec.Sockets)
 	if err != nil {
@@ -195,8 +236,15 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 	if err != nil {
 		return fail(err)
 	}
+	h.mu.Lock()
 	cp.cmd = cmd
+	deleting := cp.deleting
+	h.mu.Unlock()
 	go h.reap(cp)
+	if deleting {
+		// The waiting delete stops the process and removes the namespace.
+		return createResult{}, errDeleted
+	}
 	h.opts.Log.Info("camera created", "id", spec.ID, "netns", ns.name, "ip", spec.IP, "mac", spec.MAC, "pid", cmd.Process.Pid, "took", time.Since(start).Round(time.Millisecond))
 	return createResult{PID: cmd.Process.Pid, Netns: ns.name, Named: ns.named}, nil
 }
@@ -212,9 +260,17 @@ func (h *Helper) start(ns *namespace, spec *CameraSpec, ipcFile *os.File, files 
 	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	// Cameras die with the helper; they also stop on their own when the
-	// service socket closes.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	// Cameras start as their unprivileged user, never as root: with the
+	// helper's bounding set empty they hold no capability at any time
+	// (audit B10). Each one gets its own PID namespace, so a camera cannot
+	// signal the others although they share a user. Cameras die with the
+	// helper; they also stop on their own when the service socket closes.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:    true,
+		Pdeathsig:  syscall.SIGKILL,
+		Credential: &syscall.Credential{Uid: uint32(h.opts.CameraUID), Gid: uint32(h.opts.CameraGID), Groups: []uint32{}},
+		Cloneflags: syscall.CLONE_NEWPID,
+	}
 	if err := inNamespace(ns.fd, cmd.Start); err != nil {
 		return nil, err
 	}
@@ -246,7 +302,8 @@ func (h *Helper) reap(cp *camProc) {
 }
 
 // delete stops a camera process and removes its namespace. It is
-// idempotent.
+// idempotent. A delete that comes while the camera is being created waits
+// for the creation to end, so nothing it made is left behind.
 func (h *Helper) delete(id string) error {
 	h.mu.Lock()
 	cp := h.cams[id]
@@ -257,21 +314,30 @@ func (h *Helper) delete(id string) error {
 	cp.deleting = true
 	h.mu.Unlock()
 
-	if cp.cmd != nil && cp.cmd.Process != nil {
-		_ = cp.cmd.Process.Signal(syscall.SIGTERM)
+	<-cp.created
+	h.mu.Lock()
+	cmd := cp.cmd
+	ns := cp.ns
+	cp.ns = nil // one delete removes it, even when two run at once
+	h.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-cp.done:
 		case <-time.After(3 * time.Second):
-			_ = cp.cmd.Process.Kill()
+			_ = cmd.Process.Kill()
 			<-cp.done
 		}
 	}
 	var err error
-	if cp.ns != nil {
-		err = cp.ns.delete()
+	if ns != nil {
+		err = ns.delete()
 	}
 	h.mu.Lock()
-	delete(h.cams, id)
+	if h.cams[id] == cp {
+		delete(h.cams, id)
+	}
 	h.mu.Unlock()
 	h.opts.Log.Info("camera deleted", "id", id)
 	return err

@@ -323,6 +323,10 @@ done; true' | head -n 1) || true
 [ -n "$SVC_PID" ] || fail "the main service process was not found"
 check_privileges "$SVC_PID" "main service"
 check_privileges "$PID" "camera"
+cam_status=$(node_exec cat "/proc/$PID/status")
+echo "$cam_status" | grep -q 'Seccomp:\s*2' || fail "the camera has no seccomp filter"
+echo "$cam_status" | awk '/^NSpid:/{exit !(NF == 3 && $3 == 1)}' || fail "the camera does not run in its own PID namespace"
+ok "camera: seccomp filter on, PID 1 of its own PID namespace"
 
 step "M7: metrics and admission"
 metrics=$(api GET /node/metrics)

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/profile"
+	"github.com/corticoide/mockvision/backend/internal/sandbox"
 	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -42,7 +44,10 @@ type Options struct {
 	// Local opens missing TCP sockets on 127.0.0.1 with ephemeral ports,
 	// for development without network namespaces.
 	Local bool
-	Log   *slog.Logger
+	// Confine applies Landlock to the process once the configuration names
+	// its files. Only the camera subcommand sets it: it cannot be undone.
+	Confine bool
+	Log     *slog.Logger
 }
 
 // Runtime is a running camera. It implements engine.Host.
@@ -263,6 +268,11 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		Canon:    r.state.Canon,
 		Snapshot: func() ([]byte, error) { return r.media.Snapshot("main") },
 	})
+	if r.opts.Confine {
+		if err := r.confine(cfg.Streams); err != nil {
+			return ipc.Ready{}, err
+		}
+	}
 	if err := r.media.replace(cfg.Streams); err != nil {
 		return ipc.Ready{}, err
 	}
@@ -289,6 +299,34 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	}
 	sort.Slice(ready.Endpoints, func(i, j int) bool { return ready.Endpoints[i].Instance < ready.Endpoints[j].Instance })
 	return ready, nil
+}
+
+// confine limits the files the camera can reach, before its engines read
+// anything from the LAN: its renditions, read only, and the system files
+// name resolution and TLS need (audit B10). Outside local mode it cannot
+// bind a TCP port either; its sockets are open already.
+func (r *Runtime) confine(streams []ipc.Stream) error {
+	read := []string{"/etc", "/usr/share/ca-certificates", "/usr/local/share/ca-certificates", "/usr/share/zoneinfo", "/proc"}
+	seen := map[string]bool{}
+	for _, st := range streams {
+		for _, p := range []string{st.StreamPath, st.SnapshotPath} {
+			// <data>/renditions/<key>/stream.h264: every rendition,
+			// present and future, lives under <data>/renditions.
+			root := filepath.Dir(filepath.Dir(p))
+			if !seen[root] {
+				seen[root] = true
+				read = append(read, root)
+			}
+		}
+	}
+	applied, err := sandbox.Landlock(sandbox.Paths{Read: read, NoBind: !r.opts.Local})
+	if err != nil {
+		return err
+	}
+	if !applied {
+		r.log.Warn("the kernel has no Landlock: the camera's files are not confined")
+	}
+	return nil
 }
 
 func (r *Runtime) startEngine(ctx context.Context, instance string, section []byte, ec ipc.EngineConfig) (*runningEngine, error) {
