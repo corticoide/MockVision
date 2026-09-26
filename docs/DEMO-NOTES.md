@@ -96,10 +96,14 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   need a helper request of its own.
 - **One user for all cameras** (`mockvision-cam`), not one per camera.
   Cameras cannot reach the service's data, but they share a uid among
-  themselves.
-- **FFmpeg is not sandboxed**: it runs as the service user with a timeout.
-  The package validator subprocess also runs as the service user, without
-  an extra seccomp or Landlock policy.
+  themselves. Each runs in a PID namespace of its own, so one cannot signal
+  the others, and Landlock limits its files to the renditions directory.
+- **FFmpeg and the package validator run as the service user**, confined by
+  seccomp and Landlock (`mockvision sandbox-exec`): FFmpeg reaches only the
+  picture it reads and the directory it writes, the validator no file. A
+  separate user for them would need a helper request of its own. On a
+  kernel without Landlock, or in a container that refuses it, they and the
+  cameras run without it; cameras log a warning.
 - **Docker capabilities.** The design lists NET_ADMIN, NET_RAW and SYS_ADMIN
   on top of Docker's defaults (D61). `compose.yaml` drops all capabilities
   and adds back only what the helper uses: those three plus

@@ -168,7 +168,8 @@ step "first login creates the administrator with the setup code"
 code=$(api POST /auth/setup -H 'Content-Type: application/json' -d '{"username":"admin","password":"e2e-password-1"}' -o /dev/null -w '%{http_code}')
 [ "$code" = 403 ] || fail "setup without the setup code answered $code"
 if [ "$MODE" = compose ]; then
-	SETUP_CODE=$(node_exec cat /data/setup-code | tr -d '[:space:]')
+	# Root holds no capability in the container: read it as the service.
+	SETUP_CODE=$("${COMPOSE[@]}" exec -T -u 10001 mockvision cat /data/setup-code | tr -d '[:space:]')
 else
 	SETUP_CODE=$(tr -d '[:space:]' <"$WORK/data/setup-code")
 fi

@@ -6,6 +6,10 @@
   panel React (`frontend/`), perfiles (`profiles/`), despliegue (`deploy/`,
   `compose.yaml`, `Makefile`, CI).
 
+> **Estado:** los 25 hallazgos están corregidos en esta rama. La sección
+> [Estado de las correcciones](#estado-de-las-correcciones), al final, dice
+> qué se hizo en cada uno, en qué commit y cómo se verificó.
+
 ## Metodología
 
 1. Lectura manual de todo el código fuente no generado, siguiendo los límites
@@ -501,3 +505,66 @@ servicio cierra. Solo afecta al modo de desarrollo. Basta con usar
    renditions, roles), M2 (rechazar `range` no acotado), M3, M4 y M6.
 3. **Después:** B1 a B17, empezando por los bugs funcionales B3, B4 y B5, que
    el usuario nota.
+
+---
+
+## Estado de las correcciones
+
+Todos los hallazgos se corrigieron en la rama `claude/code-audit-complete-orjodo`,
+en este orden. Cada commit lleva sus tests.
+
+| ID | Corrección | Commit |
+|---|---|---|
+| A1 | Argon2id corre de a dos como máximo, con una cola corta (si se llena, `503` con `Retry-After`); el setup responde "ya hecho" antes de calcular el hash | `9ff291b` |
+| A2 | Los cambios del codificador de una cámara se agrupan: una regeneración a la vez y, como mucho, una más con los últimos valores. La cola admite hasta 500 jobs, y un recolector borra cada hora las renditions sin uso de más de un día, con sus archivos y los directorios huérfanos | `9ff291b` |
+| M1 | Crear el administrador requiere un código de un solo uso, impreso en el log y guardado en `<data>/setup-code` hasta usarse. Nueva variable opcional `MOCKVISION_ALLOWED_HOSTS` contra el DNS rebinding | `9ff291b` |
+| M2 | Cada `range` y cada llamada a `template` pasan por un presupuesto de 100 000 pasos por render, que además corta el render cuando vence su tiempo | `9ff291b` |
+| M3 | Cada dirección tiene 10 intentos por minuto sea cual sea el usuario (IPv6 por /64). La tabla de bloqueos desaloja entradas viejas en vez de vaciarse. Nueva variable `MOCKVISION_TRUSTED_PROXIES` para leer `X-Forwarded-For` | `9ff291b` |
+| M4 | El WebSocket se revalida en cada ping sin extender la sesión, y se cierra al instante al revocar el token o cerrar la sesión | `9ff291b` |
+| M5 | Las rutas del perfil aceptan `roles`; `state.set` exige `admin` u `operator` por defecto | `9ff291b` |
+| M6 | El helper protege el namespace y el proceso de cada cámara con su mutex; un `delete` durante un `create` espera y limpia lo creado. Hay un máximo de 64 pedidos a la vez | `73576c6`, `245a47d` |
+| B1 | El servicio vuelve a validar lo que reporta la cámara: eventos (ULID reciente, tipo del perfil, 64 KiB), entregas (evento y destino de esa cámara), cambios de parámetros (validados contra el perfil), heartbeats (uno por segundo, valores acotados, 600 muestras) y avisos (con presupuesto y tamaño) | `788bd95` |
+| B2 | Imágenes de 33 megapíxeles como máximo; FFmpeg lee con `-f image2 -protocol_whitelist file` | `94fb343` |
+| B3 | La cookie se reenvía cuando se extiende la sesión, y las sesiones duran 7 días como máximo | `75f2e0e` |
+| B4 | `state.get` con `from: form` lee el cuerpo que ya se había leído | `75f2e0e` |
+| B5 | Los eventos guardan cuántas entregas esperan (migración `00004`) | `788bd95` |
+| B6 | En Digest, `uri` tiene que ser la petición completa, y cada `nonce`/`nc`/`cnonce` se acepta una sola vez | `75f2e0e` |
+| B7 | La prueba de un destino sale de una cámara en marcha que lo usa (mensaje IPC `target.test`). Si no hay ninguna, sale del nodo, que rechaza loopback, link-local, multicast y sus propias direcciones | `9efc880` |
+| B8 | Si el usuario del servicio o de las cámaras no existe, es un error, y los dos tienen que ser distintos | `9efc880` |
+| B9 | FFmpeg pasa por `mockvision sandbox-exec` (seccomp y Landlock limitados a la imagen y al directorio de salida); el validador se confina sin acceso a archivos | `94fb343`, `8815396` |
+| B10 | El helper vacía su conjunto de capacidades límite y lanza cada cámara directamente como su usuario, en un namespace de PID propio. La cámara fija seccomp y Landlock (nuevo paquete `internal/sandbox`) | `73576c6` |
+| B11 | Plazos de lectura y escritura por petición, excepto en el WebSocket | `75f2e0e` |
+| B12 | Los nombres de namespace se reservan mientras dura la sesión de la cámara | `9efc880` |
+| B13 | RTSP: `cfg.Paths` se lee con lock; `PLAY` exige un `SETUP` autorizado o credenciales propias; los espectadores se cuentan por stream | `75f2e0e` |
+| B14 | Una cámara borrada no deja estado en memoria; los locks de codificación se liberan; los directorios de renditions de un asset se borran con él; los jobs interrumpidos y abandonados se cancelan y limpian | `9ff291b`, `9efc880` |
+| B15 | Los eventos guardan la hora de recepción, y la retención usa esa hora | `788bd95` |
+| B16 | El socketpair del modo local se crea con close-on-exec | `73576c6` |
+| B17 | Imágenes base fijadas por digest, Actions por commit, `govulncheck` y `npm audit` en el CI, Dependabot y la unidad systemd endurecida (pasa `systemd-analyze verify`) | `428aef8` |
+
+### Hallazgos nuevos durante las correcciones
+
+- **Arranque:** el inicio del nodo y la primera cámara podían crear a la vez
+  la imagen de prueba incorporada usando el mismo archivo temporal, y uno lo
+  borraba mientras el otro lo leía. Ahora hay un lock y cada uno usa un
+  archivo propio (`94fb343`).
+- **IP tras borrar una cámara:** el descriptor reservado para el segundo ARP
+  gratuito mantenía vivo el namespace hasta un segundo, así que una cámara
+  borrada justo después de arrancar podía seguir respondiendo en su IP e
+  incluso volver a anunciarla. Ahora el borrado elimina la interfaz y cancela
+  ese anuncio (`245a47d`). Lo detectó el e2e.
+
+### Verificación
+
+- `go vet`, los tests unitarios (también con `-race`), el chequeo de tipos y
+  traducciones del panel y su build: en verde. Cada hallazgo tiene su test,
+  salvo los de despliegue (B17), que se verifican con `systemd-analyze verify`
+  y el build de la imagen.
+- Tests de integración como root (namespaces y macvlan reales). M6 tiene un
+  test determinista que falla con el helper anterior y pasa con el nuevo.
+- E2E completo en una LAN virtual (`make e2e`), con el binario y con la
+  imagen Docker levantada con `compose.yaml`: 37 de 37 comprobaciones,
+  incluidas las nuevas (código de setup, rol `viewer`, seccomp y namespace
+  de PID de la cámara).
+- `govulncheck` sigue sin poder ejecutarse en este entorno por la política de
+  red; desde ahora corre en el CI.
+
