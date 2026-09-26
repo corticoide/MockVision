@@ -103,6 +103,18 @@ desde el panel. **Auditoría** muestra cada cambio con su origen: el panel, la
 API con el nombre del token, un cliente de la API emulada de una cámara o el
 propio nodo.
 
+### Trabajos en segundo plano
+
+Codificar un stream e importar un paquete corren como trabajos
+(**Trabajos** en el panel, `/api/v1/jobs` en la API), con su progreso y su
+historial. Corren a lo sumo dos a la vez (**Configuración → Límites**); el
+resto espera en la cola. Cerrar el navegador no detiene nada, y un trabajo
+cortado por un reinicio queda *Interrumpido* hasta que lo reanudas desde su
+último punto de control. **Preparar variantes** codifica de antemano todos
+los streams que necesitan las cámaras, así arrancar muchas no espera nada;
+si una falla, pregunta si reintentar, omitirla o detenerse, y la omite si
+nadie responde en diez minutos.
+
 ### Configuración
 
 `compose.yaml` pasa los dos ajustes que necesita la mayoría de las

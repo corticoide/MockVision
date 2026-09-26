@@ -100,6 +100,17 @@ token can change it, except tokens, which are managed from the panel only.
 **Audit** shows every change with where it came from: the panel, the API
 with the token's name, a client of a camera's emulated API, or the node.
 
+### Background jobs
+
+Encoding a stream and importing a package run as jobs (**Jobs** in the
+panel, `/api/v1/jobs` in the API), with their progress and history. At most
+two run at once (**Settings → Limits**); the rest wait in the queue.
+Closing the browser stops nothing, and a job cut short by a restart stays
+*Interrupted* until you resume it from its last checkpoint. **Prepare
+renditions** encodes up front every stream the cameras need, so starting
+many of them waits for nothing; when one fails it asks whether to retry,
+skip it or stop, and skips it if nobody answers within ten minutes.
+
 ### Configuration
 
 `compose.yaml` passes the two settings most installs need. Others go in its

@@ -7,8 +7,8 @@
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
 # and camera processes, editing a running camera (accounts, stream and
-# address), API tokens with bulk actions and the audit log, clean stop, and
-# cameras coming back after a restart.
+# address), API tokens with bulk actions and the audit log, background
+# jobs, clean stop, and cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl and python3:
 #   sudo backend/e2e/run.sh
@@ -325,6 +325,18 @@ api DELETE "/tokens/$TOKEN_ID" -o /dev/null
 code=$(tok "$SECRET" GET /cameras -o /dev/null -w '%{http_code}')
 [ "$code" = 401 ] || fail "a revoked token got $code"
 ok "a revoked token is refused at once"
+
+step "background jobs: import, renditions and a preparation (D72, D74)"
+[ "$(api GET '/jobs?type=import' | json 'd["items"][-1]["status"]')" = completed ] || fail "the import did not run as a completed job"
+[ "$(api GET '/jobs?type=rendition&status=completed' | json 'len(d["items"])')" -ge 1 ] || fail "no rendition was encoded as a job"
+JID=$(api POST /jobs -H 'Content-Type: application/json' -d '{"type":"renditions.prepare"}' | json 'd["id"]')
+for _ in $(seq 1 120); do
+	st=$(api GET "/jobs/$JID" | json 'd["status"]')
+	case "$st" in completed | failed | canceled) break ;; esac
+	sleep 0.5
+done
+[ "$st" = completed ] || fail "renditions.prepare ended $st: $(api GET "/jobs/$JID")"
+ok "import and renditions ran as jobs; preparation: $(api GET "/jobs/$JID" | json 'd["result"]')"
 
 step "v1 editing: a new address applies at the restart (RN-09)"
 pending=$(api PATCH "/cameras/$CID" -H 'Content-Type: application/json' \
