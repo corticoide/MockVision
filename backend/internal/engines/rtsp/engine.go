@@ -85,7 +85,23 @@ type Engine struct {
 
 	state    atomic.Value
 	sessions atomic.Int64
-	playing  atomic.Int64
+}
+
+// sessionState is what the engine keeps about an RTSP session: whether
+// its SETUP was authorized, and the stream it plays.
+type sessionState struct {
+	mu         sync.Mutex
+	authorized bool
+	playing    *streamer
+}
+
+func stateOf(ss *gortsplib.ServerSession) *sessionState {
+	if st, ok := ss.UserData().(*sessionState); ok {
+		return st
+	}
+	st := &sessionState{}
+	ss.SetUserData(st)
+	return st
 }
 
 // New returns an engine instance.
@@ -177,7 +193,10 @@ func (e *Engine) Start(ctx context.Context, in engine.StartInput) error {
 		}
 	}
 	e.unwatch = in.Host.Media().Watch(func(stream string) {
-		if _, ok := e.cfg.Paths[stream]; !ok {
+		e.mu.RLock()
+		_, ok := e.cfg.Paths[stream]
+		e.mu.RUnlock()
+		if !ok {
 			return
 		}
 		if err := e.startStream(runCtx, stream); err != nil {
@@ -359,9 +378,13 @@ func (e *Engine) OnSessionOpen(*gortsplib.ServerHandlerOnSessionOpenCtx) {
 // OnSessionClose implements gortsplib.ServerHandlerOnSessionClose.
 func (e *Engine) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	e.sessions.Add(-1)
-	if ctx.Session.UserData() == "playing" {
-		e.playing.Add(-1)
+	st := stateOf(ctx.Session)
+	st.mu.Lock()
+	if st.playing != nil {
+		st.playing.viewers.Add(-1)
+		st.playing = nil
 	}
+	st.mu.Unlock()
 }
 
 // OnDescribe implements gortsplib.ServerHandlerOnDescribe.
@@ -386,18 +409,37 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 	if st == nil {
 		return &base.Response{StatusCode: base.StatusNotFound}, nil, nil
 	}
+	sess := stateOf(ctx.Session)
+	sess.mu.Lock()
+	sess.authorized = true
+	sess.mu.Unlock()
 	return &base.Response{StatusCode: base.StatusOK}, st.stream, nil
 }
 
-// OnPlay implements gortsplib.ServerHandlerOnPlay. Like a camera encoder,
-// the stream restarts at a keyframe for the new viewer: H.265 decoders
-// cannot start in the middle of a group of pictures.
+// OnPlay implements gortsplib.ServerHandlerOnPlay. A session plays only
+// if its SETUP was authorized, or with credentials of its own (audit
+// B13). Like a camera encoder, the stream restarts at a keyframe for the
+// new viewer: H.265 decoders cannot start in the middle of a group of
+// pictures.
 func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
-	if ctx.Session.UserData() != "playing" {
-		ctx.Session.SetUserData("playing")
-		e.playing.Add(1)
+	sess := stateOf(ctx.Session)
+	sess.mu.Lock()
+	authorized := sess.authorized
+	sess.mu.Unlock()
+	if !authorized && !e.authorize(ctx.Conn, ctx.Request) {
+		return &base.Response{StatusCode: base.StatusUnauthorized}, liberrors.ErrServerAuth{}
 	}
-	if st := e.streamFor(ctx.Path, ctx.Query); st != nil {
+	st := e.streamFor(ctx.Path, ctx.Query)
+	if st != nil {
+		sess.mu.Lock()
+		if sess.playing != st {
+			if sess.playing != nil {
+				sess.playing.viewers.Add(-1)
+			}
+			st.viewers.Add(1)
+			sess.playing = st
+		}
+		sess.mu.Unlock()
 		st.keyframeAt.Store(time.Now().Add(keyframeDelay).UnixNano())
 	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
@@ -419,6 +461,9 @@ type streamer struct {
 	// keyframeAt asks for the loop to restart at its keyframe with the
 	// first frame due from then on (Unix nanoseconds, 0 for none).
 	keyframeAt atomic.Int64
+	// viewers counts the sessions playing this stream; a stream nobody
+	// plays skips the packetizing work.
+	viewers atomic.Int64
 }
 
 func (s *streamer) stop() {
@@ -469,7 +514,7 @@ func (s *streamer) run(ctx context.Context) {
 			i = 0
 		}
 		// Nobody is watching: keep the clock running, skip the work.
-		if s.engine.playing.Load() > 0 {
+		if s.viewers.Load() > 0 {
 			pkts, err := encode(s.src.AccessUnits[i], i == 0)
 			if err == nil {
 				ts := rtpBase + uint32(n*90000/int64(fps))

@@ -114,6 +114,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		s.unauthenticated(w, r)
 		return
 	}
+	s.refreshCookie(w, r, sess)
 	writeJSON(w, http.StatusOK, meFrom(sess))
 }
 

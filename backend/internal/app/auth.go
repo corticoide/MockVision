@@ -69,10 +69,17 @@ type Session struct {
 	User      domain.User
 	ExpiresAt time.Time
 	Token     *TokenInfo
+	// Extended is set when this request moved the expiry of the session;
+	// the browser's cookie must follow it (audit B3).
+	Extended bool
 }
 
 // SessionTTL is the idle lifetime of a panel session.
 const SessionTTL = 12 * time.Hour
+
+// SessionMaxLifetime bounds a session however much it is used: after it,
+// signing in again is needed.
+const SessionMaxLifetime = 7 * 24 * time.Hour
 
 // ErrUnauthenticated is returned for missing or invalid credentials.
 var ErrUnauthenticated = errors.New("unauthenticated")
@@ -281,15 +288,28 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Session, erro
 		return Session{}, ErrUnauthenticated
 	}
 	exp := store.Time(row.ExpiresAt)
-	if time.Now().After(exp) || store.Bool(row.Disabled) {
+	now := time.Now()
+	limit := store.Time(row.CreatedAt).Add(SessionMaxLifetime)
+	if now.After(exp) || now.After(limit) || store.Bool(row.Disabled) {
 		return Session{}, ErrUnauthenticated
 	}
-	// Extend at most every hour to spare writes on SD cards.
+	// Extend at most every hour to spare writes on SD cards, and never
+	// past the session's maximum lifetime.
+	extended := false
 	if time.Until(exp) < SessionTTL-time.Hour {
-		exp = time.Now().Add(SessionTTL)
-		_ = s.store.W().ExtendSession(ctx, db.ExtendSessionParams{ID: id, ExpiresAt: exp.UnixMilli()})
+		if next := min64Time(now.Add(SessionTTL), limit); next.After(exp) {
+			exp, extended = next, true
+			_ = s.store.W().ExtendSession(ctx, db.ExtendSessionParams{ID: id, ExpiresAt: exp.UnixMilli()})
+		}
 	}
-	return Session{User: domain.User{ID: row.UserID, Username: row.Username, Role: domain.Role(row.Role)}, ExpiresAt: exp}, nil
+	return Session{User: domain.User{ID: row.UserID, Username: row.Username, Role: domain.Role(row.Role)}, ExpiresAt: exp, Extended: extended}, nil
+}
+
+func min64Time(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // CheckSession reports whether a session token is still valid, without
@@ -300,7 +320,8 @@ func (s *Service) CheckSession(ctx context.Context, token string) error {
 		return ErrUnauthenticated
 	}
 	row, err := s.store.R().GetSession(ctx, tokenID(token))
-	if err != nil || time.Now().After(store.Time(row.ExpiresAt)) || store.Bool(row.Disabled) {
+	now := time.Now()
+	if err != nil || now.After(store.Time(row.ExpiresAt)) || now.After(store.Time(row.CreatedAt).Add(SessionMaxLifetime)) || store.Bool(row.Disabled) {
 		return ErrUnauthenticated
 	}
 	return nil

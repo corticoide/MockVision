@@ -163,3 +163,59 @@ func TestWebSocketEndsWithItsCredential(t *testing.T) {
 	}
 	ended(byCookie, "logged out session")
 }
+
+func TestExtendedSessionRefreshesTheCookie(t *testing.T) {
+	s := &Server{}
+	r := httptest.NewRequest("GET", "/api/v1/cameras", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "abc"})
+	exp := time.Now().Add(12 * time.Hour)
+	w := httptest.NewRecorder()
+	s.refreshCookie(w, r, app.Session{ExpiresAt: exp, Extended: true})
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value != "abc" || cookies[0].Expires.Unix() != exp.Unix() || !cookies[0].HttpOnly {
+		t.Fatalf("cookie: %+v", cookies)
+	}
+	w = httptest.NewRecorder()
+	s.refreshCookie(w, r, app.Session{ExpiresAt: exp})
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatal("no cookie without an extension")
+	}
+}
+
+// A client that sends its body a byte at a time is cut off (audit B11).
+func TestSlowBodyIsCutOff(t *testing.T) {
+	defer func(d time.Duration) { readDeadline = d }(readDeadline)
+	readDeadline = 300 * time.Millisecond
+	srv := httptest.NewUnstartedServer(deadlines(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(http.StatusRequestTimeout)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})))
+	srv.Start()
+	defer srv.Close()
+	pr, pw := io.Pipe()
+	go func() {
+		// Never finishes the body.
+		_, _ = pw.Write([]byte("{"))
+	}()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/auth/login", pr)
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow request was not cut off")
+	}
+	if d := time.Since(start); d < readDeadline {
+		t.Fatalf("cut off too early: %s", d)
+	}
+	pw.Close()
+}

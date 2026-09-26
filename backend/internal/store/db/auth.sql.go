@@ -106,7 +106,7 @@ func (q *Queries) ExtendSession(ctx context.Context, arg ExtendSessionParams) er
 }
 
 const getSession = `-- name: GetSession :one
-SELECT sessions.id, sessions.user_id, sessions.expires_at, users.username, users.role, users.disabled
+SELECT sessions.id, sessions.user_id, sessions.expires_at, sessions.created_at, users.username, users.role, users.disabled
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id = ?1
@@ -116,6 +116,7 @@ type GetSessionRow struct {
 	ID        string
 	UserID    string
 	ExpiresAt int64
+	CreatedAt int64
 	Username  string
 	Role      string
 	Disabled  int64
@@ -128,6 +129,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 		&i.ID,
 		&i.UserID,
 		&i.ExpiresAt,
+		&i.CreatedAt,
 		&i.Username,
 		&i.Role,
 		&i.Disabled,

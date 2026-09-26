@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/corticoide/mockvision/backend/internal/store/db"
 )
 
 func TestHashLimiterBoundsConcurrency(t *testing.T) {
@@ -110,5 +112,35 @@ func TestLoginRateLimitedPerAddress(t *testing.T) {
 		if i == ipBurst && !errors.As(err, &rl) {
 			t.Fatalf("attempts with other usernames must count too, got %v", err)
 		}
+	}
+}
+
+// A session in use is extended and says so, so the API can send the
+// browser a cookie that lasts as long (audit B3).
+func TestSessionExtensionIsReported(t *testing.T) {
+	svc, _ := newBareService(t)
+	adminActor(t, svc)
+	ctx := context.Background()
+	token, sess, err := svc.Login(ctx, "admin", "correct horse battery", "10.0.0.5", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := svc.Authenticate(ctx, token); err != nil || again.Extended {
+		t.Fatalf("a fresh session needs no extension: %+v %v", again, err)
+	}
+	soon := time.Now().Add(time.Hour)
+	if err := svc.store.W().ExtendSession(ctx, db.ExtendSessionParams{ID: tokenID(token), ExpiresAt: soon.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	ext, err := svc.Authenticate(ctx, token)
+	if err != nil || !ext.Extended || !ext.ExpiresAt.After(soon.Add(10*time.Hour)) {
+		t.Fatalf("extension: %+v %v (was %s)", ext, err, sess.ExpiresAt)
+	}
+	if err := svc.CheckSession(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.Logout(ctx, token)
+	if err := svc.CheckSession(ctx, token); err == nil {
+		t.Fatal("a logged out session is still valid")
 	}
 }

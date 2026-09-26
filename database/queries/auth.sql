@@ -16,7 +16,7 @@ INSERT INTO sessions (id, user_id, expires_at, ip, user_agent, created_at)
 VALUES (@id, @user_id, @expires_at, @ip, @user_agent, @created_at);
 
 -- name: GetSession :one
-SELECT sessions.id, sessions.user_id, sessions.expires_at, users.username, users.role, users.disabled
+SELECT sessions.id, sessions.user_id, sessions.expires_at, sessions.created_at, users.username, users.role, users.disabled
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id = @id;

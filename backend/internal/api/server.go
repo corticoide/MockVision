@@ -155,6 +155,33 @@ func (s *Server) trusted(ip string) bool {
 	return false
 }
 
+// Per-request deadlines. The server only bounds how long headers take; a
+// client could otherwise hold a connection by sending a body, or reading
+// the answer, a byte at a time (audit B11).
+var (
+	readDeadline       = 30 * time.Second
+	uploadReadDeadline = 5 * time.Minute // packages up to 50 MB, images up to 20 MB
+	writeDeadline      = 5 * time.Minute // bulk actions wait up to 3 minutes
+)
+
+// deadlines sets the read and write deadlines of every request but the
+// WebSocket, which lives as long as the panel is open.
+func deadlines(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/ws" {
+			rc := http.NewResponseController(w)
+			read := readDeadline
+			if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/packages" || r.URL.Path == "/api/v1/assets") {
+				read = uploadReadDeadline
+			}
+			now := time.Now()
+			_ = rc.SetReadDeadline(now.Add(read))
+			_ = rc.SetWriteDeadline(now.Add(writeDeadline))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // checkHost refuses requests for a Host name outside AllowedHosts: a page
 // that rebinds its own name to the node's address cannot reach the panel.
 func (s *Server) checkHost(next http.Handler) http.Handler {
@@ -262,7 +289,7 @@ func (s *Server) Handler() http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/", s.csrf(api))
 	root.Handle("/", spaHandler(s.static))
-	return s.recoverer(s.withClientIP(securityHeaders(s.checkHost(root))))
+	return s.recoverer(deadlines(s.withClientIP(securityHeaders(s.checkHost(root)))))
 }
 
 // requireAuth accepts an API token (Authorization: Bearer) or a session
@@ -279,6 +306,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.Handler {
 			s.unauthenticated(w, r)
 			return
 		}
+		s.refreshCookie(w, r, sess)
 		if sess.Token != nil && !safeMethod(r.Method) && !sess.Token.CanWrite() {
 			writeProblem(w, r, Problem{Type: problemType + "insufficient-scope", Title: "Insufficient scope", Status: http.StatusForbidden,
 				Detail: "this API token can only read; create one with the write scope to change the node"})
@@ -402,6 +430,18 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token string, exp time.
 		Name: sessionCookie, Value: token, Path: "/", Expires: exp, HttpOnly: true,
 		SameSite: http.SameSiteStrictMode, Secure: s.cfg.SecureCookies,
 	})
+}
+
+// refreshCookie sends the session cookie again when the request extended
+// the session: the browser drops a cookie at its own expiry, whatever the
+// server did meanwhile (audit B3).
+func (s *Server) refreshCookie(w http.ResponseWriter, r *http.Request, sess app.Session) {
+	if sess.Token != nil || !sess.Extended {
+		return
+	}
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		s.setSessionCookie(w, c.Value, sess.ExpiresAt)
+	}
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {

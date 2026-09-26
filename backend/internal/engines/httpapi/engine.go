@@ -426,7 +426,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 		_, _ = w.Write(jpeg)
 		return
 	case HandlerStateGet:
-		result, err := e.stateGet(r, a.a)
+		result, err := e.stateGet(r, a.a, data.Request)
 		if err != nil {
 			e.fail(w, http.StatusBadRequest, err.Error())
 			return
@@ -461,7 +461,7 @@ type KV struct {
 	Value any
 }
 
-func (e *Engine) stateGet(r *http.Request, a Action) ([]KV, error) {
+func (e *Engine) stateGet(r *http.Request, a Action, req *engine.RequestData) ([]KV, error) {
 	keyParam := a.Key
 	if keyParam == "" {
 		keyParam = "name"
@@ -469,7 +469,13 @@ func (e *Engine) stateGet(r *http.Request, a Action) ([]KV, error) {
 	var raw string
 	switch a.From {
 	case "form":
-		raw = r.PostFormValue(keyParam)
+		// The body was read already: parse the copy the request keeps
+		// (audit B4).
+		form, err := url.ParseQuery(req.Body)
+		if err != nil {
+			return nil, errors.New("invalid form body")
+		}
+		raw = form.Get(keyParam)
 	default:
 		raw = r.URL.Query().Get(keyParam)
 	}

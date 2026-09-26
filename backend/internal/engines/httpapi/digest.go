@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -38,6 +39,71 @@ type authenticator struct {
 	opaque string
 	users  func() []engine.User
 	now    func() time.Time
+	seen   replayCache
+}
+
+// Limits of the replay cache.
+const (
+	maxNonces       = 4096
+	maxUsesPerNonce = 1024
+)
+
+// replayCache remembers the nc and cnonce each nonce was used with, so a
+// Digest header captured on the network cannot be sent again (audit B6).
+type replayCache struct {
+	mu    sync.Mutex
+	nonce map[string]*nonceUses
+}
+
+type nonceUses struct {
+	first time.Time
+	used  map[string]bool
+}
+
+// use records a use of a nonce; fresh is false for a use already seen,
+// and full when the nonce served too many requests and must be renewed.
+func (c *replayCache) use(nonce, nc, cnonce string, now time.Time) (fresh, full bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nonce == nil {
+		c.nonce = map[string]*nonceUses{}
+	}
+	u := c.nonce[nonce]
+	if u == nil {
+		if len(c.nonce) >= maxNonces {
+			c.prune(now)
+		}
+		u = &nonceUses{first: now, used: map[string]bool{}}
+		c.nonce[nonce] = u
+	}
+	key := nc + ":" + cnonce
+	switch {
+	case u.used[key]:
+		return false, false
+	case len(u.used) >= maxUsesPerNonce:
+		return false, true
+	}
+	u.used[key] = true
+	return true, false
+}
+
+// prune forgets expired nonces, and the oldest ones when that is not
+// enough; a forgotten nonce is expired or about to be.
+func (c *replayCache) prune(now time.Time) {
+	for n, u := range c.nonce {
+		if now.Sub(u.first) > nonceTTL {
+			delete(c.nonce, n)
+		}
+	}
+	for len(c.nonce) >= maxNonces {
+		oldest, at := "", now
+		for n, u := range c.nonce {
+			if !u.first.After(at) {
+				oldest, at = n, u.first
+			}
+		}
+		delete(c.nonce, oldest)
+	}
 }
 
 func newAuthenticator(scheme, realm string, users func() []engine.User) *authenticator {
@@ -155,7 +221,10 @@ func (a *authenticator) checkDigest(r *http.Request, header string) (string, boo
 	if !ok {
 		return "", false
 	}
-	if uri := p["uri"]; uri != r.RequestURI && uri != r.URL.Path {
+	// The digest covers the uri the client sent: it must be the whole
+	// request target, query included, or a header signed for one request
+	// would authorize another (audit B6).
+	if p["uri"] != r.RequestURI {
 		return "", false
 	}
 	if alg := p["algorithm"]; alg != "" && !strings.EqualFold(alg, "MD5") {
@@ -177,6 +246,13 @@ func (a *authenticator) checkDigest(r *http.Request, header string) (string, boo
 	}
 	if expired {
 		return "", true
+	}
+	// RFC 2069 clients (no qop) reuse the nonce as is: only qop=auth
+	// requests carry the counter that tells a replay.
+	if p["qop"] == "auth" {
+		if fresh, full := a.seen.use(p["nonce"], p["nc"], p["cnonce"], a.now()); !fresh {
+			return "", full
+		}
 	}
 	return name, false
 }
