@@ -17,8 +17,10 @@ import (
 
 // setupInterface gives a namespace its macvlan interface on the parent NIC:
 // own MAC, ARP probe (RN-06), static address, default route and a
-// gratuitous ARP.
-func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec) error {
+// gratuitous ARP. A second announcement follows a second later unless
+// cancel is closed first: a camera deleted meanwhile must not claim its
+// address again.
+func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel <-chan struct{}) error {
 	hh, err := netlink.NewHandleAt(host)
 	if err != nil {
 		return err
@@ -106,11 +108,38 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec) error 
 	if dup, err := unix.Dup(int(ns.fd)); err == nil {
 		go func() {
 			defer unix.Close(dup)
-			time.Sleep(time.Second)
-			_ = announce(netns.NsHandle(dup), ifindex, mac, ip)
+			select {
+			case <-cancel:
+			case <-time.After(time.Second):
+				_ = announce(netns.NsHandle(dup), ifindex, mac, ip)
+			}
 		}()
 	}
 	return nil
+}
+
+// removeLinks deletes the interfaces of a namespace but its loopback. The
+// kernel destroys a namespace, and its interfaces, only once nothing
+// refers to it and then asynchronously: deleting the macvlan first frees
+// the camera's address on the LAN at once.
+func removeLinks(ns *namespace) {
+	if !ns.fd.IsOpen() {
+		return
+	}
+	nh, err := netlink.NewHandleAt(ns.fd)
+	if err != nil {
+		return
+	}
+	defer nh.Close()
+	links, err := nh.LinkList()
+	if err != nil {
+		return
+	}
+	for _, l := range links {
+		if l.Attrs().Flags&net.FlagLoopback == 0 {
+			_ = nh.LinkDel(l)
+		}
+	}
 }
 
 // openSockets opens the camera's listening sockets inside its namespace, so

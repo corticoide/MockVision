@@ -3,12 +3,15 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -18,24 +21,157 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
+	"github.com/corticoide/mockvision/backend/internal/worker"
 )
 
 // inspectTimeout bounds the validation subprocess.
 const inspectTimeout = 30 * time.Second
 
-// ImportPackage validates a package or a loose profile.yaml and installs it
-// as an immutable version (RN-02).
-func (s *Service) ImportPackage(ctx context.Context, actor Actor, filename string, data []byte) (*ImportResult, error) {
+// ImportWait is how long an API call waits for its import job before it
+// answers that the job goes on in the background.
+const ImportWait = time.Minute
+
+// importParams is what an import job needs, to run and to resume.
+type importParams struct {
+	Filename string `json:"filename"`
+	Upload   string `json:"upload"` // file in the jobs directory
+	Actor    Actor  `json:"actor"`
+}
+
+type importCheckpoint struct {
+	Validated bool `json:"validated"`
+}
+
+// importOutcome is the result of an import job.
+type importOutcome struct {
+	Profile *ProfileView `json:"profile,omitempty"`
+	Report  *pkg.Report  `json:"report,omitempty"`
+	Created bool         `json:"created"`
+	Error   *jobError    `json:"error,omitempty"`
+}
+
+// SubmitImport stores an uploaded package or loose profile.yaml and queues
+// its import. The same content already being imported joins that job.
+func (s *Service) SubmitImport(ctx context.Context, actor Actor, filename string, data []byte) (worker.Job, error) {
 	if len(data) == 0 {
-		return nil, domain.Invalid("file", "the file is empty")
+		return worker.Job{}, domain.Invalid("file", "the file is empty")
 	}
 	if len(data) > pkg.MaxPackageBytes {
-		return nil, domain.Invalid("file", "packages are limited to %d MB", pkg.MaxPackageBytes>>20)
+		return worker.Job{}, domain.Invalid("file", "packages are limited to %d MB", pkg.MaxPackageBytes>>20)
 	}
-	res, err := s.inspect(ctx, filename, data)
+	sum := sha256.Sum256(data)
+	// Each upload has its own file, so the cleanup of a finished import
+	// never removes a new upload of the same content.
+	upload := ulid.Make().String() + ".upload"
+	path := filepath.Join(s.jobsDir(), upload)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return worker.Job{}, err
+	}
+	name := filepath.Base(filename)
+	if name == "." || name == "/" {
+		name = "package"
+	}
+	j, created, err := s.jobs.Submit(ctx, worker.Spec{
+		Type: JobImport, Title: "Import " + name, Params: importParams{Filename: name, Upload: upload, Actor: actor},
+		Key: "import:" + hex.EncodeToString(sum[:]), CreatedBy: actorLabel(actor),
+	})
+	if err != nil || !created {
+		_ = os.Remove(path) // the job already importing this content has its own copy
+	}
+	return j, err
+}
+
+// ImportPackage imports a package and waits for the result: an immutable
+// profile version (RN-02) or the report of why it was rejected.
+func (s *Service) ImportPackage(ctx context.Context, actor Actor, filename string, data []byte) (*ImportResult, error) {
+	j, err := s.SubmitImport(ctx, actor, filename, data)
 	if err != nil {
 		return nil, err
 	}
+	if j, err = s.jobs.Wait(ctx, j.ID); err != nil {
+		return nil, err
+	}
+	return ImportOutcome(j)
+}
+
+// ImportOutcome turns a finished import job into its result, or into the
+// error the import would have returned.
+func ImportOutcome(j worker.Job) (*ImportResult, error) {
+	var out importOutcome
+	_ = json.Unmarshal(j.Result, &out)
+	switch j.Status {
+	case worker.Completed:
+		if out.Profile == nil || out.Report == nil {
+			return nil, errors.New("the import finished without a profile")
+		}
+		return &ImportResult{Profile: *out.Profile, Report: *out.Report, Created: out.Created}, nil
+	case worker.Failed:
+		if out.Error != nil && out.Error.Kind == "rejected" && out.Report != nil {
+			return nil, &ImportError{Report: *out.Report}
+		}
+		if out.Error != nil {
+			return nil, out.Error.err()
+		}
+		return nil, errors.New(j.Error)
+	case worker.Interrupted:
+		return nil, domain.Conflict("", "the import was interrupted by a restart; resume job %s", j.ID)
+	}
+	return nil, domain.Conflict("", "the import is %s: %s", j.Status, j.Error)
+}
+
+// runImport is the import job: validation in a subprocess, then the
+// installation. The validated result is kept, so a resumed job does not
+// validate twice.
+func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
+	var p importParams
+	if err := run.Params(&p); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(s.jobsDir(), p.Upload))
+	if err != nil {
+		return nil, fmt.Errorf("the uploaded package is gone: %w", err)
+	}
+	resultPath := filepath.Join(s.jobsDir(), strings.TrimSuffix(p.Upload, ".upload")+".result.json")
+	var res *pkg.Result
+	var cp importCheckpoint
+	if run.Checkpoint(&cp) && cp.Validated {
+		if raw, err := os.ReadFile(resultPath); err == nil {
+			var r pkg.Result
+			if json.Unmarshal(raw, &r) == nil {
+				res = &r
+				run.Logf("validation kept from before the restart")
+			}
+		}
+	}
+	if res == nil {
+		run.Step("Validating", 0.05)
+		sctx, cancel := run.StepContext(ctx)
+		res, err = s.inspect(sctx, p.Filename, data)
+		cancel()
+		if err != nil {
+			return importOutcome{Error: describeError(err)}, err
+		}
+		raw, _ := json.Marshal(res)
+		if err := os.WriteFile(resultPath, raw, 0o600); err != nil {
+			return nil, err
+		}
+		if err := run.Save(importCheckpoint{Validated: true}); err != nil {
+			return nil, err
+		}
+	}
+	rep := res.Report
+	run.Logf("%s %s@%s: level %s, signature %s", rep.Kind, rep.ID, rep.Version, rep.Level, rep.Signature)
+	run.Step("Installing", 0.8)
+	out, err := s.installPackage(ctx, p.Actor, data, res)
+	if err != nil {
+		return importOutcome{Report: &rep, Error: describeError(err)}, err
+	}
+	return importOutcome{Profile: &out.Profile, Report: &out.Report, Created: out.Created}, nil
+}
+
+// installPackage installs a validated package as an immutable version
+// (RN-02); installing the same content again changes nothing.
+func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, res *pkg.Result) (*ImportResult, error) {
 	rep := res.Report
 	if !rep.OK() {
 		return nil, &ImportError{Report: rep}
@@ -119,6 +255,7 @@ func (s *Service) inspect(ctx context.Context, filename string, data []byte) (*p
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, errors.New("package validation timed out")
@@ -173,11 +310,14 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 	}
 	d := &ProfileDetail{ProfileView: profileView(p, pk.SignatureStatus, 0), Streams: []ProfileStreamView{}, Engines: []ProfileEngineView{},
 		Events: []string{}, FactoryUsers: []UserView{}, Params: []ParamView{}}
-	for _, name := range profile.SortedKeys(doc.Media.Streams) {
+	for _, name := range streamNames(doc) {
 		st := doc.Media.Streams[name]
 		sv := ProfileStreamView{Name: name, Codecs: st.Codecs, Resolutions: st.Resolutions}
 		if st.FPS != nil {
 			sv.FPSMin, sv.FPSMax = st.FPS.Min, st.FPS.Max
+		}
+		if st.Bitrate != nil {
+			sv.BitrateMin, sv.BitrateMax = st.Bitrate.Min, st.Bitrate.Max
 		}
 		sv.Default.Codec, sv.Default.Resolution, sv.Default.FPS = st.Default.Codec, st.Default.Resolution, st.Default.FPS
 		sv.Default.Bitrate, sv.Default.GOP = st.Default.Bitrate, st.Default.GOP

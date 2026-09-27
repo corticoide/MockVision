@@ -38,6 +38,15 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 LockPersonality=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native
+# Options that need no mount namespace of their own (one would hide the
+# cameras' namespaces from the host): the helper creates network and PID
+# namespaces only, sets no set-user-ID bits, and needs none of the system
+# call groups below.
+RestrictNamespaces=net pid
+RestrictSUIDSGID=yes
+SystemCallFilter=~@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap
+SystemCallErrorNumber=EPERM
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

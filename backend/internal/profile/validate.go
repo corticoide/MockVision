@@ -18,6 +18,7 @@ import (
 	"golang.org/x/text/message"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/media"
 	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/profiles"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -456,6 +457,7 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 	for _, name := range SortedKeys(doc.Media.Streams) {
 		v.lintStream(name, doc.Media.Streams[name])
 	}
+	v.lintStreamRefs(doc)
 
 	// Events.
 	for _, typ := range SortedKeys(doc.Events) {
@@ -528,10 +530,53 @@ func (v *validator) lintBind(doc *Document, key string, p Param, ptr string) {
 			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be an int", key, p.Bind)
 		}
 	case "codec":
+		if p.Type != TypeEnum {
+			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be an enum of the stream's codecs", key, p.Bind)
+		}
 		for _, c := range p.Values {
 			s, _ := c.(string)
 			if !contains(stream.Codecs, s) {
 				v.errorf(StepLint, ptr, "%s allows codec %v, which stream %s does not support", key, c, parts[1])
+			}
+		}
+	}
+}
+
+// lintStreamRefs checks that the streams the built-in engines serve are
+// defined under media.streams.
+func (v *validator) lintStreamRefs(doc *Document) {
+	for _, inst := range SortedKeys(doc.Engines) {
+		name, _, err := EngineName(doc.Engines[inst])
+		if err != nil {
+			continue
+		}
+		ptr := "/engines/" + escapePointer(inst)
+		switch name {
+		case "rtsp":
+			var cfg struct {
+				Paths map[string]string `json:"paths"`
+			}
+			_ = json.Unmarshal(doc.Engines[inst], &cfg)
+			for _, stream := range SortedKeys(cfg.Paths) {
+				if _, ok := doc.Media.Streams[stream]; !ok {
+					v.errorf(StepLint, ptr+"/paths/"+stream, "stream %s is served here but media.streams does not define it", stream)
+				}
+			}
+		case "http-api":
+			var cfg struct {
+				Routes []struct {
+					Action struct {
+						Stream string `json:"stream"`
+					} `json:"action"`
+				} `json:"routes"`
+			}
+			_ = json.Unmarshal(doc.Engines[inst], &cfg)
+			for i, r := range cfg.Routes {
+				if s := r.Action.Stream; s != "" {
+					if _, ok := doc.Media.Streams[s]; !ok {
+						v.errorf(StepLint, ptr+"/routes/"+strconv.Itoa(i)+"/action/stream", "stream %s is served here but media.streams does not define it", s)
+					}
+				}
 			}
 		}
 	}
@@ -547,6 +592,19 @@ func (v *validator) lintStream(name string, s Stream) {
 	d := s.Default
 	if !contains(s.Codecs, d.Codec) {
 		v.errorf(StepLint, ptr+"/default/codec", "default codec %s is not in codecs", d.Codec)
+	}
+	if contains(s.Codecs, media.CodecMJPEG) {
+		for i, r := range s.Resolutions {
+			res, err := domain.ParseResolution(r)
+			if err != nil || media.MJPEGFits(res.Width, res.Height) {
+				continue
+			}
+			if d.Codec == media.CodecMJPEG && r == d.Resolution {
+				v.errorf(StepLint, ptr+"/default/resolution", "MJPEG over RTSP carries at most %dx%d in multiples of 8; the default %s does not fit", media.MaxMJPEGSize, media.MaxMJPEGSize, r)
+				continue
+			}
+			v.warnf(StepLint, ptr+"/resolutions/"+strconv.Itoa(i), "%s cannot be streamed as MJPEG (at most %dx%d in multiples of 8); choosing both fails", r, media.MaxMJPEGSize, media.MaxMJPEGSize)
+		}
 	}
 	if !contains(s.Resolutions, d.Resolution) {
 		v.errorf(StepLint, ptr+"/default/resolution", "default resolution %s is not in resolutions", d.Resolution)

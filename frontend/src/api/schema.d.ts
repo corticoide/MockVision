@@ -13,7 +13,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create the first administrator (first run only) */
+        /**
+         * Create the first administrator (first run only)
+         * @description Needs the node's one-time setup code, printed in its log at start-up and kept in the `setup-code` file of the data directory until the administrator exists. Attempts count against the address's sign-in limit.
+         */
         post: operations["setup"];
         delete?: never;
         options?: never;
@@ -60,7 +63,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current user; 401 carries setup_required on a fresh node */
+        /** Current user, and the token of a request made with one; 401 carries setup_required on a fresh node */
         get: operations["me"];
         put?: never;
         post?: never;
@@ -102,6 +105,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/node/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Node samples of the last ten minutes, every 2 s */
+        get: operations["getNodeHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -127,7 +147,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Import a .mvpkg package or a loose profile.yaml (draft) */
+        /**
+         * Import a .mvpkg package or a loose profile.yaml (draft)
+         * @description The import runs as a job. The call waits up to a minute for it and
+         *     answers with the result; when the job is still queued or running it
+         *     answers 202 with the job, to follow at /jobs/{id}.
+         */
         post: operations["importPackage"];
         delete?: never;
         options?: never;
@@ -192,6 +217,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** API tokens of the current user (panel session only) */
+        get: operations["listTokens"];
+        put?: never;
+        /** Create an API token (panel session only); the secret is returned once */
+        post: operations["createToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an API token (panel session only) */
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Background jobs, newest first (D72, D74) */
+        get: operations["listJobs"];
+        put?: never;
+        /** Start a job; for now renditions.prepare, which encodes what the cameras need */
+        post: operations["createJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** A job with its history */
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/actions/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                action: "cancel" | "resume" | "answer";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a job, resume an interrupted one, or answer its question ({"answer":"<option id>"}) */
+        post: operations["jobAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who changed what, when and from where (kept 90 days) */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cameras": {
         parameters: {
             query?: never;
@@ -202,6 +338,23 @@ export interface paths {
         get: operations["listCameras"];
         put?: never;
         post: operations["createCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/actions/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start, stop, restart, clone or delete several cameras; each gets its own result */
+        post: operations["bulkCameras"];
         delete?: never;
         options?: never;
         head?: never;
@@ -243,6 +396,102 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/actions/factory-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restores the camera to its profile (RN-10): parameters, accounts and protocols; with scope full, also the profile's factory address. The picture is kept. A running camera reboots. */
+        post: operations["resetCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/actions/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Creates a camera with the same profile, parameters, accounts, protocols, picture and targets, with its own ID, serial, MAC and address. */
+        post: operations["cloneCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the camera's accounts (RN-11: at least one admin). An empty password keeps the account's current one. Applied at once. */
+        put: operations["setCameraUsers"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/protocols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Enables, disables or moves protocols of the camera's profile (RN-04). A running camera applies them when it restarts (RN-09). */
+        put: operations["setCameraProtocols"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/streams/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                stream: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Changes the picture of a stream or its encoding: codec, resolution, frame rate, bitrate and GOP, each through the profile parameter bound to it. The stream is encoded again and a running camera switches to it without restarting; RTSP clients of that stream reconnect. */
+        patch: operations["updateCameraStream"];
         trace?: never;
     };
     "/cameras/{id}/status": {
@@ -303,7 +552,10 @@ export interface paths {
     };
     "/cameras/{id}/snapshot": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description main (the default), sub or third */
+                stream?: string;
+            };
             header?: never;
             path: {
                 id: components["parameters"]["ID"];
@@ -498,14 +750,28 @@ export interface components {
             username: string;
             password: string;
         };
+        SetupRequest: {
+            username: string;
+            password: string;
+            /** @description One-time code from the node's log or its setup-code file; case and spaces are ignored */
+            setup_code: string;
+        };
         Me: {
             user: {
                 id: string;
                 username: string;
                 role: string;
             };
-            /** Format: date-time */
-            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Null for a token that does not expire
+             */
+            expires_at: string | null;
+            token?: {
+                id: string;
+                name: string;
+                scopes: ("read" | "write")[];
+            };
         };
         Interface: {
             name: string;
@@ -518,8 +784,12 @@ export interface components {
         };
         CameraCounts: {
             total: number;
+            /** @description Running and degraded */
             running: number;
             error: number;
+            by_state: {
+                [key: string]: number;
+            };
         };
         Node: {
             version: string;
@@ -533,6 +803,12 @@ export interface components {
             parent_interface: string;
             interfaces: components["schemas"]["Interface"][] | null;
             cameras: components["schemas"]["CameraCounts"];
+            /** @description Where the panel and the API listen (D63) */
+            panel: {
+                listen: string;
+                all_interfaces: boolean;
+                urls: string[];
+            };
             /** Format: date-time */
             started_at: string;
         };
@@ -542,6 +818,10 @@ export interface components {
             max_cpu_percent: number;
             parent_interface: string;
             events_retention_days: number;
+            /** @description Jobs that run at once (D72) */
+            max_jobs: number;
+            /** @description Bound of each step of a job (D72) */
+            job_step_timeout_seconds: number;
         };
         SettingsPatch: {
             max_cameras?: number;
@@ -549,6 +829,8 @@ export interface components {
             max_cpu_percent?: number;
             parent_interface?: string;
             events_retention_days?: number;
+            max_jobs?: number;
+            job_step_timeout_seconds?: number;
         };
         NodeMetrics: {
             /** Format: date-time */
@@ -557,6 +839,12 @@ export interface components {
             cpu_sustained_percent: number;
             mem_total: number;
             mem_used: number;
+            /** @description Interface the cameras hang from */
+            net_interface: string;
+            /** @description Bytes per second received */
+            net_rx_bps: number;
+            /** @description Bytes per second sent */
+            net_tx_bps: number;
             cameras: {
                 [key: string]: components["schemas"]["CameraMetrics"];
             };
@@ -566,6 +854,92 @@ export interface components {
                 write_transactions: number;
             };
             limits: components["schemas"]["Settings"];
+        };
+        NodeSample: {
+            /** Format: date-time */
+            at: string;
+            cpu_percent: number;
+            mem_total: number;
+            mem_used: number;
+            net_interface: string;
+            net_rx_bps: number;
+            net_tx_bps: number;
+        };
+        Token: {
+            id: string;
+            name: string;
+            /** @description First characters of the secret */
+            prefix: string;
+            scopes: ("read" | "write")[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string | null;
+            /** Format: date-time */
+            last_used_at: string | null;
+            last_used_ip: string;
+            expired: boolean;
+        };
+        TokenInput: {
+            name: string;
+            /** @description write implies read; none means read */
+            scopes?: ("read" | "write")[];
+            /** @description Null for a token that lasts until revoked */
+            expires_in_days?: number | null;
+        };
+        CreatedToken: {
+            token: components["schemas"]["Token"];
+            /** @description Shown only now; the node keeps its hash */
+            secret: string;
+        };
+        AuditEntry: {
+            id: string;
+            /** Format: date-time */
+            at: string;
+            actor: {
+                /** @enum {string} */
+                type: "user" | "camera" | "system";
+                id: string;
+                name: string;
+            };
+            /** @enum {string} */
+            origin: "panel" | "api" | "camera" | "system";
+            origin_ip: string;
+            token: {
+                id: string;
+                name: string;
+            } | null;
+            action: string;
+            entity: {
+                type: string;
+                id: string;
+                name: string;
+            };
+            diff: {
+                [key: string]: unknown;
+            };
+        };
+        AuditPage: {
+            items: components["schemas"]["AuditEntry"][];
+            next_cursor?: string;
+        };
+        BulkAction: {
+            /** @enum {string} */
+            action: "start" | "stop" | "restart" | "clone" | "delete";
+            ids: string[];
+            /** @description Start each copy (clone only) */
+            start?: boolean;
+        };
+        BulkResult: {
+            action: string;
+            succeeded: number;
+            failed: number;
+            results: {
+                id: string;
+                ok: boolean;
+                camera?: components["schemas"]["Camera"];
+                error?: components["schemas"]["Problem"];
+            }[];
         };
         Profile: {
             id: string;
@@ -592,6 +966,8 @@ export interface components {
             resolutions: string[];
             fps_min: number;
             fps_max: number;
+            bitrate_min?: number;
+            bitrate_max?: number;
             default: {
                 codec: string;
                 resolution: string;
@@ -643,6 +1019,68 @@ export interface components {
             profile: components["schemas"]["Profile"];
             report: components["schemas"]["ImportReport"];
             created: boolean;
+            /** @description The import job */
+            job_id?: string;
+        };
+        Job: {
+            id: string;
+            /** @enum {string} */
+            type: "rendition" | "import" | "renditions.prepare";
+            title: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "waiting" | "completed" | "failed" | "canceled" | "interrupted";
+            progress: number;
+            step: string;
+            /** @description The decision the job waits for; unanswered, it takes the default when it expires */
+            question: null | components["schemas"]["JobQuestion"];
+            result: {
+                [key: string]: unknown;
+            };
+            error: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+        };
+        JobQuestion: {
+            id: string;
+            text: string;
+            options: {
+                id: string;
+                label: string;
+            }[];
+            default: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        JobEvent: {
+            job_id: string;
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            kind: "status" | "step" | "log" | "question" | "answer";
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        JobDetail: components["schemas"]["Job"] & {
+            events: components["schemas"]["JobEvent"][];
+        };
+        JobPage: {
+            items: components["schemas"]["Job"][];
+            next_cursor?: string;
+        };
+        JobInput: {
+            /** @enum {string} */
+            type: "renditions.prepare";
+            params?: {
+                /** @description Only the renditions of this image */
+                asset_id?: string;
+            };
         };
         CameraUser: {
             username: string;
@@ -659,6 +1097,17 @@ export interface components {
             netns?: string;
             pid?: number;
             retries: number;
+            /** @description Saved changes a running camera applies when it restarts (RN-09). */
+            pending_restart: ("network" | "protocols")[];
+        };
+        Protocol: {
+            instance: string;
+            engine: string;
+            /** @enum {string} */
+            role: "server" | "client";
+            enabled: boolean;
+            port: number;
+            default_port: number;
         };
         Endpoint: {
             instance: string;
@@ -668,8 +1117,12 @@ export interface components {
             url: string;
         };
         Stream: {
-            name: string;
-            codec: string;
+            /** @enum {string} */
+            name: "main" | "sub" | "third";
+            /** @description RTSP URL of the stream */
+            url?: string;
+            /** @enum {string} */
+            codec: "h264" | "h265" | "mjpeg";
             resolution: string;
             fps: number;
             gop: number;
@@ -720,6 +1173,7 @@ export interface components {
             network: components["schemas"]["Network"];
             status: components["schemas"]["CameraStatus"];
             endpoints: components["schemas"]["Endpoint"][];
+            protocols: components["schemas"]["Protocol"][];
             streams: components["schemas"]["Stream"][];
             users: components["schemas"]["CameraUser"][];
             targets: {
@@ -737,22 +1191,13 @@ export interface components {
             name: string;
             profile_id: string;
             profile_version: string;
-            network?: {
-                parent?: string;
-                mac?: string;
-                vendor_oui?: boolean;
-                ip?: string;
-                netmask?: string;
-                gateway?: string;
-            };
-            users?: {
-                username: string;
-                password: string;
-                /** @enum {string} */
-                role?: "admin" | "operator" | "viewer";
-            }[];
+            network?: components["schemas"]["NetworkInput"];
+            users?: components["schemas"]["CameraUserInput"][];
+            /** @description The main stream; sub and third start from the profile defaults with the same picture. */
             stream?: {
                 asset_id?: string;
+                /** @enum {string} */
+                codec?: "h264" | "h265" | "mjpeg";
                 resolution?: string;
                 fps?: number;
             };
@@ -766,6 +1211,31 @@ export interface components {
             autostart?: boolean;
             tags?: string[];
             target_ids?: string[];
+            /** @description The whole network identity; a running camera applies it when it restarts (RN-09). */
+            network?: components["schemas"]["NetworkInput"];
+        };
+        /** @description Empty fields take the node's defaults. When editing, an empty MAC keeps the current one and default_mac goes back to the one derived from the camera ID. No DNS servers means the node's. */
+        NetworkInput: {
+            parent?: string;
+            mac?: string;
+            default_mac?: boolean;
+            vendor_oui?: boolean;
+            ip?: string;
+            netmask?: string;
+            gateway?: string;
+            dns?: string[];
+        };
+        CameraUserInput: {
+            username: string;
+            /** @description Required for a new account; empty keeps the current one. */
+            password?: string;
+            /** @enum {string} */
+            role?: "admin" | "operator" | "viewer";
+        };
+        CloneCamera: {
+            name: string;
+            network?: components["schemas"]["NetworkInput"];
+            start?: boolean;
         };
         Param: {
             key: string;
@@ -830,11 +1300,16 @@ export interface components {
             password?: string;
             enabled?: boolean;
         };
+        /** @description The request leaves from a running camera that uses the target, across the same network as its deliveries; with none running it leaves from the node, which refuses its own and link-local addresses. */
         TargetTest: {
             ok: boolean;
             http_status?: number;
             latency_ms: number;
             error?: string;
+            /** @enum {string} */
+            from: "camera" | "node";
+            /** @description Name of the camera the request left from */
+            camera?: string;
         };
         Trigger: {
             /** @example line_crossing */
@@ -923,7 +1398,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Credentials"];
+                "application/json": components["schemas"]["SetupRequest"];
             };
         };
         responses: {
@@ -936,8 +1411,11 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     login: {
@@ -964,6 +1442,7 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     logout: {
@@ -1041,6 +1520,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeMetrics"];
+                };
+            };
+        };
+    };
+    getNodeHistory: {
+        parameters: {
+            query?: {
+                /** @description Unix milliseconds or RFC 3339 */
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Samples, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        samples: components["schemas"]["NodeSample"][];
+                    };
                 };
             };
         };
@@ -1124,6 +1628,17 @@ export interface operations {
                     "application/json": components["schemas"]["ImportResult"];
                 };
             };
+            /** @description The import goes on as a job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["Job"];
+                    };
+                };
+            };
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
@@ -1200,9 +1715,230 @@ export interface operations {
             };
         };
     };
-    listCameras: {
+    listTokens: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tokens, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Token"][];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+        };
+    };
+    createToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TokenInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: {
+                /** @description A status */
+                status?: string;
+                type?: "rendition" | "import" | "renditions.prepare";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Jobs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPage"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    createJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobInput"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDetail"];
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    jobAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                action: "cancel" | "resume" | "answer";
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    answer?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                origin?: "panel" | "api" | "camera" | "system";
+                entity_type?: string;
+                entity_id?: string;
+                token_id?: string;
+                /** @description Exact action or prefix */
+                action?: string;
+                /** @description Unix milliseconds or RFC 3339 */
+                since?: string;
+                /** @description Unix milliseconds or RFC 3339 */
+                until?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listCameras: {
+        parameters: {
+            query?: {
+                /** @description Text in the name */
+                q?: string;
+                state?: string;
+                /** @description Profile ID or ID@version */
+                profile?: string;
+                tag?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1245,6 +1981,31 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    bulkCameras: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkAction"];
+            };
+        };
+        responses: {
+            /** @description Results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkResult"];
+                };
+            };
             422: components["responses"]["Problem"];
         };
     };
@@ -1339,6 +2100,166 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+        };
+    };
+    resetCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    scope: "settings" | "full";
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    cloneCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneCamera"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    setCameraUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    users: components["schemas"]["CameraUserInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    setCameraProtocols: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    protocols: {
+                        instance: string;
+                        enabled?: boolean;
+                        port?: number;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    updateCameraStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                stream: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    asset_id?: string;
+                    /** @enum {string} */
+                    codec?: "h264" | "h265" | "mjpeg";
+                    resolution?: string;
+                    fps?: number;
+                    /** @description kbit/s */
+                    bitrate?: number;
+                    /** @description Frames between keyframes */
+                    gop?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     getCameraStatus: {
@@ -1448,7 +2369,10 @@ export interface operations {
     };
     getSnapshot: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description main (the default), sub or third */
+                stream?: string;
+            };
             header?: never;
             path: {
                 id: components["parameters"]["ID"];
@@ -1733,6 +2657,8 @@ export interface operations {
             query?: {
                 camera_id?: string;
                 type?: string;
+                /** @description Only events a target gave up on */
+                delivery?: "failed";
                 cursor?: string;
                 limit?: number;
             };

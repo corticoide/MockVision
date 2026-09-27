@@ -2,6 +2,7 @@ package tmpl
 
 import (
 	"context"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -83,7 +84,7 @@ func TestRequestDataIsNotEvaluated(t *testing.T) {
 
 func TestLimits(t *testing.T) {
 	c := NewCompiler(Env{})
-	tpl, err := c.Compile("big", `{{ range 2000000 }}xxxxxxxxxx{{ end }}`, 1024)
+	tpl, err := c.Compile("big", `{{ range 50000 }}xxxxxxxxxx{{ end }}`, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,5 +96,63 @@ func TestLimits(t *testing.T) {
 	}
 	if err := Check("unknown", `{{ exec "rm -rf /" }}`); err == nil {
 		t.Fatal("unknown functions must be rejected")
+	}
+}
+
+// Renders that loop or recurse without writing stop at the step budget
+// instead of running on after their timeout (audit M2).
+func TestRendersAreBoundedInSteps(t *testing.T) {
+	c := NewCompiler(Env{State: func(string) (any, bool) { return int64(1 << 40), true }})
+	for name, text := range map[string]string{
+		"range":     `{{ range 2000000000 }}{{ end }}`,
+		"nested":    `{{ range 1000 }}{{ range 1000 }}{{ end }}{{ end }}`,
+		"state":     `{{ range state "n" }}{{ end }}`,
+		"recursion": `{{ define "a" }}{{ template "a" . }}{{ template "a" . }}{{ end }}{{ template "a" . }}`,
+		"block":     `{{ define "b" }}{{ block "c" . }}{{ template "b" }}{{ end }}{{ end }}{{ template "b" }}`,
+	} {
+		tpl, err := c.Compile(name, text, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		start := time.Now()
+		_, err = tpl.Render(context.Background(), engine.TemplateData{})
+		if err == nil {
+			t.Fatalf("%s: rendered without limit", name)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Fatalf("%s: took %s", name, d)
+		}
+	}
+	// Ordinary loops still work, and each render has its own budget.
+	tpl, err := c.Compile("ok", `{{ range $i := 3 }}{{ $i }}{{ end }};{{ range $k, $v := .Request.Query }}{{ $k }}={{ $v }}{{ end }}`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := engine.TemplateData{Request: &engine.RequestData{Query: map[string]string{"a": "1"}}}
+	for range 3 {
+		if out, err := tpl.Render(context.Background(), data); err != nil || string(out) != "012;a=1" {
+			t.Fatalf("got %q, %v", out, err)
+		}
+	}
+}
+
+// A render past its timeout does not keep a goroutine busy.
+func TestTimedOutRenderStops(t *testing.T) {
+	c := NewCompiler(Env{})
+	// Just under the budget, but slow: every step formats a large number.
+	tpl, err := c.Compile("slow", `{{ range 99999 }}{{ $x := printf "%0999999d" 1 }}{{ end }}`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := runtime.NumGoroutine()
+	if _, err := tpl.Render(context.Background(), engine.TemplateData{}); err == nil {
+		t.Fatal("the render should time out")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("the render goroutine is still running: %d > %d", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

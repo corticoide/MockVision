@@ -18,6 +18,12 @@ type wsClient struct {
 	send   chan Message
 	gone   chan struct{}
 	once   sync.Once
+	reason string
+
+	// The credential the connection was opened with: a panel session or
+	// an API token. It is checked again while the socket stays open.
+	session string
+	tokenID string
 }
 
 const (
@@ -37,10 +43,15 @@ func (c *wsClient) subscribed(topic string) bool {
 	return c.topics[topic]
 }
 
-func (c *wsClient) addTopic(topic string) {
+// addTopic subscribes the client to a topic, up to maxTopics in all.
+func (c *wsClient) addTopic(topic string) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.topics[topic] && len(c.topics) >= maxTopics {
+		return false
+	}
 	c.topics[topic] = true
-	c.mu.Unlock()
+	return true
 }
 
 func (c *wsClient) removeTopic(topic string) {
@@ -59,8 +70,14 @@ func (c *wsClient) push(m Message) {
 	}
 }
 
-func (c *wsClient) kill() {
-	c.once.Do(func() { close(c.gone) })
+func (c *wsClient) kill() { c.end("too slow; reconnect and resync") }
+
+// end closes the connection with a reason.
+func (c *wsClient) end(reason string) {
+	c.once.Do(func() {
+		c.reason = reason
+		close(c.gone)
+	})
 }
 
 // clientOp is what clients send: subscribe or unsubscribe. The socket is
@@ -73,18 +90,41 @@ type clientOp struct {
 
 // serveWS upgrades an authenticated request.
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
+	client := newWSClient()
+	bearer, isBearer := bearerToken(r)
+	if sess, ok := sessionFrom(r.Context()); ok && sess.Token != nil {
+		client.tokenID = sess.Token.ID
+	} else if c, err := r.Cookie(sessionCookie); err == nil && !isBearer {
+		client.session = c.Value
+	}
+	// stillValid checks the credential again without extending it: a
+	// session that ends or a token that expires or is revoked stops
+	// receiving live updates (audit M4).
+	stillValid := func(ctx context.Context) bool {
+		if isBearer {
+			return s.svc.CheckToken(ctx, bearer) == nil
+		}
+		return s.svc.CheckSession(ctx, client.session) == nil
+	}
+	// The client is known to the hub before the handshake completes, so a
+	// logout or a revocation right after it cannot miss the connection.
+	s.hub.add(client)
+	defer s.hub.remove(client)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.cfg.AllowedOrigins})
 	if err != nil {
 		return
 	}
 	conn.SetReadLimit(64 << 10)
-	client := newWSClient()
-	s.hub.add(client)
-	defer s.hub.remove(client)
 	defer client.kill()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	// A revocation between the authentication of this request and its
+	// registration is caught here.
+	if !stillValid(ctx) {
+		conn.Close(websocket.StatusPolicyViolation, "the session or token is no longer valid")
+		return
+	}
 
 	go func() {
 		defer cancel()
@@ -119,9 +159,13 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			conn.Close(websocket.StatusNormalClosure, "")
 			return
 		case <-client.gone:
-			conn.Close(websocket.StatusPolicyViolation, "too slow; reconnect and resync")
+			conn.Close(websocket.StatusPolicyViolation, client.reason)
 			return
 		case <-ping.C:
+			if !stillValid(ctx) {
+				conn.Close(websocket.StatusPolicyViolation, "the session or token is no longer valid")
+				return
+			}
 			pctx, pcancel := context.WithTimeout(ctx, wsWriteTimeout)
 			err := conn.Ping(pctx)
 			pcancel()

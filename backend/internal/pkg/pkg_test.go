@@ -27,7 +27,7 @@ func TestLooseProfileIsADraft(t *testing.T) {
 		t.Fatalf("problems: %+v", res.Report.Problems)
 	}
 	r := res.Report
-	if r.Level != "draft" || r.Signature != SignatureUnsigned || r.ID != "milesight/demo" || r.Version != "0.1.0" || len(res.Resolved) == 0 {
+	if r.Level != "draft" || r.Signature != SignatureUnsigned || r.ID != "milesight/demo" || r.Version != "0.2.0" || len(res.Resolved) == 0 {
 		t.Fatalf("report = %+v", r)
 	}
 }
@@ -51,7 +51,7 @@ func TestPackageRoundTrip(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
 	os.WriteFile(filepath.Join(dir, "profile.yaml"), []byte(prof), 0o644)
 	os.WriteFile(filepath.Join(dir, "templates", "info.json.tmpl"), []byte(`{"serialNumber": {{ json .Camera.Serial }}}`), 0o644)
-	os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("format: 1\nkind: profile\nid: milesight/demo\nversion: 0.1.0\nprovenance: { source: documented }\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("format: 1\nkind: profile\nid: milesight/demo\nversion: 0.2.0\nprovenance: { source: documented }\n"), 0o644)
 
 	data, err := Build(dir)
 	if err != nil {

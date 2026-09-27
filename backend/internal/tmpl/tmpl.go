@@ -2,8 +2,14 @@
 // and a closed set of safe functions: state, canon, uuid, rand, b64,
 // snapshot, fmtTime, json, xml, default, lower and upper. Templates have no
 // access to files, network, environment or processes, each render is bounded
-// in time and size, and request data is inserted as values, never evaluated
-// as a template.
+// in time, size and steps, and request data is inserted as values, never
+// evaluated as a template.
+//
+// text/template cannot be interrupted, so a timeout alone would leave a
+// render that loops without writing running forever (audit M2). Every range,
+// every range iteration and every template call therefore goes through a
+// guard, added to the parse tree, that counts the iterations and calls of a
+// render and stops it past MaxSteps or once its time is up.
 package tmpl
 
 import (
@@ -22,6 +28,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"text/template"
+	tparse "text/template/parse"
 	"time"
 
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -34,6 +41,16 @@ const (
 	ImageMaxBytes = 8 << 20
 	// Timeout bounds a render's duration.
 	Timeout = 50 * time.Millisecond
+	// MaxSteps bounds the range iterations and template calls of a render.
+	MaxSteps = 100_000
+)
+
+// Names of the guard functions the compiler adds to every range, range
+// iteration and template call.
+const (
+	guardRange = "__mockvisionRange"
+	guardTick  = "__mockvisionTick"
+	guardCall  = "__mockvisionCall"
 )
 
 // Env binds the functions that depend on the camera.
@@ -86,11 +103,131 @@ func Check(name, text string) error {
 }
 
 func parse(name, text string, funcs template.FuncMap) (*template.Template, error) {
-	t, err := template.New(name).Option("missingkey=zero").Funcs(funcs).Parse(text)
+	g := &guard{}
+	all := template.FuncMap{guardRange: g.bound, guardTick: g.tick, guardCall: g.call}
+	for k, v := range funcs {
+		all[k] = v
+	}
+	t, err := template.New(name).Option("missingkey=zero").Funcs(all).Parse(text)
 	if err != nil {
 		return nil, syntaxError(name, err)
 	}
+	for _, tt := range t.Templates() {
+		if tt.Tree != nil {
+			guardTree(tt.Tree)
+		}
+	}
 	return t, nil
+}
+
+// guardTree routes every range pipeline and template call of a tree
+// through the guard functions, and starts every range iteration with a
+// call to the guard.
+func guardTree(tr *tparse.Tree) {
+	cmd := func(pos tparse.Pos, fn string) *tparse.CommandNode {
+		return &tparse.CommandNode{NodeType: tparse.NodeCommand, Pos: pos,
+			Args: []tparse.Node{tparse.NewIdentifier(fn).SetTree(tr).SetPos(pos)}}
+	}
+	var walk func(n tparse.Node)
+	walk = func(n tparse.Node) {
+		switch n := n.(type) {
+		case *tparse.ListNode:
+			if n == nil {
+				return
+			}
+			for _, c := range n.Nodes {
+				walk(c)
+			}
+		case *tparse.IfNode:
+			walk(n.List)
+			walk(n.ElseList)
+		case *tparse.WithNode:
+			walk(n.List)
+			walk(n.ElseList)
+		case *tparse.RangeNode:
+			n.Pipe.Cmds = append(n.Pipe.Cmds, cmd(n.Pos, guardRange))
+			walk(n.List)
+			walk(n.ElseList)
+			// The body may only assign variables and so never write: the
+			// tick is what stops such a loop once the render is aborted.
+			tick := &tparse.ActionNode{NodeType: tparse.NodeAction, Pos: n.Pos, Line: n.Line,
+				Pipe: &tparse.PipeNode{NodeType: tparse.NodePipe, Pos: n.Pos, Line: n.Line,
+					Cmds: []*tparse.CommandNode{cmd(n.Pos, guardTick)}}}
+			n.List.Nodes = append([]tparse.Node{tick}, n.List.Nodes...)
+		case *tparse.TemplateNode:
+			if n.Pipe == nil {
+				n.Pipe = &tparse.PipeNode{NodeType: tparse.NodePipe, Pos: n.Pos}
+			}
+			n.Pipe.Cmds = append(n.Pipe.Cmds, cmd(n.Pos, guardCall))
+		}
+	}
+	walk(tr.Root)
+}
+
+// guard counts the steps of one render.
+type guard struct {
+	steps int
+	abort *atomic.Bool
+}
+
+var errTooManySteps = fmt.Errorf("the template takes more than %d steps", MaxSteps)
+
+func (g *guard) take(n int) error {
+	if g.abort != nil && g.abort.Load() {
+		return errors.New("aborted")
+	}
+	if n < 0 || n > MaxSteps-g.steps {
+		return errTooManySteps
+	}
+	g.steps += n
+	return nil
+}
+
+// bound checks what a range iterates over and counts its iterations.
+func (g *guard) bound(v any) (any, error) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return v, nil
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Invalid:
+		return v, nil
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
+		return v, g.take(rv.Len())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if rv.Int() > int64(MaxSteps) {
+			return nil, errTooManySteps
+		}
+		return v, g.take(int(rv.Int()))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		if rv.Uint() > uint64(MaxSteps) {
+			return nil, errTooManySteps
+		}
+		return v, g.take(int(rv.Uint()))
+	case reflect.Chan, reflect.Func:
+		return nil, errors.New("range over a channel or a function is not allowed in profile templates")
+	}
+	return v, nil
+}
+
+// tick starts every range iteration: it writes nothing and fails once the
+// render is aborted.
+func (g *guard) tick() (string, error) {
+	return "", g.take(0)
+}
+
+// call counts a template call and passes its argument through.
+func (g *guard) call(args ...any) (any, error) {
+	if err := g.take(1); err != nil {
+		return nil, err
+	}
+	if len(args) == 0 {
+		return nil, nil
+	}
+	return args[0], nil
 }
 
 // syntaxError turns "template: NAME:LINE: message" into a SyntaxError.
@@ -123,6 +260,13 @@ var errTooLarge = errors.New("output too large")
 // Render executes the template within the time and size limits.
 func (c *compiled) Render(ctx context.Context, data engine.TemplateData) ([]byte, error) {
 	w := &limitedBuffer{max: c.maxBytes}
+	// Each render counts its own steps; the clone shares the parse trees.
+	t, err := c.t.Clone()
+	if err != nil {
+		return nil, err
+	}
+	g := &guard{abort: &w.abort}
+	t.Funcs(template.FuncMap{guardRange: g.bound, guardTick: g.tick, guardCall: g.call})
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -130,7 +274,7 @@ func (c *compiled) Render(ctx context.Context, data engine.TemplateData) ([]byte
 				done <- fmt.Errorf("template panicked: %v", r)
 			}
 		}()
-		done <- c.t.Execute(w, data)
+		done <- t.Execute(w, data)
 	}()
 	timer := time.NewTimer(Timeout)
 	defer timer.Stop()

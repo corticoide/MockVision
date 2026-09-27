@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/profile"
+	"github.com/corticoide/mockvision/backend/internal/sandbox"
 	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -42,7 +44,10 @@ type Options struct {
 	// Local opens missing TCP sockets on 127.0.0.1 with ephemeral ports,
 	// for development without network namespaces.
 	Local bool
-	Log   *slog.Logger
+	// Confine applies Landlock to the process once the configuration names
+	// its files. Only the camera subcommand sets it: it cannot be undone.
+	Confine bool
+	Log     *slog.Logger
 }
 
 // Runtime is a running camera. It implements engine.Host.
@@ -59,7 +64,7 @@ type Runtime struct {
 	templates *tmpl.Compiler
 	tel       *telemetry
 	identity  engine.Identity
-	users     []engine.User
+	accounts  accountStore
 
 	mu         sync.Mutex
 	running    []*runningEngine
@@ -90,6 +95,9 @@ func NewRuntime(opts Options) *Runtime {
 	rt.tel = newTelemetry(rt)
 	return rt
 }
+
+// Accounts implements engine.Host.
+func (r *Runtime) Accounts() engine.Accounts { return &r.accounts }
 
 // State implements engine.Host.
 func (r *Runtime) State() engine.State { return r.state }
@@ -233,6 +241,12 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		default:
 		}
 		return nil, nil
+	case ipc.TypeTargetTest:
+		var tt ipc.TargetTest
+		if err := msg.Decode(&tt); err != nil {
+			return nil, err
+		}
+		return r.probeTarget(ctx, tt.Target), nil
 	case ipc.TypeFaultStart, ipc.TypeFaultStop:
 		return nil, ipc.Errorf("unsupported", "fault injection is not available in this version")
 	}
@@ -246,7 +260,10 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	}
 	r.model = profile.NewModel(doc)
 	r.identity = cfg.Identity
-	r.users = cfg.Users
+	r.accounts.set(cfg.Users)
+	if len(cfg.DNS) > 0 {
+		net.DefaultResolver = resolverFor(cfg.DNS)
+	}
 	r.state = newStateStore(r.model, cfg.State, func(changes []engine.Change) {
 		if err := r.conn.Notify(ipc.TypeStateChanged, ipc.StateChanged{Changes: changes}); err != nil {
 			r.log.Warn("cannot report state change", "error", err)
@@ -257,6 +274,11 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		Canon:    r.state.Canon,
 		Snapshot: func() ([]byte, error) { return r.media.Snapshot("main") },
 	})
+	if r.opts.Confine {
+		if err := r.confine(cfg.Streams); err != nil {
+			return ipc.Ready{}, err
+		}
+	}
 	if err := r.media.replace(cfg.Streams); err != nil {
 		return ipc.Ready{}, err
 	}
@@ -285,6 +307,34 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	return ready, nil
 }
 
+// confine limits the files the camera can reach, before its engines read
+// anything from the LAN: its renditions, read only, and the system files
+// name resolution and TLS need (audit B10). Outside local mode it cannot
+// bind a TCP port either; its sockets are open already.
+func (r *Runtime) confine(streams []ipc.Stream) error {
+	read := []string{"/etc", "/usr/share/ca-certificates", "/usr/local/share/ca-certificates", "/usr/share/zoneinfo", "/proc"}
+	seen := map[string]bool{}
+	for _, st := range streams {
+		for _, p := range []string{st.StreamPath, st.SnapshotPath} {
+			// <data>/renditions/<key>/stream.h264: every rendition,
+			// present and future, lives under <data>/renditions.
+			root := filepath.Dir(filepath.Dir(p))
+			if !seen[root] {
+				seen[root] = true
+				read = append(read, root)
+			}
+		}
+	}
+	applied, err := sandbox.Landlock(sandbox.Paths{Read: read, NoBind: !r.opts.Local})
+	if err != nil {
+		return err
+	}
+	if !applied {
+		r.log.Warn("the kernel has no Landlock: the camera's files are not confined")
+	}
+	return nil
+}
+
 func (r *Runtime) startEngine(ctx context.Context, instance string, section []byte, ec ipc.EngineConfig) (*runningEngine, error) {
 	name, rng, err := profile.EngineName(section)
 	if err != nil {
@@ -302,7 +352,6 @@ func (r *Runtime) startEngine(ctx context.Context, instance string, section []by
 		Port:        ec.Port,
 		Listeners:   map[string]net.Listener{},
 		PacketConns: map[string]net.PacketConn{},
-		Users:       r.users,
 		Host:        r,
 	}
 	re := &runningEngine{instance: instance, eng: eng}
@@ -393,7 +442,7 @@ func (r *Runtime) reload(rl *ipc.Reload) error {
 		r.events.setTargets(rl.Targets)
 	}
 	if rl.Users != nil {
-		r.users = rl.Users
+		r.accounts.set(rl.Users)
 	}
 	if rl.Streams != nil {
 		if err := r.media.replace(rl.Streams); err != nil {

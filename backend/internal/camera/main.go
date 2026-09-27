@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/corticoide/mockvision/backend/internal/netctl/privdrop"
+	"github.com/corticoide/mockvision/backend/internal/sandbox"
 )
 
 type socketFlags []string
@@ -34,13 +35,30 @@ func Main(args []string) int {
 		return 2
 	}
 
-	// First thing: drop every privilege. The network helper starts cameras
-	// as root inside their namespace; nothing below needs privileges.
+	// First thing: make sure no privilege is left. The network helper
+	// starts cameras as their own user with no capability; a camera
+	// started as root drops everything itself. Then the seccomp filter
+	// refuses what a camera never needs (audit B10); Landlock confines its
+	// files once the configuration names them.
 	if *uid >= 0 {
-		if err := privdrop.Drop(*uid, *gid); err != nil {
+		var err error
+		if os.Geteuid() == 0 {
+			err = privdrop.Drop(*uid, *gid)
+		} else {
+			err = privdrop.Harden(*uid, *gid)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "camera:", err)
 			return 1
 		}
+	}
+	if err := sandbox.NoNewPrivs(); err != nil {
+		fmt.Fprintln(os.Stderr, "camera:", err)
+		return 1
+	}
+	if err := sandbox.Seccomp(); err != nil {
+		fmt.Fprintln(os.Stderr, "camera:", err)
+		return 1
 	}
 
 	level := slog.LevelInfo
@@ -72,7 +90,7 @@ func Main(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	rt := NewRuntime(Options{CameraID: *id, IPC: conn, Sockets: socks, Local: *local, Log: log})
+	rt := NewRuntime(Options{CameraID: *id, IPC: conn, Sockets: socks, Local: *local, Confine: true, Log: log})
 	if err := rt.Run(ctx); err != nil {
 		log.Error("camera stopped", "error", err)
 		return 1

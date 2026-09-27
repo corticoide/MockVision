@@ -1,0 +1,17 @@
+# Keeps pinned dependencies current: Go modules, the panel's npm packages,
+# the base images (pinned by digest) and the GitHub Actions (pinned by
+# commit).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

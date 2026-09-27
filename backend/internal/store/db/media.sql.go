@@ -21,6 +21,15 @@ func (q *Queries) DeleteAsset(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected()
 }
 
+const deleteRendition = `-- name: DeleteRendition :exec
+DELETE FROM renditions WHERE id = ?1
+`
+
+func (q *Queries) DeleteRendition(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteRendition, id)
+	return err
+}
+
 const getAsset = `-- name: GetAsset :one
 SELECT id, sha256, kind, mime, width, height, size, filename, builtin, created_at FROM assets WHERE id = ?1
 `
@@ -282,6 +291,129 @@ func (q *Queries) ListRenditionsByStatus(ctx context.Context, status string) ([]
 			&i.Status,
 			&i.Error,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRenditionsWithAsset = `-- name: ListRenditionsWithAsset :many
+SELECT renditions.id, renditions.asset_id, renditions.codec, renditions.width, renditions.height, renditions.fps, renditions.gop, renditions.bitrate, renditions.sha256, renditions.status, renditions.error, renditions.created_at, assets.sha256 AS asset_sha256
+FROM renditions
+JOIN assets ON assets.id = renditions.asset_id
+`
+
+type ListRenditionsWithAssetRow struct {
+	ID          string
+	AssetID     string
+	Codec       string
+	Width       int64
+	Height      int64
+	Fps         int64
+	Gop         int64
+	Bitrate     int64
+	Sha256      string
+	Status      string
+	Error       string
+	CreatedAt   int64
+	AssetSha256 string
+}
+
+func (q *Queries) ListRenditionsWithAsset(ctx context.Context) ([]ListRenditionsWithAssetRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRenditionsWithAsset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRenditionsWithAssetRow{}
+	for rows.Next() {
+		var i ListRenditionsWithAssetRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AssetID,
+			&i.Codec,
+			&i.Width,
+			&i.Height,
+			&i.Fps,
+			&i.Gop,
+			&i.Bitrate,
+			&i.Sha256,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.AssetSha256,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnusedRenditions = `-- name: ListUnusedRenditions :many
+
+SELECT renditions.id, renditions.asset_id, renditions.codec, renditions.width, renditions.height, renditions.fps, renditions.gop, renditions.bitrate, renditions.sha256, renditions.status, renditions.error, renditions.created_at, assets.sha256 AS asset_sha256
+FROM renditions
+JOIN assets ON assets.id = renditions.asset_id
+WHERE renditions.created_at < ?1
+  AND NOT EXISTS (SELECT 1 FROM camera_streams WHERE camera_streams.rendition_id = renditions.id)
+`
+
+type ListUnusedRenditionsRow struct {
+	ID          string
+	AssetID     string
+	Codec       string
+	Width       int64
+	Height      int64
+	Fps         int64
+	Gop         int64
+	Bitrate     int64
+	Sha256      string
+	Status      string
+	Error       string
+	CreatedAt   int64
+	AssetSha256 string
+}
+
+// Renditions no camera stream points to, created before a time: the
+// garbage collector removes them with their files.
+func (q *Queries) ListUnusedRenditions(ctx context.Context, before int64) ([]ListUnusedRenditionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnusedRenditions, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnusedRenditionsRow{}
+	for rows.Next() {
+		var i ListUnusedRenditionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AssetID,
+			&i.Codec,
+			&i.Width,
+			&i.Height,
+			&i.Fps,
+			&i.Gop,
+			&i.Bitrate,
+			&i.Sha256,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.AssetSha256,
 		); err != nil {
 			return nil, err
 		}

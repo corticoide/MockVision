@@ -93,12 +93,30 @@ func (q *Queries) DeleteCamera(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected()
 }
 
+const deleteCameraState = `-- name: DeleteCameraState :exec
+DELETE FROM camera_state WHERE camera_id = ?1
+`
+
+func (q *Queries) DeleteCameraState(ctx context.Context, cameraID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCameraState, cameraID)
+	return err
+}
+
 const deleteCameraTargets = `-- name: DeleteCameraTargets :exec
 DELETE FROM camera_targets WHERE camera_id = ?1
 `
 
 func (q *Queries) DeleteCameraTargets(ctx context.Context, cameraID string) error {
 	_, err := q.db.ExecContext(ctx, deleteCameraTargets, cameraID)
+	return err
+}
+
+const deleteCameraUsers = `-- name: DeleteCameraUsers :exec
+DELETE FROM camera_users WHERE camera_id = ?1
+`
+
+func (q *Queries) DeleteCameraUsers(ctx context.Context, cameraID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCameraUsers, cameraID)
 	return err
 }
 
@@ -608,6 +626,20 @@ func (q *Queries) SetCameraDesired(ctx context.Context, arg SetCameraDesiredPara
 	return err
 }
 
+const touchCamera = `-- name: TouchCamera :exec
+UPDATE cameras SET updated_at = ?1 WHERE id = ?2
+`
+
+type TouchCameraParams struct {
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) TouchCamera(ctx context.Context, arg TouchCameraParams) error {
+	_, err := q.db.ExecContext(ctx, touchCamera, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const updateCameraMeta = `-- name: UpdateCameraMeta :exec
 UPDATE cameras SET name = ?1, autostart = ?2, tags_json = ?3, updated_at = ?4 WHERE id = ?5
 `
@@ -627,6 +659,55 @@ func (q *Queries) UpdateCameraMeta(ctx context.Context, arg UpdateCameraMetaPara
 		arg.TagsJson,
 		arg.UpdatedAt,
 		arg.ID,
+	)
+	return err
+}
+
+const updateCameraNetwork = `-- name: UpdateCameraNetwork :exec
+UPDATE camera_network SET parent_if = ?1, mac = ?2, ip = ?3, netmask = ?4, gateway = ?5, dns_json = ?6
+WHERE camera_id = ?7
+`
+
+type UpdateCameraNetworkParams struct {
+	ParentIf string
+	Mac      string
+	Ip       string
+	Netmask  string
+	Gateway  string
+	DnsJson  string
+	CameraID string
+}
+
+func (q *Queries) UpdateCameraNetwork(ctx context.Context, arg UpdateCameraNetworkParams) error {
+	_, err := q.db.ExecContext(ctx, updateCameraNetwork,
+		arg.ParentIf,
+		arg.Mac,
+		arg.Ip,
+		arg.Netmask,
+		arg.Gateway,
+		arg.DnsJson,
+		arg.CameraID,
+	)
+	return err
+}
+
+const updateCameraProtocol = `-- name: UpdateCameraProtocol :exec
+UPDATE camera_protocols SET enabled = ?1, port = ?2 WHERE camera_id = ?3 AND engine_key = ?4
+`
+
+type UpdateCameraProtocolParams struct {
+	Enabled   int64
+	Port      int64
+	CameraID  string
+	EngineKey string
+}
+
+func (q *Queries) UpdateCameraProtocol(ctx context.Context, arg UpdateCameraProtocolParams) error {
+	_, err := q.db.ExecContext(ctx, updateCameraProtocol,
+		arg.Enabled,
+		arg.Port,
+		arg.CameraID,
+		arg.EngineKey,
 	)
 	return err
 }

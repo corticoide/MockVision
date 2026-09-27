@@ -16,7 +16,7 @@ INSERT INTO sessions (id, user_id, expires_at, ip, user_agent, created_at)
 VALUES (@id, @user_id, @expires_at, @ip, @user_agent, @created_at);
 
 -- name: GetSession :one
-SELECT sessions.id, sessions.user_id, sessions.expires_at, users.username, users.role, users.disabled
+SELECT sessions.id, sessions.user_id, sessions.expires_at, sessions.created_at, users.username, users.role, users.disabled
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id = @id;
@@ -29,19 +29,6 @@ DELETE FROM sessions WHERE id = @id;
 
 -- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at < @now;
-
--- name: InsertAudit :exec
-INSERT INTO audit_log (id, at, actor_type, actor_id, action, entity_type, entity_id, origin_ip, diff_json)
-VALUES (@id, @at, @actor_type, @actor_id, @action, @entity_type, @entity_id, @origin_ip, @diff_json);
-
--- name: ListAudit :many
-SELECT * FROM audit_log
-WHERE (CAST(@cursor AS TEXT) = '' OR id < CAST(@cursor AS TEXT))
-ORDER BY id DESC
-LIMIT @limit;
-
--- name: DeleteAuditBefore :execrows
-DELETE FROM audit_log WHERE at < @before;
 
 -- name: GetSetting :one
 SELECT value_json FROM settings WHERE key = @key;

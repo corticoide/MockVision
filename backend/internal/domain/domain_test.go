@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -249,5 +250,31 @@ func TestRetryBackoff(t *testing.T) {
 	}
 	if HumanBytes(25<<20) != "25.0 MiB" {
 		t.Fatalf("HumanBytes = %s", HumanBytes(25<<20))
+	}
+}
+
+func TestNormalizeTags(t *testing.T) {
+	got, err := NormalizeTags([]string{" gate ", "", "Gate", "north", "  "})
+	if err != nil || strings.Join(got, "|") != "gate|north" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, err := NormalizeTags(nil); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("nil: %q, %v", got, err)
+	}
+	for _, bad := range [][]string{
+		{strings.Repeat("x", MaxTagLength+1)},
+		{"a,b"},
+		{"tab\there"},
+	} {
+		if _, err := NormalizeTags(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	many := make([]string, MaxCameraTags+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("t%d", i)
+	}
+	if _, err := NormalizeTags(many); err == nil {
+		t.Error("too many tags accepted")
 	}
 }

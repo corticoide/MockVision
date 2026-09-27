@@ -4,9 +4,13 @@ info:
   version: 0.1.0
   description: |
     REST API of a MockVision node, shared by the panel (session cookie) and
-    automation. Errors use problem+json (RFC 9457). State-changing requests
-    must send the `X-MockVision-Request` header. Live updates come through a
-    single WebSocket at `/api/v1/ws` (see the `x-websocket` section).
+    automation (API tokens sent as `Authorization: Bearer mvt_…`). Errors use
+    problem+json (RFC 9457). State-changing requests with the session cookie
+    must send the `X-MockVision-Request` header; requests with a token need
+    not. A token with the read scope may only make GET requests and open the
+    WebSocket; tokens are created and revoked from the panel only. Live
+    updates come through a single WebSocket at `/api/v1/ws` (see the
+    `x-websocket` section).
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -14,8 +18,12 @@ servers:
   - url: /api/v1
 security:
   - session: []
+  - token: []
 tags:
   - name: auth
+  - name: tokens
+  - name: audit
+  - name: jobs
   - name: node
   - name: profiles
   - name: cameras
@@ -29,16 +37,24 @@ paths:
       tags: [auth]
       operationId: setup
       summary: Create the first administrator (first run only)
+      description: >
+        Needs the node's one-time setup code, printed in its log at start-up
+        and kept in the `setup-code` file of the data directory until the
+        administrator exists. Attempts count against the address's sign-in
+        limit.
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Credentials" }
+            schema: { $ref: "#/components/schemas/SetupRequest" }
       responses:
         "201": { description: Created and logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
   /auth/login:
     post:
       tags: [auth]
@@ -53,6 +69,7 @@ paths:
         "200": { description: Logged in, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
   /auth/logout:
     post:
       tags: [auth]
@@ -64,7 +81,7 @@ paths:
     get:
       tags: [auth]
       operationId: me
-      summary: Current user; 401 carries setup_required on a fresh node
+      summary: Current user, and the token of a request made with one; 401 carries setup_required on a fresh node
       responses:
         "200": { description: Session, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Problem" }
@@ -81,6 +98,23 @@ paths:
       operationId: getNodeMetrics
       responses:
         "200": { description: Metrics, content: { application/json: { schema: { $ref: "#/components/schemas/NodeMetrics" } } } }
+  /node/history:
+    get:
+      tags: [node]
+      operationId: getNodeHistory
+      summary: Node samples of the last ten minutes, every 2 s
+      parameters:
+        - { name: since, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+      responses:
+        "200":
+          description: Samples, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [samples]
+                properties:
+                  samples: { type: array, items: { $ref: "#/components/schemas/NodeSample" } }
   /settings:
     get:
       tags: [node]
@@ -104,6 +138,10 @@ paths:
       tags: [profiles]
       operationId: importPackage
       summary: Import a .mvpkg package or a loose profile.yaml (draft)
+      description: |
+        The import runs as a job. The call waits up to a minute for it and
+        answers with the result; when the job is still queued or running it
+        answers 202 with the job, to follow at /jobs/{id}.
       requestBody:
         required: true
         content:
@@ -116,6 +154,15 @@ paths:
       responses:
         "200": { description: Already installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
         "201": { description: Installed, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "202":
+          description: The import goes on as a job
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job]
+                properties:
+                  job: { $ref: "#/components/schemas/Job" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /profiles:
@@ -155,10 +202,133 @@ paths:
       responses:
         "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileDetail" } } } }
 
+  /tokens:
+    get:
+      tags: [tokens]
+      operationId: listTokens
+      summary: API tokens of the current user (panel session only)
+      responses:
+        "200":
+          description: Tokens, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Token" } }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [tokens]
+      operationId: createToken
+      summary: Create an API token (panel session only); the secret is returned once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CreatedToken" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      tags: [tokens]
+      operationId: revokeToken
+      summary: Revoke an API token (panel session only)
+      responses:
+        "204": { description: Revoked }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: Background jobs, newest first (D72, D74)
+      parameters:
+        - { name: status, in: query, description: A status, active (queued, running, waiting or interrupted) or finished, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [rendition, import, renditions.prepare] } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: Jobs, content: { application/json: { schema: { $ref: "#/components/schemas/JobPage" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [jobs]
+      operationId: createJob
+      summary: Start a job; for now renditions.prepare, which encodes what the cameras need
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JobInput" }
+      responses:
+        "202": { description: Queued, or the open job doing the same work, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: A job with its history
+      responses:
+        "200": { description: Job, content: { application/json: { schema: { $ref: "#/components/schemas/JobDetail" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /jobs/{id}/actions/{action}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: action, in: path, required: true, schema: { type: string, enum: [cancel, resume, answer] } }
+    post:
+      tags: [jobs]
+      operationId: jobAction
+      summary: Cancel a job, resume an interrupted one, or answer its question ({"answer":"<option id>"})
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answer: { type: string }
+      responses:
+        "200": { description: Job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /audit:
+    get:
+      tags: [audit]
+      operationId: listAudit
+      summary: Who changed what, when and from where (kept 90 days)
+      parameters:
+        - { name: origin, in: query, schema: { type: string, enum: [panel, api, camera, system] } }
+        - { name: entity_type, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: token_id, in: query, schema: { type: string } }
+        - { name: action, in: query, description: Exact action or prefix, such as camera, schema: { type: string } }
+        - { name: since, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+        - { name: until, in: query, description: Unix milliseconds or RFC 3339, schema: { type: string } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: Entries, newest first, content: { application/json: { schema: { $ref: "#/components/schemas/AuditPage" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /cameras:
     get:
       tags: [cameras]
       operationId: listCameras
+      parameters:
+        - { name: q, in: query, description: Text in the name, address, MAC, serial or tags, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: profile, in: query, description: Profile ID or ID@version, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
       responses:
         "200":
           description: Cameras
@@ -180,6 +350,19 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/actions/bulk:
+    post:
+      tags: [cameras]
+      operationId: bulkCameras
+      summary: Start, stop, restart, clone or delete several cameras; each gets its own result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BulkAction" }
+      responses:
+        "200": { description: Results, content: { application/json: { schema: { $ref: "#/components/schemas/BulkResult" } } } }
         "422": { $ref: "#/components/responses/Problem" }
   /cameras/{id}:
     parameters:
@@ -215,6 +398,127 @@ paths:
       responses:
         "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/factory-reset:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [cameras]
+      operationId: resetCamera
+      description: >
+        Restores the camera to its profile (RN-10): parameters, accounts and
+        protocols; with scope full, also the profile's factory address. The
+        picture is kept. A running camera reboots.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              properties:
+                scope: { type: string, enum: [settings, full] }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/clone:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [cameras]
+      operationId: cloneCamera
+      description: >
+        Creates a camera with the same profile, parameters, accounts,
+        protocols, picture and targets, with its own ID, serial, MAC and
+        address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloneCamera" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/users:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      tags: [cameras]
+      operationId: setCameraUsers
+      description: >
+        Replaces the camera's accounts (RN-11: at least one admin). An empty
+        password keeps the account's current one. Applied at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [users]
+              properties:
+                users: { type: array, items: { $ref: "#/components/schemas/CameraUserInput" } }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/protocols:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      tags: [cameras]
+      operationId: setCameraProtocols
+      description: >
+        Enables, disables or moves protocols of the camera's profile (RN-04).
+        A running camera applies them when it restarts (RN-09).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocols]
+              properties:
+                protocols:
+                  type: array
+                  items:
+                    type: object
+                    required: [instance]
+                    properties:
+                      instance: { type: string }
+                      enabled: { type: boolean }
+                      port: { type: integer, minimum: 0, maximum: 65535 }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/streams/{stream}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: stream, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [cameras]
+      operationId: updateCameraStream
+      description: >
+        Changes the picture of a stream or its encoding: codec, resolution,
+        frame rate, bitrate and GOP, each through the profile parameter bound
+        to it. The stream is encoded again and a running camera switches to
+        it without restarting; RTSP clients of that stream reconnect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                asset_id: { type: string }
+                codec: { type: string, enum: [h264, h265, mjpeg] }
+                resolution: { type: string }
+                fps: { type: integer }
+                bitrate: { type: integer, description: kbit/s }
+                gop: { type: integer, description: Frames between keyframes }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /cameras/{id}/status:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -276,6 +580,7 @@ paths:
   /cameras/{id}/snapshot:
     parameters:
       - $ref: "#/components/parameters/ID"
+      - { name: stream, in: query, description: "main (the default), sub or third", schema: { type: string } }
     get:
       tags: [cameras]
       operationId: getSnapshot
@@ -411,6 +716,7 @@ paths:
       parameters:
         - { name: camera_id, in: query, schema: { type: string } }
         - { name: type, in: query, schema: { type: string } }
+        - { name: delivery, in: query, description: Only events a target gave up on, schema: { type: string, enum: [failed] } }
         - { name: cursor, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
       responses:
@@ -434,7 +740,8 @@ x-websocket:
     is too old the server answers type "resync" and the client reloads that
     state through REST. Topics: node (metrics), cameras (created, updated,
     deleted, status), camera:<id> (status, config, client, gap, log),
-    events (event), profiles (installed).
+    events (event), profiles (installed), audit (entry), jobs (job: every
+    change of a job), job:<id> (event: its history as it grows).
 
 components:
   securitySchemes:
@@ -442,6 +749,10 @@ components:
       type: apiKey
       in: cookie
       name: mv_session
+    token:
+      type: http
+      scheme: bearer
+      description: API token created in the panel (Settings, API tokens)
   parameters:
     ID:
       name: id
@@ -481,6 +792,13 @@ components:
       properties:
         username: { type: string }
         password: { type: string }
+    SetupRequest:
+      type: object
+      required: [username, password, setup_code]
+      properties:
+        username: { type: string }
+        password: { type: string, minLength: 10 }
+        setup_code: { type: string, description: "One-time code from the node's log or its setup-code file; case and spaces are ignored" }
     Me:
       type: object
       required: [user, expires_at]
@@ -492,7 +810,14 @@ components:
             id: { type: string }
             username: { type: string }
             role: { type: string }
-        expires_at: { type: string, format: date-time }
+        expires_at: { type: [string, "null"], format: date-time, description: Null for a token that does not expire }
+        token:
+          type: object
+          required: [id, name, scopes]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            scopes: { type: array, items: { type: string, enum: [read, write] } }
     Interface:
       type: object
       required: [name, mac, up, loopback, addrs, default]
@@ -506,14 +831,15 @@ components:
         gateway: { type: string }
     CameraCounts:
       type: object
-      required: [total, running, error]
+      required: [total, running, error, by_state]
       properties:
         total: { type: integer }
-        running: { type: integer }
+        running: { type: integer, description: Running and degraded }
         error: { type: integer }
+        by_state: { type: object, additionalProperties: { type: integer } }
     Node:
       type: object
-      required: [version, runtime, hostname, cpu_count, mem_total, default_interface, default_gateway, parent_interface, interfaces, cameras, started_at]
+      required: [version, runtime, hostname, cpu_count, mem_total, default_interface, default_gateway, parent_interface, interfaces, cameras, panel, started_at]
       properties:
         version: { type: string }
         runtime: { type: string, enum: [netns, local] }
@@ -525,16 +851,26 @@ components:
         parent_interface: { type: string }
         interfaces: { type: [array, "null"], items: { $ref: "#/components/schemas/Interface" } }
         cameras: { $ref: "#/components/schemas/CameraCounts" }
+        panel:
+          type: object
+          description: Where the panel and the API listen (D63)
+          required: [listen, all_interfaces, urls]
+          properties:
+            listen: { type: string }
+            all_interfaces: { type: boolean }
+            urls: { type: array, items: { type: string } }
         started_at: { type: string, format: date-time }
     Settings:
       type: object
-      required: [max_cameras, max_ram_percent, max_cpu_percent, parent_interface, events_retention_days]
+      required: [max_cameras, max_ram_percent, max_cpu_percent, parent_interface, events_retention_days, max_jobs, job_step_timeout_seconds]
       properties:
         max_cameras: { type: integer }
         max_ram_percent: { type: number }
         max_cpu_percent: { type: number }
         parent_interface: { type: string }
         events_retention_days: { type: integer }
+        max_jobs: { type: integer, minimum: 1, maximum: 16, description: Jobs that run at once (D72) }
+        job_step_timeout_seconds: { type: integer, minimum: 10, maximum: 3600, description: Bound of each step of a job (D72) }
     SettingsPatch:
       type: object
       properties:
@@ -543,15 +879,20 @@ components:
         max_cpu_percent: { type: number }
         parent_interface: { type: string }
         events_retention_days: { type: integer }
+        max_jobs: { type: integer }
+        job_step_timeout_seconds: { type: integer }
     NodeMetrics:
       type: object
-      required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, cameras, camera_counts, db, limits]
+      required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
       properties:
         at: { type: string, format: date-time }
         cpu_percent: { type: number }
         cpu_sustained_percent: { type: number }
         mem_total: { type: integer }
         mem_used: { type: integer }
+        net_interface: { type: string, description: Interface the cameras hang from }
+        net_rx_bps: { type: number, description: Bytes per second received }
+        net_tx_bps: { type: number, description: Bytes per second sent }
         cameras: { type: object, additionalProperties: { $ref: "#/components/schemas/CameraMetrics" } }
         camera_counts: { $ref: "#/components/schemas/CameraCounts" }
         db:
@@ -561,6 +902,103 @@ components:
             write_statements: { type: integer }
             write_transactions: { type: integer }
         limits: { $ref: "#/components/schemas/Settings" }
+    NodeSample:
+      type: object
+      required: [at, cpu_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps]
+      properties:
+        at: { type: string, format: date-time }
+        cpu_percent: { type: number }
+        mem_total: { type: integer }
+        mem_used: { type: integer }
+        net_interface: { type: string }
+        net_rx_bps: { type: number }
+        net_tx_bps: { type: number }
+    Token:
+      type: object
+      required: [id, name, prefix, scopes, created_at, expires_at, last_used_at, last_used_ip, expired]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        prefix: { type: string, description: First characters of the secret, to recognize it }
+        scopes: { type: array, items: { type: string, enum: [read, write] } }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        last_used_at: { type: [string, "null"], format: date-time }
+        last_used_ip: { type: string }
+        expired: { type: boolean }
+    TokenInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 64 }
+        scopes: { type: array, items: { type: string, enum: [read, write] }, description: write implies read; none means read }
+        expires_in_days: { type: [integer, "null"], minimum: 1, maximum: 3650, description: Null for a token that lasts until revoked }
+    CreatedToken:
+      type: object
+      required: [token, secret]
+      properties:
+        token: { $ref: "#/components/schemas/Token" }
+        secret: { type: string, description: Shown only now; the node keeps its hash }
+    AuditEntry:
+      type: object
+      required: [id, at, actor, origin, origin_ip, token, action, entity, diff]
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        actor:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string, enum: [user, camera, system] }
+            id: { type: string }
+            name: { type: string }
+        origin: { type: string, enum: [panel, api, camera, system] }
+        origin_ip: { type: string }
+        token:
+          type: [object, "null"]
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        action: { type: string }
+        entity:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string }
+            id: { type: string }
+            name: { type: string }
+        diff: { type: object, additionalProperties: true }
+    AuditPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } }
+        next_cursor: { type: string }
+    BulkAction:
+      type: object
+      required: [action, ids]
+      properties:
+        action: { type: string, enum: [start, stop, restart, clone, delete] }
+        ids: { type: array, items: { type: string }, maxItems: 200 }
+        start: { type: boolean, description: Start each copy (clone only) }
+    BulkResult:
+      type: object
+      required: [action, succeeded, failed, results]
+      properties:
+        action: { type: string }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            required: [id, ok]
+            properties:
+              id: { type: string }
+              ok: { type: boolean }
+              camera: { $ref: "#/components/schemas/Camera" }
+              error: { $ref: "#/components/schemas/Problem" }
     Profile:
       type: object
       required: [id, profile_id, version, name, vendor, model, firmware, level, signature_status, archived, camera_count, created_at]
@@ -587,6 +1025,8 @@ components:
         resolutions: { type: array, items: { type: string } }
         fps_min: { type: integer }
         fps_max: { type: integer }
+        bitrate_min: { type: integer }
+        bitrate_max: { type: integer }
         default:
           type: object
           required: [codec, resolution, fps, bitrate, gop]
@@ -654,6 +1094,75 @@ components:
         profile: { $ref: "#/components/schemas/Profile" }
         report: { $ref: "#/components/schemas/ImportReport" }
         created: { type: boolean }
+        job_id: { type: string, description: The import job, with the steps in its history }
+    Job:
+      type: object
+      required: [id, type, title, status, progress, step, question, result, error, created_by, created_at, started_at, finished_at]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [rendition, import, renditions.prepare] }
+        title: { type: string }
+        status: { type: string, enum: [queued, running, waiting, completed, failed, canceled, interrupted] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        step: { type: string }
+        question:
+          description: The decision the job waits for; unanswered, it takes the default when it expires
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/JobQuestion"
+        result: { type: object, additionalProperties: true }
+        error: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+    JobQuestion:
+      type: object
+      required: [id, text, options, default, expires_at]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: { type: string }
+              label: { type: string }
+        default: { type: string }
+        expires_at: { type: string, format: date-time }
+    JobEvent:
+      type: object
+      required: [job_id, seq, at, kind, data]
+      properties:
+        job_id: { type: string }
+        seq: { type: integer }
+        at: { type: string, format: date-time }
+        kind: { type: string, enum: [status, step, log, question, answer] }
+        data: { type: object, additionalProperties: true }
+    JobDetail:
+      allOf:
+        - $ref: "#/components/schemas/Job"
+        - type: object
+          required: [events]
+          properties:
+            events: { type: array, items: { $ref: "#/components/schemas/JobEvent" } }
+    JobPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Job" } }
+        next_cursor: { type: string }
+    JobInput:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [renditions.prepare] }
+        params:
+          type: object
+          properties:
+            asset_id: { type: string, description: Only the renditions of this image }
     CameraUser:
       type: object
       required: [username, role]
@@ -662,7 +1171,7 @@ components:
         role: { type: string }
     CameraStatus:
       type: object
-      required: [state, reason, started_at, last_heartbeat, retries]
+      required: [state, reason, started_at, last_heartbeat, retries, pending_restart]
       properties:
         state: { type: string, enum: [stopped, provisioning, starting, running, degraded, restarting, stopping, error] }
         reason: { type: string }
@@ -671,6 +1180,20 @@ components:
         netns: { type: string }
         pid: { type: integer }
         retries: { type: integer }
+        pending_restart:
+          description: Saved changes a running camera applies when it restarts (RN-09).
+          type: array
+          items: { type: string, enum: [network, protocols] }
+    Protocol:
+      type: object
+      required: [instance, engine, role, enabled, port, default_port]
+      properties:
+        instance: { type: string }
+        engine: { type: string }
+        role: { type: string, enum: [server, client] }
+        enabled: { type: boolean }
+        port: { type: integer }
+        default_port: { type: integer }
     Endpoint:
       type: object
       required: [instance, engine, protocol, port, url]
@@ -684,8 +1207,9 @@ components:
       type: object
       required: [name, codec, resolution, fps, gop, bitrate, asset_id, rendition_status]
       properties:
-        name: { type: string }
-        codec: { type: string }
+        name: { type: string, enum: [main, sub, third] }
+        url: { type: string, description: RTSP URL of the stream, when an RTSP protocol serves it }
+        codec: { type: string, enum: [h264, h265, mjpeg] }
         resolution: { type: string }
         fps: { type: integer }
         gop: { type: integer }
@@ -720,7 +1244,7 @@ components:
         dns: { type: array, items: { type: string } }
     Camera:
       type: object
-      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, streams, users, targets, metrics, created_at, updated_at]
+      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, metrics, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -741,6 +1265,7 @@ components:
         network: { $ref: "#/components/schemas/Network" }
         status: { $ref: "#/components/schemas/CameraStatus" }
         endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
+        protocols: { type: array, items: { $ref: "#/components/schemas/Protocol" } }
         streams: { type: array, items: { $ref: "#/components/schemas/Stream" } }
         users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
         targets:
@@ -762,28 +1287,14 @@ components:
         name: { type: string }
         profile_id: { type: string }
         profile_version: { type: string }
-        network:
-          type: object
-          properties:
-            parent: { type: string }
-            mac: { type: string }
-            vendor_oui: { type: boolean }
-            ip: { type: string }
-            netmask: { type: string }
-            gateway: { type: string }
-        users:
-          type: array
-          items:
-            type: object
-            required: [username, password]
-            properties:
-              username: { type: string }
-              password: { type: string, writeOnly: true }
-              role: { type: string, enum: [admin, operator, viewer] }
+        network: { $ref: "#/components/schemas/NetworkInput" }
+        users: { type: array, items: { $ref: "#/components/schemas/CameraUserInput" } }
         stream:
           type: object
+          description: The main stream; sub and third start from the profile defaults with the same picture.
           properties:
             asset_id: { type: string }
+            codec: { type: string, enum: [h264, h265, mjpeg] }
             resolution: { type: string }
             fps: { type: integer }
         target_ids: { type: array, items: { type: string } }
@@ -797,6 +1308,38 @@ components:
         autostart: { type: boolean }
         tags: { type: array, items: { type: string } }
         target_ids: { type: array, items: { type: string } }
+        network:
+          description: The whole network identity; a running camera applies it when it restarts (RN-09).
+          allOf: [{ $ref: "#/components/schemas/NetworkInput" }]
+    NetworkInput:
+      type: object
+      description: >
+        Empty fields take the node's defaults. When editing, an empty MAC
+        keeps the current one and default_mac goes back to the one derived
+        from the camera ID. No DNS servers means the node's.
+      properties:
+        parent: { type: string }
+        mac: { type: string }
+        default_mac: { type: boolean }
+        vendor_oui: { type: boolean }
+        ip: { type: string }
+        netmask: { type: string }
+        gateway: { type: string }
+        dns: { type: array, items: { type: string }, maxItems: 3 }
+    CameraUserInput:
+      type: object
+      required: [username]
+      properties:
+        username: { type: string }
+        password: { type: string, writeOnly: true, description: Required for a new account; empty keeps the current one. }
+        role: { type: string, enum: [admin, operator, viewer] }
+    CloneCamera:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        network: { $ref: "#/components/schemas/NetworkInput" }
+        start: { type: boolean }
     Param:
       type: object
       required: [key, type, value, default, effective, origin, updated_at]
@@ -860,12 +1403,18 @@ components:
         enabled: { type: boolean }
     TargetTest:
       type: object
-      required: [ok, latency_ms]
+      description: >
+        The request leaves from a running camera that uses the target, across
+        the same network as its deliveries; with none running it leaves from
+        the node, which refuses its own and link-local addresses.
+      required: [ok, latency_ms, from]
       properties:
         ok: { type: boolean }
         http_status: { type: integer }
         latency_ms: { type: integer }
         error: { type: string }
+        from: { type: string, enum: [camera, node] }
+        camera: { type: string, description: Name of the camera the request left from }
     Trigger:
       type: object
       required: [type]

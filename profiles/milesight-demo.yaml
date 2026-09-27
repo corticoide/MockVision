@@ -1,8 +1,9 @@
 # MockVision demo profile: a minimal Milesight-style camera.
 #
-# Used by the technical demo to exercise the whole architecture: an RTSP
-# stream, three HTTP features (snapshot, device information, reading and
-# writing a parameter) and a line-crossing event pushed over HTTP.
+# Used by the technical demo to exercise the whole architecture: three RTSP
+# streams (main and sub in H.264 or H.265, third in MJPEG), three HTTP
+# features (snapshot, device information, reading and writing a parameter)
+# and a line-crossing event pushed over HTTP.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -14,7 +15,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.1.0
+  version: 0.2.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -42,27 +43,87 @@ state:
     min: 0
     max: 100
     description: Declarative; stored and returned.
+  # Effective parameters: changing one regenerates its stream.
+  Encode.Main.Codec:
+    type: enum
+    values: ["h264", "h265"]
+    default: "h264"
+    bind: media.main.codec
   Encode.Main.Resolution:
     type: enum
     values: ["1920x1080", "1280x720", "640x360"]
     default: "1280x720"
     bind: media.main.resolution
-    description: Effective; changing it regenerates the main stream.
   Encode.Main.FrameRate:
     type: int
     default: 15
     min: 1
     max: 30
     bind: media.main.fps
+  Encode.Main.Bitrate:
+    type: int
+    default: 2048
+    min: 256
+    max: 8192
+    bind: media.main.bitrate
+    description: kbit/s.
+  Encode.Main.IFrameInterval:
+    type: int
+    default: 30
+    min: 1
+    max: 300
+    bind: media.main.gop
+    description: Frames between keyframes.
+  Encode.Sub.Codec:
+    type: enum
+    values: ["h264", "h265"]
+    default: "h264"
+    bind: media.sub.codec
+  Encode.Sub.Resolution:
+    type: enum
+    values: ["640x360", "320x180"]
+    default: "640x360"
+    bind: media.sub.resolution
+  Encode.Sub.FrameRate:
+    type: int
+    default: 10
+    min: 1
+    max: 30
+    bind: media.sub.fps
+  Encode.Third.Resolution:
+    type: enum
+    values: ["640x360", "352x288"]
+    default: "640x360"
+    bind: media.third.resolution
+  Encode.Third.FrameRate:
+    type: int
+    default: 5
+    min: 1
+    max: 15
+    bind: media.third.fps
 
 media:
   streams:
+    # The main stream for recording, a light sub stream for grids and
+    # phones, and an MJPEG third stream for simple clients.
     main:
-      codecs: [h264]
+      codecs: [h264, h265]
       resolutions: ["1920x1080", "1280x720", "640x360"]
       fps: { min: 1, max: 30 }
       bitrate: { min: 256, max: 8192 }
       default: { codec: h264, resolution: 1280x720, fps: 15, bitrate: 2048, gop: 30 }
+    sub:
+      codecs: [h264, h265]
+      resolutions: ["640x360", "320x180"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 64, max: 2048 }
+      default: { codec: h264, resolution: 640x360, fps: 10, bitrate: 512, gop: 20 }
+    third:
+      codecs: [mjpeg]
+      resolutions: ["640x360", "352x288"]
+      fps: { min: 1, max: 15 }
+      bitrate: { min: 64, max: 4096 }
+      default: { codec: mjpeg, resolution: 640x360, fps: 5, bitrate: 1024 }
 
 engines:
   rtsp:
@@ -71,6 +132,8 @@ engines:
     auth: { scheme: digest }
     paths:
       main: /main
+      sub: /sub
+      third: /third
 
   http:
     engine: http-api@^1
@@ -124,6 +187,9 @@ engines:
           method: GET
           path: /cgi-bin/operator/param.cgi
           query: { action: set }
+        # Changing parameters needs an admin or operator account; viewers
+        # may only read, as on the real device.
+        roles: [admin, operator]
         action:
           handler: state.set
           from: query

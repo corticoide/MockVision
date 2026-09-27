@@ -57,11 +57,13 @@ func (l *LocalRuntime) Launch(_ context.Context, spec LaunchSpec) (*Launched, er
 	}
 	l.mu.Unlock()
 
-	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	// Both ends are close-on-exec from the start: a process forked at the
+	// same moment, such as FFmpeg or another camera, must not inherit them
+	// (audit B16). ExtraFiles hands the camera its end anyway.
+	fds, err := socketpairCloexec()
 	if err != nil {
 		return nil, err
 	}
-	syscall.CloseOnExec(fds[0])
 	svc := os.NewFile(uintptr(fds[0]), "camera-ipc")
 	cam := os.NewFile(uintptr(fds[1]), "ipc")
 	cmd := exec.Command(l.exe, "camera", "--id", id, "--ipc-fd", "3", "--local")

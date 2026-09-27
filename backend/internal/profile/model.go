@@ -259,5 +259,12 @@ func (m *Model) StreamFor(stream string, values map[string]any) (StreamSettings,
 	if s.Default.Codec == "" {
 		out.Codec = "h264"
 	}
+	if !contains(s.Codecs, out.Codec) {
+		return out, fmt.Errorf("stream %s does not support codec %s", stream, out.Codec)
+	}
+	// Every MJPEG frame is a whole picture.
+	if out.Codec == "mjpeg" {
+		out.GOP = 1
+	}
 	return out, nil
 }

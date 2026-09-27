@@ -5,18 +5,21 @@
 #
 #   docker build -f deploy/Dockerfile -t mockvision .
 
-ARG GO_VERSION=1.27
-ARG NODE_VERSION=22
+# Base images are pinned by the digest of their multi-platform index, so a
+# rebuild uses the same bits; Dependabot proposes new digests.
+ARG NODE_IMAGE=node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+ARG GO_IMAGE=golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
+ARG RUNTIME_IMAGE=ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 # The panel is plain static files: it is built once for every platform.
-FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-slim AS panel
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS panel
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS binary
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS binary
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.1.0
@@ -31,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     -ldflags "-s -w -X github.com/corticoide/mockvision/backend/internal/buildinfo.Version=$VERSION" \
     -o /out/mockvision ./backend/cmd/mockvision
 
-FROM ubuntu:24.04
+FROM ${RUNTIME_IMAGE}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates iproute2 \
     && rm -rf /var/lib/apt/lists/*
