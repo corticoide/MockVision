@@ -30,6 +30,8 @@ type NetworkView struct {
 	Prefix  int      `json:"prefix"`
 	Gateway string   `json:"gateway"`
 	DNS     []string `json:"dns"`
+	// Force starts the camera even if its IP or MAC answers (D14).
+	Force bool `json:"force"`
 }
 
 // StatusView is the runtime state of a camera.
@@ -41,6 +43,15 @@ type StatusView struct {
 	Netns         string     `json:"netns,omitempty"`
 	PID           int        `json:"pid,omitempty"`
 	Retries       int        `json:"retries"`
+	// IP is the address the camera holds (or last held), and IPSource
+	// where it came from: static, dhcp or factory (D24).
+	IP       string `json:"ip,omitempty"`
+	IPSource string `json:"ip_source,omitempty"`
+	// MAC is the one the camera answers with while it runs: its own, or
+	// the node's with ipvlan.
+	MAC string `json:"mac,omitempty"`
+	// Firewall reports whether its outbound firewall is in place.
+	Firewall bool `json:"firewall"`
 	// PendingRestart lists saved changes a running camera applies only
 	// when it restarts (RN-09): network, protocols.
 	PendingRestart []string `json:"pending_restart"`

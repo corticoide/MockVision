@@ -1,6 +1,8 @@
 package netctl
 
 import (
+	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -8,58 +10,94 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
+
+	"github.com/corticoide/mockvision/backend/internal/domain"
 )
 
-// setupInterface gives a namespace its macvlan interface on the parent NIC:
-// own MAC, ARP probe (RN-06), static address, default route and a
-// gratuitous ARP. A second announcement follows a second later unless
-// cancel is closed first: a camera deleted meanwhile must not claim its
-// address again.
-func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel <-chan struct{}) error {
+// linkResult is what setupInterface made.
+type linkResult struct {
+	// MAC is the MAC the camera uses on the LAN.
+	MAC string
+	// Warnings are conflicts a forced camera started with anyway (D14).
+	Warnings []string
+}
+
+// setupInterface gives a namespace its interface on the parent NIC:
+// macvlan with the camera's own MAC, probed first (RN-06), or ipvlan with
+// the parent's. IPv6 is off in the namespace: cameras are IPv4 only in v1,
+// and nothing leaves with the camera's MAC before the probes. A static
+// camera then gets its address (see setAddress); a DHCP one gets it later.
+func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel <-chan struct{}) (linkResult, error) {
+	var res linkResult
 	hh, err := netlink.NewHandleAt(host)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer hh.Close()
 	nh, err := netlink.NewHandleAt(ns.fd)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer nh.Close()
 
 	parent, err := hh.LinkByName(spec.Parent)
 	if err != nil {
-		return errorf(CodeNoInterface, "parent interface %s not found", spec.Parent)
+		return res, errorf(CodeNoInterface, "parent interface %s not found", spec.Parent)
 	}
 	if parent.Attrs().OperState == netlink.OperDown {
-		return errorf(CodeNoInterface, "parent interface %s is down", spec.Parent)
+		return res, errorf(CodeNoInterface, "parent interface %s is down", spec.Parent)
 	}
+	disableIPv6(ns)
+
 	mac, err := net.ParseMAC(spec.MAC)
 	if err != nil {
-		return errorf(CodeInvalid, "invalid MAC %s", spec.MAC)
+		return res, errorf(CodeInvalid, "invalid MAC %s", spec.MAC)
 	}
+	probing := spec.Mode == string(domain.NetMacvlan) && !spec.SkipProbe
 	tmp := "mv" + strings.ToLower(spec.ID[len(spec.ID)-10:])
-	mv := &netlink.Macvlan{
-		LinkAttrs: netlink.LinkAttrs{Name: tmp, ParentIndex: parent.Attrs().Index, HardwareAddr: mac, MTU: parent.Attrs().MTU},
-		Mode:      netlink.MACVLAN_MODE_BRIDGE,
+	var link netlink.Link
+	switch spec.Mode {
+	case string(domain.NetIPvlan):
+		link = &netlink.IPVlan{
+			LinkAttrs: netlink.LinkAttrs{Name: tmp, ParentIndex: parent.Attrs().Index, MTU: parent.Attrs().MTU},
+			Mode:      netlink.IPVLAN_MODE_L2,
+		}
+	default:
+		// While probing for its MAC the interface carries a temporary one,
+		// so the probe never claims the MAC of a device already using it.
+		first := mac
+		if probing {
+			first = randomMAC()
+		}
+		link = &netlink.Macvlan{
+			LinkAttrs: netlink.LinkAttrs{Name: tmp, ParentIndex: parent.Attrs().Index, HardwareAddr: first, MTU: parent.Attrs().MTU},
+			Mode:      netlink.MACVLAN_MODE_BRIDGE,
+		}
 	}
-	if err := hh.LinkAdd(mv); err != nil {
-		return fmt.Errorf("create macvlan on %s: %w", spec.Parent, err)
+	if err := hh.LinkAdd(link); err != nil {
+		if spec.Mode == string(domain.NetIPvlan) && (errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP)) {
+			return res, errorf(CodeUnsupported, "this kernel has no ipvlan support; use macvlan")
+		}
+		if errors.Is(err, unix.EADDRINUSE) {
+			return res, errorf(CodeMACInUse, "%s", localMACConflict(mac, spec.Parent))
+		}
+		return res, fmt.Errorf("create %s on %s: %w", spec.Mode, spec.Parent, err)
 	}
-	link, err := hh.LinkByName(tmp)
+	added, err := hh.LinkByName(tmp)
 	if err == nil {
-		err = hh.LinkSetNsFd(link, int(ns.fd))
+		err = hh.LinkSetNsFd(added, int(ns.fd))
 	}
 	if err != nil {
-		if link != nil {
-			_ = hh.LinkDel(link)
+		if added != nil {
+			_ = hh.LinkDel(added)
 		}
-		return fmt.Errorf("move macvlan into %s: %w", ns.name, err)
+		return res, fmt.Errorf("move %s into %s: %w", spec.Mode, ns.name, err)
 	}
 
 	if lo, err := nh.LinkByName("lo"); err == nil {
@@ -67,41 +105,142 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 	}
 	eth, err := nh.LinkByName(tmp)
 	if err != nil {
-		return err
+		return res, err
 	}
 	if err := nh.LinkSetName(eth, "eth0"); err != nil {
-		return err
+		return res, err
 	}
+	// No IPv6 link-local either where disableIPv6 could not write the
+	// namespace's settings (containers mount /proc/sys read-only).
+	_ = nh.LinkSetIP6AddrGenMode(eth, ip6AddrGenModeNone)
 	if err := nh.LinkSetUp(eth); err != nil {
-		return err
+		return res, err
 	}
-	ifindex := eth.Attrs().Index
+	res.MAC = mac.String()
+	if spec.Mode == string(domain.NetIPvlan) {
+		res.MAC = parent.Attrs().HardwareAddr.String()
+	}
 
-	ip, err := netip.ParseAddr(spec.IP)
-	if err != nil {
-		return err
-	}
-	if !spec.SkipProbe {
-		if err := probeIP(ns.fd, ifindex, mac, ip); err != nil {
-			var ce *ConflictError
-			if errors.As(err, &ce) {
-				return errorf(CodeIPInUse, "%s", ce.Error())
+	if probing {
+		err := macProbe(host, ns.fd, eth.Attrs().Index, eth.Attrs().HardwareAddr, mac)
+		var ce *MACConflictError
+		switch {
+		case errors.As(err, &ce) && spec.Force:
+			res.Warnings = append(res.Warnings, ce.Error())
+		case errors.As(err, &ce):
+			return res, errorf(CodeMACInUse, "%s", ce.Error())
+		case err != nil:
+			return res, fmt.Errorf("MAC probe: %w", err)
+		}
+		if err := nh.LinkSetDown(eth); err != nil {
+			return res, err
+		}
+		if err := nh.LinkSetHardwareAddr(eth, mac); err != nil {
+			// The kernel refuses a MAC another interface on the same
+			// parent has: not even a forced camera can take it.
+			if errors.Is(err, unix.EADDRINUSE) {
+				return res, errorf(CodeMACInUse, "%s", localMACConflict(mac, spec.Parent))
 			}
-			return fmt.Errorf("ARP probe: %w", err)
+			return res, fmt.Errorf("set MAC %s: %w", mac, err)
+		}
+		if err := nh.LinkSetUp(eth); err != nil {
+			return res, err
 		}
 	}
-	addr := &netlink.Addr{IPNet: &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(spec.Prefix, 32)}}
-	if err := nh.AddrAdd(eth, addr); err != nil {
-		return fmt.Errorf("assign %s/%d: %w", spec.IP, spec.Prefix, err)
+	if spec.DHCP() {
+		return res, nil
 	}
-	if spec.Gateway != "" {
-		gw := net.ParseIP(spec.Gateway)
-		if err := nh.RouteAdd(&netlink.Route{LinkIndex: ifindex, Gw: gw}); err != nil {
-			return fmt.Errorf("default route via %s: %w", spec.Gateway, err)
+	warn, err := setAddress(host, ns, spec, &AddressSpec{ID: spec.ID, IP: spec.IP, Prefix: spec.Prefix, Gateway: spec.Gateway, Force: spec.Force}, cancel)
+	res.Warnings = append(res.Warnings, warn...)
+	return res, err
+}
+
+// setAddress gives the camera's interface its IPv4 address, replacing any
+// other: ARP probe (RN-06), address, default route and a gratuitous ARP. A
+// second announcement follows a second later unless cancel is closed
+// first: a camera deleted meanwhile must not claim its address again.
+//
+// A macvlan camera probes from its own interface. An ipvlan one probes
+// from the parent, which shares its MAC: ipvlan hands the parent the
+// answers to a probe, which carry no address of the camera.
+func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *AddressSpec, cancel <-chan struct{}) ([]string, error) {
+	var warnings []string
+	nh, err := netlink.NewHandleAt(ns.fd)
+	if err != nil {
+		return nil, err
+	}
+	defer nh.Close()
+	eth, err := nh.LinkByName("eth0")
+	if err != nil {
+		return nil, err
+	}
+	ifindex := eth.Attrs().Index
+	mac := eth.Attrs().HardwareAddr
+	ip, err := netip.ParseAddr(a.IP)
+	if err != nil {
+		return nil, err
+	}
+	if !spec.SkipProbe {
+		probeNS, probeIf, probeMAC := ns.fd, ifindex, mac
+		if spec.Mode == string(domain.NetIPvlan) {
+			hh, err := netlink.NewHandleAt(host)
+			if err != nil {
+				return nil, err
+			}
+			parent, err := hh.LinkByName(spec.Parent)
+			hh.Close()
+			if err != nil {
+				return nil, errorf(CodeNoInterface, "parent interface %s not found", spec.Parent)
+			}
+			probeNS, probeIf, probeMAC = host, parent.Attrs().Index, parent.Attrs().HardwareAddr
+		}
+		err := probeIP(probeNS, probeIf, probeMAC, ip)
+		var ce *ConflictError
+		var me *MACConflictError
+		switch {
+		case (errors.As(err, &ce) || errors.As(err, &me)) && a.Force:
+			warnings = append(warnings, err.Error())
+		case errors.As(err, &ce):
+			return nil, errorf(CodeIPInUse, "%s", ce.Error())
+		case errors.As(err, &me):
+			return nil, errorf(CodeMACInUse, "%s", me.Error())
+		case err != nil:
+			return nil, fmt.Errorf("ARP probe: %w", err)
+		}
+	}
+	want := &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(a.Prefix, 32)}
+	addrs, err := nh.AddrList(eth, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, err
+	}
+	have := false
+	for _, old := range addrs {
+		if old.IPNet.String() == want.String() {
+			have = true
+			continue
+		}
+		_ = nh.AddrDel(eth, &old)
+	}
+	if !have {
+		if err := nh.AddrAdd(eth, &netlink.Addr{IPNet: want}); err != nil {
+			return nil, fmt.Errorf("assign %s/%d: %w", a.IP, a.Prefix, err)
+		}
+	}
+	def := &netlink.Route{LinkIndex: ifindex, Dst: nil}
+	if a.Gateway != "" {
+		def.Gw = net.ParseIP(a.Gateway)
+		if err := nh.RouteReplace(def); err != nil {
+			return nil, fmt.Errorf("default route via %s: %w", a.Gateway, err)
+		}
+	} else if routes, err := nh.RouteList(eth, netlink.FAMILY_V4); err == nil {
+		for _, r := range routes {
+			if r.Dst == nil && r.Gw != nil {
+				_ = nh.RouteDel(&r)
+			}
 		}
 	}
 	if err := announce(ns.fd, ifindex, mac, ip); err != nil {
-		return fmt.Errorf("gratuitous ARP: %w", err)
+		return warnings, fmt.Errorf("gratuitous ARP: %w", err)
 	}
 	// A second announcement a second later, like most devices do. The
 	// namespace descriptor is duplicated so a quick delete cannot recycle it.
@@ -115,7 +254,67 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 			}
 		}()
 	}
-	return nil
+	return warnings, nil
+}
+
+// localMACConflict describes a MAC another interface on the parent has.
+func localMACConflict(mac net.HardwareAddr, parent string) string {
+	return (&MACConflictError{MAC: mac.String(), How: "another interface on " + parent + " of this node has it"}).Error()
+}
+
+// disableIPv6 turns IPv6 off in a namespace before its interface moves in:
+// the interface takes the namespace's defaults.
+func disableIPv6(ns *namespace) {
+	_ = inNamespace(ns.fd, func() error {
+		for _, conf := range []string{"all", "default"} {
+			_ = os.WriteFile("/proc/sys/net/ipv6/conf/"+conf+"/disable_ipv6", []byte("1"), 0o644)
+		}
+		return nil
+	})
+}
+
+// ip6AddrGenModeNone is IN6_ADDR_GEN_MODE_NONE of linux/if_link.h.
+const ip6AddrGenModeNone = 1
+
+// randomMAC returns a random locally administered unicast MAC.
+func randomMAC() net.HardwareAddr {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	b[0] = b[0]&0xfc | 0x02
+	return net.HardwareAddr(b)
+}
+
+// openDHCPSocket opens the socket a DHCP camera leases its address with:
+// UDP port 68 on eth0, allowed to broadcast. The camera, unprivileged,
+// could not bind a port below 1024 nor to a device.
+func openDHCPSocket(ns *namespace) (*os.File, error) {
+	var f *os.File
+	err := inNamespace(ns.fd, func() error {
+		lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+			var serr error
+			err := c.Control(func(fd uintptr) {
+				if serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); serr != nil {
+					return
+				}
+				if serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_BROADCAST, 1); serr != nil {
+					return
+				}
+				serr = unix.BindToDevice(int(fd), "eth0")
+			})
+			if err != nil {
+				return err
+			}
+			return serr
+		}}
+		pc, err := lc.ListenPacket(context.Background(), "udp4", "0.0.0.0:68")
+		if err != nil {
+			return fmt.Errorf("listen udp/68: %w", err)
+		}
+		defer pc.Close()
+		f, err = pc.(*net.UDPConn).File()
+		return err
+	})
+	return f, err
 }
 
 // removeLinks deletes the interfaces of a namespace but its loopback. The

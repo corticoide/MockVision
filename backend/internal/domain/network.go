@@ -26,6 +26,19 @@ const (
 	IPDHCP   IPMode = "dhcp"
 )
 
+// IPSource says where the address a camera holds came from.
+type IPSource string
+
+const (
+	// SourceStatic is the address configured for the camera.
+	SourceStatic IPSource = "static"
+	// SourceDHCP is an address leased by a DHCP server.
+	SourceDHCP IPSource = "dhcp"
+	// SourceFactory is the profile's factory address, taken when DHCP
+	// found no server (D24).
+	SourceFactory IPSource = "factory"
+)
+
 // NetIdentity is the network identity of a camera: mode, MAC and addressing.
 type NetIdentity struct {
 	Mode     NetMode
@@ -79,7 +92,14 @@ func (n NetIdentity) Validate() error {
 			}
 		}
 	case IPDHCP:
-		v.Add("network.ip_mode", "dhcp is not supported yet")
+		// An ipvlan camera shares the node's MAC, and DHCP servers tell
+		// clients apart by MAC: they would all get the same lease.
+		if n.Mode == NetIPvlan {
+			v.Add("network.ip_mode", "ipvlan cameras share the node's MAC and cannot use DHCP; give them a static IP")
+		}
+		if n.Gateway.IsValid() && !n.Gateway.Is4() {
+			v.Add("network.gateway", "must be an IPv4 address")
+		}
 	default:
 		v.Add("network.ip_mode", "must be static or dhcp")
 	}
@@ -176,4 +196,26 @@ func ParseOUI(s string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid OUI %q", s)
 	}
 	return []byte(hw[:3]), nil
+}
+
+// DHCPHostname turns a camera name into the host name it sends DHCP
+// servers: letters, digits and hyphens, up to 63.
+func DHCPHostname(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if b.Len() >= 63 {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case b.Len() > 0 && !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	h := strings.Trim(b.String(), "-")
+	if h == "" {
+		h = "camera"
+	}
+	return h
 }

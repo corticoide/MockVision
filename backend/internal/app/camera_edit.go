@@ -28,7 +28,7 @@ func restartKeys(b *cameraBundle) map[string]string {
 	}
 	return map[string]string{
 		"network": strings.Join([]string{b.net.Mode, b.net.ParentIf, b.net.Mac, b.net.IpMode, b.net.Ip,
-			b.net.Netmask, b.net.Gateway, b.net.DnsJson}, "|"),
+			b.net.Netmask, b.net.Gateway, b.net.DnsJson, strconv.FormatInt(b.net.Force, 10)}, "|"),
 		"protocols": strings.Join(protos, ","),
 	}
 }
@@ -410,7 +410,9 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 		if s.rt.Kind() == "netns" && f.IP == "" {
 			return nil, domain.Invalid("scope", "profile %s has no factory address", b.prof.ProfileID)
 		}
-		n, err := s.resolveNetwork(ctx, id, b.doc, NetworkInput{Parent: b.net.ParentIf, DefaultMAC: true, IP: f.IP, Netmask: f.Mask, Gateway: f.Gateway})
+		force := false
+		n, err := s.resolveNetwork(ctx, id, b.doc, NetworkInput{Mode: b.net.Mode, IPMode: string(domain.IPStatic), Force: &force,
+			Parent: b.net.ParentIf, DefaultMAC: true, IP: f.IP, Netmask: f.Mask, Gateway: f.Gateway})
 		if err != nil {
 			return nil, err
 		}
@@ -457,7 +459,8 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 		}
 		if netw != nil {
 			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
-				CameraID: id, ParentIf: netw.parent, Mac: netw.mac, Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: "[]",
+				CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode, Ip: netw.ip,
+				Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: "[]",
 			}); err != nil {
 				return err
 			}
@@ -502,6 +505,16 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 	}
 	id := ulid.Make().String()
 	in.Network.DefaultMAC = in.Network.MAC == ""
+	if in.Network.Mode == "" {
+		in.Network.Mode = b.net.Mode
+	}
+	if in.Network.IPMode == "" {
+		in.Network.IPMode = b.net.IpMode
+	}
+	if in.Network.Force == nil {
+		f := store.Bool(b.net.Force)
+		in.Network.Force = &f
+	}
 	netw, err := s.resolveNetwork(ctx, id, b.doc, in.Network)
 	if err != nil {
 		return nil, err
@@ -532,8 +545,8 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 		}
 		dns, _ := json.Marshal(nonNil(netw.dns))
 		if err := q.InsertCameraNetwork(ctx, db.InsertCameraNetworkParams{
-			CameraID: id, Mode: b.net.Mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: b.net.IpMode,
-			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
+			CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode,
+			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns), Force: store.Int(netw.force),
 		}); err != nil {
 			return err
 		}

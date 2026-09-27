@@ -20,6 +20,11 @@ const (
 	TypeRequestStats = "request.stats"
 	TypeGap          = "gap"
 	TypeLog          = "log"
+	// A DHCP camera reports its lease, that it found no server, or that
+	// it lost its lease (D24).
+	TypeDHCPLease  = "dhcp.lease"
+	TypeDHCPFailed = "dhcp.failed"
+	TypeDHCPLost   = "dhcp.lost"
 )
 
 // Service to camera.
@@ -32,6 +37,9 @@ const (
 	TypeStateSet   = "state.set"
 	TypeStop       = "stop"
 	TypeTargetTest = "target.test"
+	// The service refuses a leased address someone else uses; the camera
+	// declines it and asks again.
+	TypeDHCPDecline = "dhcp.decline"
 )
 
 // HeartbeatInterval is how often cameras report; three missed heartbeats
@@ -43,6 +51,28 @@ type Hello struct {
 	CameraID string `json:"camera_id"`
 	PID      int    `json:"pid"`
 	Version  string `json:"version"`
+}
+
+// Lease is an address a DHCP server gave the camera.
+type Lease struct {
+	IP     string   `json:"ip"`
+	Prefix int      `json:"prefix"`
+	Router string   `json:"router,omitempty"`
+	DNS    []string `json:"dns,omitempty"`
+	Server string   `json:"server"`
+	// Seconds is the lease time.
+	Seconds int `json:"seconds"`
+}
+
+// DHCPStatus explains a DHCP failure or a lost lease.
+type DHCPStatus struct {
+	Reason string `json:"reason"`
+}
+
+// DHCPDecline names the leased address the camera must decline.
+type DHCPDecline struct {
+	IP     string `json:"ip"`
+	Reason string `json:"reason"`
 }
 
 // EngineConfig enables an engine instance of the profile on a port.

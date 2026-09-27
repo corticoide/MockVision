@@ -42,6 +42,16 @@ type CreateCameraInput struct {
 // node's defaults. When editing a camera an empty MAC keeps the current
 // one; DefaultMAC goes back to the one derived from the camera ID.
 type NetworkInput struct {
+	// Mode is macvlan (the default: own MAC) or ipvlan (the node's MAC,
+	// for Wi-Fi and switches that limit MACs) (D27).
+	Mode string `json:"mode"`
+	// IPMode is static (the default) or dhcp: the camera leases its
+	// address, and takes the profile's factory one if no server answers
+	// (D24).
+	IPMode string `json:"ip_mode"`
+	// Force starts the camera even if its IP or MAC answers on the LAN
+	// (D14); nil keeps the current choice.
+	Force      *bool    `json:"force"`
 	Parent     string   `json:"parent"`
 	MAC        string   `json:"mac"`
 	DefaultMAC bool     `json:"default_mac"`
@@ -163,7 +173,12 @@ func (b *cameraBundle) values() map[string]any {
 	return out
 }
 
+// ip is where the camera answers: its static address, or the last one a
+// DHCP camera held.
 func (b *cameraBundle) ip() string {
+	if b.net.IpMode == string(domain.IPDHCP) && b.status != nil {
+		return b.status.Ip
+	}
 	return b.net.Ip
 }
 
@@ -296,8 +311,8 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		}
 		dns, _ := json.Marshal(nonNil(netw.dns))
 		if err := q.InsertCameraNetwork(ctx, db.InsertCameraNetworkParams{
-			CameraID: id, Mode: string(domain.NetMacvlan), ParentIf: netw.parent, Mac: netw.mac, IpMode: string(domain.IPStatic),
-			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
+			CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode,
+			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns), Force: store.Int(netw.force),
 		}); err != nil {
 			return err
 		}
@@ -383,6 +398,8 @@ func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, over
 }
 
 type resolvedNetwork struct {
+	mode, ipMode                      string
+	force                             bool
 	parent, mac, ip, netmask, gateway string
 	prefix                            int
 	dns                               []string
@@ -395,7 +412,21 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 	if in.VendorOUI && doc.Identity.OUI != "" {
 		oui, _ = domain.ParseOUI(doc.Identity.OUI)
 	}
-	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String()}
+	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String(), mode: in.Mode, ipMode: in.IPMode, force: in.Force != nil && *in.Force}
+	if out.mode == "" {
+		out.mode = string(domain.NetMacvlan)
+	}
+	if out.ipMode == "" {
+		out.ipMode = string(domain.IPStatic)
+	}
+	switch {
+	case out.mode != string(domain.NetMacvlan) && out.mode != string(domain.NetIPvlan):
+		return out, domain.Invalid("network.mode", "must be macvlan or ipvlan")
+	case out.ipMode != string(domain.IPStatic) && out.ipMode != string(domain.IPDHCP):
+		return out, domain.Invalid("network.ip_mode", "must be static or dhcp")
+	case out.mode == string(domain.NetIPvlan) && out.ipMode == string(domain.IPDHCP):
+		return out, domain.Invalid("network.ip_mode", "ipvlan cameras share the node's MAC and cannot use DHCP; give them a static IP")
+	}
 	dns, err := parseDNS(in.DNS)
 	if err != nil {
 		return out, err
@@ -429,6 +460,12 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 	iface, ok := info.Lookup(out.parent)
 	if !ok {
 		return out, domain.Invalid("network.parent", "interface %q does not exist on this node", out.parent)
+	}
+	if iface.Wireless && out.mode == string(domain.NetMacvlan) {
+		return out, domain.Invalid("network.mode", "%s is a Wi-Fi interface: access points refuse the extra MACs of macvlan cameras; use ipvlan", out.parent)
+	}
+	if out.ipMode == string(domain.IPDHCP) {
+		return out, nil
 	}
 	if strings.TrimSpace(in.IP) == "" {
 		return out, domain.Invalid("network.ip", "is required")
@@ -468,7 +505,7 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 			gw = g
 		}
 	}
-	nid := domain.NetIdentity{Mode: domain.NetMacvlan, ParentIf: out.parent, MAC: out.mac, IPMode: domain.IPStatic, IP: ip, Prefix: prefix, Gateway: gw}
+	nid := domain.NetIdentity{Mode: domain.NetMode(out.mode), ParentIf: out.parent, MAC: out.mac, IPMode: domain.IPStatic, IP: ip, Prefix: prefix, Gateway: gw}
 	if err := nid.Validate(); err != nil {
 		return out, err
 	}
@@ -636,7 +673,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		Autostart:    store.Bool(b.cam.Autostart),
 		Tags:         nonNil(tags),
 		Network: NetworkView{Mode: b.net.Mode, Parent: b.net.ParentIf, MAC: b.net.Mac, IPMode: b.net.IpMode, IP: b.net.Ip,
-			Netmask: b.net.Netmask, Prefix: prefix, Gateway: b.net.Gateway, DNS: nonNil(dns)},
+			Netmask: b.net.Netmask, Prefix: prefix, Gateway: b.net.Gateway, DNS: nonNil(dns), Force: store.Bool(b.net.Force)},
 		CreatedAt: store.Time(b.cam.CreatedAt),
 		UpdatedAt: store.Time(b.cam.UpdatedAt),
 		Users:     []UserView{},
@@ -648,6 +685,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 	if b.status != nil {
 		v.Status.State = b.status.ActualState
 		v.Status.Reason = b.status.Reason
+		v.Status.IP, v.Status.IPSource = b.status.Ip, b.status.IpSource
 		if t := store.NullTime(b.status.StartedAt); !t.IsZero() {
 			v.Status.StartedAt = &t
 		}
@@ -676,6 +714,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		}
 		v.Status.Netns = st.netns
 		v.Status.PID = st.pid
+		v.Status.IP, v.Status.IPSource, v.Status.MAC, v.Status.Firewall = st.ip, string(st.ipSource), st.mac, st.firewall
 		if len(st.endpoints) > 0 {
 			endpoints = s.endpointViews(b, st.ip, st.endpoints)
 		}
@@ -841,6 +880,17 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 		if nin.MAC == "" && !nin.DefaultMAC && !nin.VendorOUI {
 			nin.MAC = b.net.Mac
 		}
+		// What the request leaves out stays as it is.
+		if nin.Mode == "" {
+			nin.Mode = b.net.Mode
+		}
+		if nin.IPMode == "" {
+			nin.IPMode = b.net.IpMode
+		}
+		if nin.Force == nil {
+			f := store.Bool(b.net.Force)
+			nin.Force = &f
+		}
 		n, err := s.resolveNetwork(ctx, id, b.doc, nin)
 		if err != nil {
 			return nil, err
@@ -857,7 +907,8 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 		if netw != nil {
 			dns, _ := json.Marshal(nonNil(netw.dns))
 			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
-				CameraID: id, ParentIf: netw.parent, Mac: netw.mac, Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
+				CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode, Ip: netw.ip,
+				Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns), Force: store.Int(netw.force),
 			}); err != nil {
 				return err
 			}

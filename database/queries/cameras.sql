@@ -27,8 +27,8 @@ UPDATE cameras SET updated_at = @updated_at WHERE id = @id;
 DELETE FROM cameras WHERE id = @id;
 
 -- name: InsertCameraNetwork :exec
-INSERT INTO camera_network (camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json)
-VALUES (@camera_id, @mode, @parent_if, @mac, @ip_mode, @ip, @netmask, @gateway, @dns_json);
+INSERT INTO camera_network (camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json, force)
+VALUES (@camera_id, @mode, @parent_if, @mac, @ip_mode, @ip, @netmask, @gateway, @dns_json, @force);
 
 -- name: GetCameraNetwork :one
 SELECT * FROM camera_network WHERE camera_id = @camera_id;
@@ -37,7 +37,8 @@ SELECT * FROM camera_network WHERE camera_id = @camera_id;
 SELECT * FROM camera_network;
 
 -- name: UpdateCameraNetwork :exec
-UPDATE camera_network SET parent_if = @parent_if, mac = @mac, ip = @ip, netmask = @netmask, gateway = @gateway, dns_json = @dns_json
+UPDATE camera_network SET mode = @mode, parent_if = @parent_if, mac = @mac, ip_mode = @ip_mode, ip = @ip, netmask = @netmask,
+  gateway = @gateway, dns_json = @dns_json, force = @force
 WHERE camera_id = @camera_id;
 
 -- name: CameraIDByIP :one
@@ -84,6 +85,12 @@ VALUES (@camera_id, @actual_state, @reason, @started_at, @last_heartbeat, @updat
 ON CONFLICT (camera_id) DO UPDATE SET
   actual_state = excluded.actual_state, reason = excluded.reason, started_at = excluded.started_at,
   last_heartbeat = excluded.last_heartbeat, updated_at = excluded.updated_at;
+
+-- name: SetCameraAddress :exec
+UPDATE camera_status SET ip = @ip, ip_source = @ip_source WHERE camera_id = @camera_id;
+
+-- name: CameraIDByActualIP :one
+SELECT camera_id FROM camera_status WHERE ip = @ip AND camera_id <> @camera_id LIMIT 1;
 
 -- name: GetCameraStatus :one
 SELECT * FROM camera_status WHERE camera_id = @camera_id;

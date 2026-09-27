@@ -1,8 +1,11 @@
 // Package netctl gives cameras their place on the network. On Linux, the
 // network helper (the only privileged process) creates a network namespace
-// per camera with a macvlan interface on the node's physical NIC, probes the
-// LAN with ARP before using an address, and starts the camera process inside
-// it with its sockets already open. The helper accepts a closed set of
+// per camera with a macvlan or ipvlan interface on the node's physical NIC,
+// probes the LAN for the camera's MAC and IP before using them, installs a
+// firewall that only lets the camera reach the node's event targets, and
+// starts the camera process inside it with its sockets already open. A DHCP
+// camera asks for its lease itself, unprivileged; the helper only sets the
+// address the service hands it. The helper accepts a closed set of
 // validated requests and never runs shell commands.
 //
 // For development without privileges, LocalRuntime runs cameras as plain
@@ -29,18 +32,123 @@ type SocketSpec struct {
 
 // CameraSpec is a validated request to create a camera.
 type CameraSpec struct {
-	ID      string       `json:"id"`
-	Netns   string       `json:"netns"`
-	Mode    string       `json:"mode"`
-	Parent  string       `json:"parent"`
-	MAC     string       `json:"mac"`
-	IP      string       `json:"ip"`
-	Prefix  int          `json:"prefix"`
-	Gateway string       `json:"gateway,omitempty"`
-	Sockets []SocketSpec `json:"sockets"`
-	// SkipProbe disables the ARP probe; never set by the service, only by
-	// tests on isolated links.
+	ID     string `json:"id"`
+	Netns  string `json:"netns"`
+	Mode   string `json:"mode"` // macvlan or ipvlan (D27)
+	Parent string `json:"parent"`
+	// MAC is the camera's own MAC; an ipvlan camera uses the parent's.
+	MAC string `json:"mac"`
+	// IPMode is static, with IP, Prefix and Gateway, or dhcp: the camera
+	// then asks for a lease itself and the service sets the address it
+	// gets with SetAddress (D24).
+	IPMode  string `json:"ip_mode"`
+	IP      string `json:"ip,omitempty"`
+	Prefix  int    `json:"prefix,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
+	// Hostname is what a DHCP camera tells servers about itself.
+	Hostname string `json:"hostname,omitempty"`
+	// Force starts the camera even if another device answers on its IP
+	// or MAC (D14); the conflict is only logged.
+	Force bool `json:"force,omitempty"`
+	// Firewall limits what the camera may reach (nil: no firewall).
+	Firewall *Firewall    `json:"firewall,omitempty"`
+	Sockets  []SocketSpec `json:"sockets"`
+	// SkipProbe disables the ARP and MAC probes; never set by the service,
+	// only by tests on isolated links.
 	SkipProbe bool `json:"skip_probe,omitempty"`
+}
+
+// DHCP reports whether the camera gets its address from a DHCP server.
+func (s *CameraSpec) DHCP() bool { return s.IPMode == string(domain.IPDHCP) }
+
+// Firewall is what a camera may open connections to: the event targets of
+// the node and its DNS servers. Everything else it starts is dropped;
+// answers to its clients and the traffic of its own ports pass.
+type Firewall struct {
+	Allow []Destination `json:"allow"`
+	DNS   []string      `json:"dns"`
+}
+
+// Destination is a host and port a camera may connect to.
+type Destination struct {
+	IP    string `json:"ip"`
+	Port  int    `json:"port"`
+	Proto string `json:"proto"` // tcp or udp
+}
+
+// maxFirewallRules bounds the destinations of a firewall.
+const maxFirewallRules = 512
+
+// Validate checks every destination.
+func (f *Firewall) Validate() error {
+	if len(f.Allow) > maxFirewallRules {
+		return fmt.Errorf("too many firewall destinations")
+	}
+	if len(f.DNS) > 3 {
+		return fmt.Errorf("too many DNS servers")
+	}
+	for _, d := range f.Allow {
+		if a, err := netip.ParseAddr(d.IP); err != nil || !a.Is4() {
+			return fmt.Errorf("invalid firewall address %q", d.IP)
+		}
+		if d.Port < 1 || d.Port > 65535 {
+			return fmt.Errorf("invalid firewall port %d", d.Port)
+		}
+		if d.Proto != "tcp" && d.Proto != "udp" {
+			return fmt.Errorf("invalid firewall protocol %q", d.Proto)
+		}
+	}
+	for _, d := range f.DNS {
+		if a, err := netip.ParseAddr(d); err != nil || !a.Is4() {
+			return fmt.Errorf("invalid DNS server %q", d)
+		}
+	}
+	return nil
+}
+
+// AddressSpec gives a DHCP camera the address it leased, or the profile's
+// factory address when no server answered (D24). The address is probed
+// first, unless forced.
+type AddressSpec struct {
+	ID      string `json:"id"`
+	IP      string `json:"ip"`
+	Prefix  int    `json:"prefix"`
+	Gateway string `json:"gateway,omitempty"`
+	Force   bool   `json:"force,omitempty"`
+}
+
+// Validate checks the address.
+func (a *AddressSpec) Validate() error {
+	if !idPattern.MatchString(a.ID) {
+		return fmt.Errorf("invalid camera id %q", a.ID)
+	}
+	id := domain.NetIdentity{Mode: domain.NetMacvlan, MAC: "02:00:00:00:00:01", IPMode: domain.IPStatic, Prefix: a.Prefix}
+	var err error
+	if id.IP, err = netip.ParseAddr(a.IP); err != nil {
+		return fmt.Errorf("invalid IP %q", a.IP)
+	}
+	if a.Gateway != "" {
+		if id.Gateway, err = netip.ParseAddr(a.Gateway); err != nil {
+			return fmt.Errorf("invalid gateway %q", a.Gateway)
+		}
+	}
+	return id.Validate()
+}
+
+// BridgeSpec turns on or off the node's access to its own macvlan cameras
+// (D26): a macvlan interface of the node on the parent, with a route to
+// each camera. Off by default, since it changes the node's network.
+type BridgeSpec struct {
+	Enabled bool   `json:"enabled"`
+	Parent  string `json:"parent,omitempty"`
+}
+
+// BridgeState reports the bridge.
+type BridgeState struct {
+	Enabled   bool   `json:"enabled"`
+	Interface string `json:"interface,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 var (
@@ -48,6 +156,8 @@ var (
 	netnsPattern  = regexp.MustCompile(`^sim-[a-z0-9-]{1,40}$`)
 	ifacePattern  = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,15}$`)
 	socketPattern = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+	// hostnamePattern is an RFC 1123 label.
+	hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 )
 
 // Validate checks every field: the helper runs privileged and trusts
@@ -59,24 +169,44 @@ func (s *CameraSpec) Validate() error {
 	if !netnsPattern.MatchString(s.Netns) {
 		return fmt.Errorf("invalid namespace name %q", s.Netns)
 	}
-	if s.Mode != string(domain.NetMacvlan) {
+	if s.Mode != string(domain.NetMacvlan) && s.Mode != string(domain.NetIPvlan) {
 		return fmt.Errorf("network mode %q is not supported", s.Mode)
 	}
 	if !ifacePattern.MatchString(s.Parent) {
 		return fmt.Errorf("invalid parent interface %q", s.Parent)
 	}
-	id := domain.NetIdentity{Mode: domain.NetMacvlan, MAC: s.MAC, IPMode: domain.IPStatic, Prefix: s.Prefix}
-	var err error
-	if id.IP, err = netip.ParseAddr(s.IP); err != nil {
-		return fmt.Errorf("invalid IP %q", s.IP)
+	if s.IPMode == "" {
+		s.IPMode = string(domain.IPStatic)
 	}
-	if s.Gateway != "" {
-		if id.Gateway, err = netip.ParseAddr(s.Gateway); err != nil {
-			return fmt.Errorf("invalid gateway %q", s.Gateway)
+	id := domain.NetIdentity{Mode: domain.NetMode(s.Mode), MAC: s.MAC, IPMode: domain.IPMode(s.IPMode), Prefix: s.Prefix}
+	var err error
+	switch id.IPMode {
+	case domain.IPStatic:
+		if id.IP, err = netip.ParseAddr(s.IP); err != nil {
+			return fmt.Errorf("invalid IP %q", s.IP)
 		}
+		if s.Gateway != "" {
+			if id.Gateway, err = netip.ParseAddr(s.Gateway); err != nil {
+				return fmt.Errorf("invalid gateway %q", s.Gateway)
+			}
+		}
+	case domain.IPDHCP:
+		if s.IP != "" || s.Gateway != "" {
+			return fmt.Errorf("a DHCP camera gets its address from the lease")
+		}
+		if !hostnamePattern.MatchString(s.Hostname) {
+			return fmt.Errorf("invalid DHCP host name %q", s.Hostname)
+		}
+	default:
+		return fmt.Errorf("invalid IP mode %q", s.IPMode)
 	}
 	if err := id.Validate(); err != nil {
 		return err
+	}
+	if s.Firewall != nil {
+		if err := s.Firewall.Validate(); err != nil {
+			return err
+		}
 	}
 	if len(s.Sockets) > 16 {
 		return fmt.Errorf("too many sockets")
@@ -113,8 +243,13 @@ type Launched struct {
 	PID   int
 	Netns string
 	// IP is where the camera answers: its own address, or 127.0.0.1 in
-	// local mode.
+	// local mode. A DHCP camera has none until SetAddress.
 	IP string
+	// MAC is the MAC the camera uses on the LAN: its own with macvlan, the
+	// parent's with ipvlan.
+	MAC string
+	// Firewall reports whether the camera's firewall is in place.
+	Firewall bool
 }
 
 // Exit reports a camera process that ended.
@@ -137,11 +272,18 @@ type Runtime interface {
 	Live(ctx context.Context) ([]string, error)
 	// Exits reports processes that ended on their own.
 	Exits() <-chan Exit
+	// SetAddress gives a running DHCP camera its address.
+	SetAddress(ctx context.Context, a AddressSpec) error
+	// SetFirewall replaces the firewall of a running camera.
+	SetFirewall(ctx context.Context, cameraID string, f Firewall) error
+	// SetBridge turns the node's access to its cameras on or off (D26).
+	SetBridge(ctx context.Context, b BridgeSpec) (BridgeState, error)
 }
 
 // Error codes returned by runtimes.
 const (
 	CodeIPInUse      = "ip_in_use"
+	CodeMACInUse     = "mac_in_use"
 	CodeNoInterface  = "no_interface"
 	CodeUnsupported  = "unsupported"
 	CodeInvalid      = "invalid"

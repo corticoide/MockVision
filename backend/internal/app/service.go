@@ -78,6 +78,8 @@ type Service struct {
 	regens   map[string]*regenState
 	// netnsNames reserves namespace names, name to camera ID.
 	netnsNames map[string]string
+	// bridge is the state of the node's access to its cameras (D26).
+	bridge netctl.BridgeState
 
 	// closing is set, under mu, when shutdown begins: no background work
 	// starts after that.
@@ -179,6 +181,8 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	s.goLoop(s.jobs.Run)
+	s.applyBridge(ctx)
+	s.goLoop(s.firewallLoop)
 	s.measureInterface(ctx)
 	s.goLoop(func(ctx context.Context) { s.node.Run(ctx, 2*time.Second) })
 	s.goLoop(s.publishNodeMetrics)

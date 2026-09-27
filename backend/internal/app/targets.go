@@ -82,6 +82,7 @@ func (s *Service) CreateTarget(ctx context.Context, actor Actor, in TargetInput)
 		return nil, err
 	}
 	s.audit(ctx, actor, "target.create", "target", id, map[string]any{"name": t.Name, "url": t.URL})
+	s.refreshFirewallsLater()
 	return s.GetTarget(ctx, id)
 }
 
@@ -169,6 +170,7 @@ func (s *Service) UpdateTarget(ctx context.Context, actor Actor, id string, in T
 	for _, c := range cams {
 		s.reloadTargets(ctx, c)
 	}
+	s.refreshFirewallsLater()
 	return s.GetTarget(ctx, id)
 }
 
@@ -189,6 +191,7 @@ func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) erro
 		return err
 	}
 	s.audit(ctx, actor, "target.delete", "target", id, map[string]string{"name": t.Name})
+	s.refreshFirewallsLater()
 	return nil
 }
 

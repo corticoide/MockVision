@@ -146,6 +146,21 @@ func (l *LocalRuntime) Live(context.Context) ([]string, error) {
 }
 
 // Shutdown stops every camera.
+// SetAddress implements Runtime; local cameras answer on 127.0.0.1 and
+// never lease an address.
+func (l *LocalRuntime) SetAddress(context.Context, AddressSpec) error {
+	return errorf(CodeUnsupported, "local mode has no DHCP")
+}
+
+// SetFirewall implements Runtime; local cameras share the node's network
+// and have no firewall of their own.
+func (l *LocalRuntime) SetFirewall(context.Context, string, Firewall) error { return nil }
+
+// SetBridge implements Runtime; the node reaches local cameras anyway.
+func (l *LocalRuntime) SetBridge(context.Context, BridgeSpec) (BridgeState, error) {
+	return BridgeState{}, nil
+}
+
 func (l *LocalRuntime) Shutdown() {
 	ids, _ := l.Live(context.Background())
 	for _, id := range ids {

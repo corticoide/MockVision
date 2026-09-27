@@ -41,6 +41,8 @@ type Options struct {
 	CameraID string
 	IPC      net.Conn
 	Sockets  []Socket
+	// DHCP, when set, makes the camera lease its address (D24).
+	DHCP *DHCPOptions
 	// Local opens missing TCP sockets on 127.0.0.1 with ephemeral ports,
 	// for development without network namespaces.
 	Local bool
@@ -48,6 +50,13 @@ type Options struct {
 	// its files. Only the camera subcommand sets it: it cannot be undone.
 	Confine bool
 	Log     *slog.Logger
+}
+
+// DHCPOptions are what a DHCP camera leases its address with.
+type DHCPOptions struct {
+	Conn     net.PacketConn
+	MAC      net.HardwareAddr
+	Hostname string
 }
 
 // Runtime is a running camera. It implements engine.Host.
@@ -65,6 +74,8 @@ type Runtime struct {
 	tel       *telemetry
 	identity  engine.Identity
 	accounts  accountStore
+
+	dhcp *dhcpClient
 
 	mu         sync.Mutex
 	running    []*runningEngine
@@ -140,11 +151,27 @@ func (r *Runtime) Run(ctx context.Context) error {
 	if err := r.conn.Notify(ipc.TypeHello, ipc.Hello{CameraID: r.opts.CameraID, PID: os.Getpid(), Version: buildinfo.Version}); err != nil {
 		return err
 	}
+	// A DHCP camera leases its address first: the service configures it
+	// once the address is set, so its engines start with it.
+	configWait := 30 * time.Second
+	if d := r.opts.DHCP; d != nil {
+		r.dhcp = newDHCPClient(d.Conn, d.MAC, d.Hostname, r.log.With("component", "dhcp"), func(typ string, data any) {
+			if err := r.conn.Notify(typ, data); err != nil {
+				r.log.Warn("cannot report the lease", "error", err)
+			}
+		})
+		dctx, cancel := context.WithCancel(ctx)
+		dhcpDone := make(chan struct{})
+		go func() { r.dhcp.run(dctx); close(dhcpDone) }()
+		// Released before the camera says bye.
+		defer func() { cancel(); <-dhcpDone }()
+		configWait = 2 * time.Minute
+	}
 	select {
 	case <-r.configured:
-	case <-time.After(30 * time.Second):
+	case <-time.After(configWait):
 		r.conn.Close()
-		return errors.New("no configuration received within 30s")
+		return fmt.Errorf("no configuration received within %s", configWait)
 	case <-r.conn.Done():
 		return errors.New("service closed the connection before configuring the camera")
 	}
@@ -240,6 +267,17 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		case r.stopReq <- d:
 		default:
 		}
+		return nil, nil
+	case ipc.TypeDHCPDecline:
+		var d ipc.DHCPDecline
+		if err := msg.Decode(&d); err != nil {
+			return nil, err
+		}
+		if r.dhcp == nil {
+			return nil, ipc.Errorf("dhcp", "the camera does not use DHCP")
+		}
+		r.log.Info("the service refused the leased address", "ip", d.IP, "reason", d.Reason)
+		r.dhcp.Decline(d.IP)
 		return nil, nil
 	case ipc.TypeTargetTest:
 		var tt ipc.TargetTest

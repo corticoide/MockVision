@@ -16,18 +16,25 @@ import (
 
 // NodeView describes the node.
 type NodeView struct {
-	Version          string             `json:"version"`
-	Runtime          string             `json:"runtime"`
-	Hostname         string             `json:"hostname"`
-	CPUCount         int                `json:"cpu_count"`
-	MemTotal         uint64             `json:"mem_total"`
-	DefaultInterface string             `json:"default_interface"`
-	DefaultGateway   string             `json:"default_gateway"`
-	ParentInterface  string             `json:"parent_interface"`
-	Interfaces       []netctl.Interface `json:"interfaces"`
-	Cameras          CameraCounts       `json:"cameras"`
-	Panel            PanelAccess        `json:"panel"`
-	StartedAt        time.Time          `json:"started_at"`
+	Version          string `json:"version"`
+	Runtime          string `json:"runtime"`
+	Hostname         string `json:"hostname"`
+	CPUCount         int    `json:"cpu_count"`
+	MemTotal         uint64 `json:"mem_total"`
+	DefaultInterface string `json:"default_interface"`
+	DefaultGateway   string `json:"default_gateway"`
+	ParentInterface  string `json:"parent_interface"`
+	// DefaultParent is what an empty parent in the settings means:
+	// MOCKVISION_PARENT_IF, else the default route's interface.
+	DefaultParent string             `json:"default_parent"`
+	Interfaces    []netctl.Interface `json:"interfaces"`
+	Cameras       CameraCounts       `json:"cameras"`
+	Panel         PanelAccess        `json:"panel"`
+	// Bridge is the node's access to its macvlan cameras (D26).
+	Bridge netctl.BridgeState `json:"bridge"`
+	// DNS are the node's servers cameras use when they have none.
+	DNS       []string  `json:"dns"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // PanelAccess says where the panel and the API listen (D63): every
@@ -75,10 +82,15 @@ func (s *Service) Node(ctx context.Context) (*NodeView, error) {
 	v := &NodeView{
 		Version: buildinfo.Version, Runtime: s.rt.Kind(), Hostname: host, CPUCount: s.node.CPUCount(),
 		MemTotal: s.node.Latest().MemTotal, DefaultInterface: info.DefaultInterface, DefaultGateway: info.DefaultGateway,
-		ParentInterface: s.defaultParent(ctx), Interfaces: info.Interfaces, StartedAt: processStart,
+		ParentInterface: s.defaultParent(ctx), DefaultParent: info.DefaultInterface, Interfaces: info.Interfaces, StartedAt: processStart,
+	}
+	if s.opts.ParentInterface != "" {
+		v.DefaultParent = s.opts.ParentInterface
 	}
 	v.Cameras = s.cameraCounts(ctx)
 	v.Panel = panelAccess(s.opts.Listen, info.Interfaces)
+	v.Bridge = s.BridgeStatus()
+	v.DNS = nonNil(netctl.ReadNodeDNS())
 	return v, nil
 }
 

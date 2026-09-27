@@ -146,10 +146,11 @@ func (s *Service) cloneNext(ctx context.Context, actor Actor, id string, start b
 		return nil, err
 	}
 	in := CloneCameraInput{Name: name, Start: start, Network: NetworkInput{
-		Parent: b.net.ParentIf, Netmask: b.net.Netmask, Gateway: b.net.Gateway,
+		Mode: b.net.Mode, IPMode: b.net.IpMode, Parent: b.net.ParentIf, Netmask: b.net.Netmask, Gateway: b.net.Gateway,
 	}}
 	_ = json.Unmarshal([]byte(b.net.DnsJson), &in.Network.DNS)
-	if s.rt.Kind() != "local" {
+	// A DHCP copy leases its own address.
+	if s.rt.Kind() != "local" && b.net.IpMode != string(domain.IPDHCP) {
 		ip, err := s.nextFreeIP(ctx, b.net.Ip, b.net.Netmask)
 		if err != nil {
 			return nil, err

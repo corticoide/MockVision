@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,12 +56,21 @@ type session struct {
 	lastSample time.Time
 	notices    tokenBucket
 
-	stopCh   chan string
-	stopOnce sync.Once
-	done     chan struct{}
-	hello    chan ipc.Hello
-	ready    chan ipc.Ready
-	failed   chan string
+	// Network: the address source, the MAC it answers with, the DNS
+	// servers it uses and the firewall in place (nil: none).
+	ipSource domain.IPSource
+	mac      string
+	dns      []string
+	firewall *netctl.Firewall
+
+	stopCh     chan string
+	stopOnce   sync.Once
+	done       chan struct{}
+	hello      chan ipc.Hello
+	ready      chan ipc.Ready
+	failed     chan string
+	leases     chan ipc.Lease
+	dhcpFailed chan string
 }
 
 type sessionSnapshot struct {
@@ -72,12 +82,16 @@ type sessionSnapshot struct {
 	pid       int
 	ip        string
 	endpoints []ipc.Endpoint
+	ipSource  domain.IPSource
+	mac       string
+	firewall  bool
 }
 
 func (ss *session) snapshot() sessionSnapshot {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	return sessionSnapshot{ss.state, ss.reason, ss.started, ss.lastHB, ss.netns, ss.pid, ss.ip, append([]ipc.Endpoint(nil), ss.endpoints...)}
+	return sessionSnapshot{ss.state, ss.reason, ss.started, ss.lastHB, ss.netns, ss.pid, ss.ip, append([]ipc.Endpoint(nil), ss.endpoints...),
+		ss.ipSource, ss.mac, ss.firewall != nil}
 }
 
 func (ss *session) active() bool {
@@ -179,6 +193,7 @@ func (s *Service) startSession(b *cameraBundle) *session {
 		s: s, id: b.cam.ID, name: b.cam.Name, state: domain.StateStopped, applied: restartKeys(b),
 		stopCh: make(chan string, 1), done: make(chan struct{}), notices: tokenBucket{tokens: noticeBurst, at: time.Now()},
 		hello: make(chan ipc.Hello, 1), ready: make(chan ipc.Ready, 1), failed: make(chan string, 1),
+		leases: make(chan ipc.Lease, 4), dhcpFailed: make(chan string, 1),
 	}
 	s.mu.Lock()
 	s.sessions[ss.id] = ss
@@ -248,14 +263,27 @@ func (ss *session) run(b *cameraBundle) {
 		ss.fail(err.Error(), false)
 		return
 	}
+	dns := cameraDNS(b, nil)
+	if s.rt.Kind() == "netns" {
+		spec.Firewall = s.firewallFor(ctx, dns)
+	}
 	launched, err := s.rt.Launch(ctx, netctl.LaunchSpec{Camera: spec})
 	if err != nil {
 		ss.fail(launchReason(err), false)
 		return
 	}
 	ss.mu.Lock()
-	ss.pid, ss.netns, ss.ip = launched.PID, launched.Netns, launched.IP
+	ss.pid, ss.netns, ss.ip, ss.mac, ss.dns = launched.PID, launched.Netns, launched.IP, launched.MAC, dns
+	if launched.Firewall {
+		ss.firewall = spec.Firewall
+	}
+	if !spec.DHCP() {
+		ss.ipSource = domain.SourceStatic
+	}
 	ss.mu.Unlock()
+	if !spec.DHCP() {
+		s.saveAddress(ss.id, launched.IP, domain.SourceStatic)
+	}
 
 	// Starting: handshake over the private socket.
 	ss.setState(domain.StateStarting, "")
@@ -277,11 +305,43 @@ func (ss *session) run(b *cameraBundle) {
 		ss.fail("the camera process did not say hello", true)
 		return
 	}
-	cfg, err := s.buildConfigure(b, streams, launched.IP)
+	ip := launched.IP
+	if spec.DHCP() {
+		res, problem := ss.waitAddress(ctx, b, conn)
+		if reason, stopped := strings.CutPrefix(problem, "stop:"); stopped {
+			ss.gracefulStop(conn, reason)
+			return
+		}
+		if problem != "" {
+			ss.fail(problem, true)
+			return
+		}
+		ip = res.ip
+		dns = cameraDNS(b, res.dns)
+		ss.mu.Lock()
+		ss.ip, ss.ipSource, ss.dns = ip, res.source, dns
+		fw := ss.firewall
+		ss.mu.Unlock()
+		s.saveAddress(ss.id, ip, res.source)
+		if fw != nil && !slices.Equal(fw.DNS, dns) {
+			next := netctl.Firewall{Allow: fw.Allow, DNS: dns}
+			if err := s.rt.SetFirewall(ctx, ss.id, next); err != nil {
+				s.log.Warn("cannot update the camera's firewall", "camera", ss.id, "error", err)
+			} else {
+				ss.mu.Lock()
+				ss.firewall = &next
+				ss.mu.Unlock()
+			}
+		}
+		s.log.Info("camera address set", "camera", ss.id, "ip", ip, "source", res.source)
+		ss.setState(domain.StateStarting, "")
+	}
+	cfg, err := s.buildConfigure(b, streams, ip)
 	if err != nil {
 		ss.fail(err.Error(), true)
 		return
 	}
+	cfg.DNS = dns
 	cctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	err = conn.Request(cctx, ipc.TypeConfigure, cfg, nil)
 	cancel()
@@ -309,7 +369,7 @@ func (ss *session) run(b *cameraBundle) {
 		return
 	}
 	ss.setState(domain.StateRunning, "")
-	s.log.Info("camera running", "camera", ss.id, "name", ss.name, "ip", launched.IP, "netns", launched.Netns, "pid", launched.PID)
+	s.log.Info("camera running", "camera", ss.id, "name", ss.name, "ip", ip, "netns", launched.Netns, "pid", launched.PID)
 
 	// Running: supervise heartbeats until a stop or a failure.
 	tick := time.NewTicker(time.Duration(ipc.HeartbeatInterval) * time.Millisecond)
@@ -324,6 +384,19 @@ func (ss *session) run(b *cameraBundle) {
 		case <-conn.Done():
 			ss.fail(s.exitReason(ss.id, "the camera process exited"), true)
 			return
+		case l := <-ss.leases:
+			// A renewal with the same address changes nothing. Another
+			// address, or a lease after the factory fallback, means a new
+			// identity: the camera restarts with it, as a real one does.
+			ss.mu.Lock()
+			same := l.IP == ss.ip && ss.ipSource == domain.SourceDHCP
+			ss.mu.Unlock()
+			if !same {
+				s.log.Info("the camera's lease changed; restarting it", "camera", ss.id, "ip", l.IP)
+				s.goBackground(func(ctx context.Context) {
+					_, _ = s.RestartCamera(ctx, Actor{Type: "system", Name: "DHCP"}, ss.id)
+				})
+			}
 		case <-stable.C:
 			s.resetRetries(ss.id)
 		case <-tick.C:
@@ -482,6 +555,27 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		case ss.failed <- f.Reason:
 		default:
 		}
+	case ipc.TypeDHCPLease:
+		var l ipc.Lease
+		if err := msg.Decode(&l); err != nil {
+			return nil, err
+		}
+		select {
+		case ss.leases <- l:
+		default:
+			s.log.Warn("dropped a DHCP lease report", "camera", ss.id)
+		}
+	case ipc.TypeDHCPFailed:
+		var st ipc.DHCPStatus
+		_ = msg.Decode(&st)
+		select {
+		case ss.dhcpFailed <- truncate(st.Reason, 200):
+		default:
+		}
+	case ipc.TypeDHCPLost:
+		var st ipc.DHCPStatus
+		_ = msg.Decode(&st)
+		s.log.Warn("the camera lost its DHCP lease", "camera", ss.id, "reason", truncate(st.Reason, 200))
 	case ipc.TypeHeartbeat:
 		var hb ipc.Heartbeat
 		if err := msg.Decode(&hb); err != nil {
@@ -653,22 +747,30 @@ func (s *Service) clientChanges(ctx context.Context, id string, reported []engin
 // cameraSpec builds the network helper request of a camera.
 func (s *Service) cameraSpec(b *cameraBundle) (netctl.CameraSpec, error) {
 	spec := netctl.CameraSpec{
-		ID: b.cam.ID, Mode: string(domain.NetMacvlan), Parent: b.net.ParentIf, MAC: b.net.Mac,
-		IP: b.net.Ip, Gateway: b.net.Gateway,
+		ID: b.cam.ID, Mode: b.net.Mode, Parent: b.net.ParentIf, MAC: b.net.Mac, IPMode: string(domain.IPStatic),
+		IP: b.net.Ip, Gateway: b.net.Gateway, Force: store.Bool(b.net.Force),
+	}
+	if spec.Mode == "" {
+		spec.Mode = string(domain.NetMacvlan)
 	}
 	if s.rt.Kind() == "netns" {
-		if spec.IP == "" {
-			return spec, errors.New("the camera has no IP address; edit its network")
-		}
-		prefix, err := domain.MaskToPrefix(b.net.Netmask)
-		if err != nil {
-			return spec, err
-		}
-		spec.Prefix = prefix
 		if spec.Parent == "" {
 			spec.Parent = s.defaultParent(context.Background())
 		}
 		spec.Netns = s.netnsName(b)
+		if b.net.IpMode == string(domain.IPDHCP) {
+			spec.IPMode, spec.IP, spec.Gateway = string(domain.IPDHCP), "", ""
+			spec.Hostname = domain.DHCPHostname(b.cam.Name)
+		} else {
+			if spec.IP == "" {
+				return spec, errors.New("the camera has no IP address; edit its network")
+			}
+			prefix, err := domain.MaskToPrefix(b.net.Netmask)
+			if err != nil {
+				return spec, err
+			}
+			spec.Prefix = prefix
+		}
 	}
 	for _, p := range b.protos {
 		if !store.Bool(p.Enabled) || p.Port == 0 {
