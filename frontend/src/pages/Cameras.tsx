@@ -11,6 +11,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { plural, type Translate, useT } from "@/lib/i18n";
 import { Link, setSearch, useSearch } from "@/lib/router";
 import { formatBytes, formatPercent } from "@/lib/utils";
+import { cameraIP } from "@/lib/network";
 import { CloneDialog } from "./camera/dialogs";
 import { NewCameraDialog } from "./NewCameraDialog";
 
@@ -29,7 +30,7 @@ function matches(f: Filter, c: Camera): boolean {
   if (f.profile && c.profile.id !== f.profile && `${c.profile.id}@${c.profile.version}` !== f.profile) return false;
   if (f.tag && !c.tags.some((t) => t.toLowerCase() === f.tag.toLowerCase())) return false;
   const q = f.q.trim().toLowerCase();
-  if (q) return [c.name, c.network.ip, c.network.mac, c.serial, ...c.tags].some((s) => s.toLowerCase().includes(q));
+  if (q) return [c.name, cameraIP(c), c.network.mac, c.serial, ...c.tags].some((s) => s.toLowerCase().includes(q));
   return true;
 }
 
@@ -183,7 +184,7 @@ export function CamerasPage() {
                       </div>
                     </TD>
                     <TD>
-                      <Mono>{c.network.ip || "127.0.0.1"}</Mono>
+                      <Mono>{cameraIP(c)}</Mono>
                       <Mono className="ml-2 text-muted">{c.network.mac}</Mono>
                     </TD>
                     <TD>

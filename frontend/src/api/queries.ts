@@ -132,7 +132,11 @@ export function useUpdateSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: Partial<Settings>) => unwrap(await api.PATCH("/settings", { body })),
-    onSuccess: (data) => qc.setQueryData(keys.settings, data),
+    onSuccess: (data) => {
+      qc.setQueryData(keys.settings, data);
+      // The node reports the bridge and the parent interface.
+      qc.invalidateQueries({ queryKey: keys.node });
+    },
   });
 }
 

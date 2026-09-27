@@ -11,6 +11,7 @@ import { Card, Empty, Notice } from "@/components/ui/card";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { useT } from "@/lib/i18n";
 import { Link, navigate } from "@/lib/router";
+import { cameraIP } from "@/lib/network";
 import { ConfigTab } from "./ConfigTab";
 import { CloneDialog, ResetDialog } from "./dialogs";
 import { GeneralTab } from "./GeneralTab";
@@ -110,7 +111,7 @@ function Header({ camera }: { camera: Camera }) {
               {camera.profile.vendor} {camera.profile.model}
             </span>
             <LevelBadge level={camera.profile.level} />
-            <Mono>{camera.network.ip || "127.0.0.1"}</Mono>
+            <Mono>{cameraIP(camera)}</Mono>
             <Mono>{camera.network.mac}</Mono>
             <Link href={`/audit?camera=${camera.id}`} className="inline-flex items-center gap-1 hover:text-text [&_svg]:size-3.5">
               <ScrollText /> {t("Activity")}

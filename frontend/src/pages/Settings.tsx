@@ -5,7 +5,7 @@ import { Badge, Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, Notice, PageHeader } from "@/components/ui/card";
-import { Field, Input, Select } from "@/components/ui/form";
+import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
 import { formatBytes, formatTime, sinceText } from "@/lib/utils";
 import { TokensCard } from "./Tokens";
@@ -88,18 +88,35 @@ function LimitsCard() {
           label={t("Parent interface")}
           error={fieldErrors["parent_interface"]}
           className="col-span-2"
-          hint={node?.runtime === "local" ? t("Not used in local mode.") : t("New cameras attach to this interface with macvlan. Empty: the default route's interface.")}
+          hint={node?.runtime === "local" ? t("Not used in local mode.") : t("The network card cameras attach to. Empty: MOCKVISION_PARENT_IF, else the default route's interface.")}
         >
           <Select value={form.parent_interface} onChange={(e) => set("parent_interface", e.target.value)}>
-            <option value="">{t("Default ({iface})", { iface: node?.default_interface || t("none") })}</option>
+            <option value="">{t("Default ({iface})", { iface: node?.default_parent || node?.default_interface || t("none") })}</option>
             {interfaces.map((i) => (
               <option key={i.name} value={i.name}>
-                {i.name} — {i.addrs?.join(", ") || t("no address")}
+                {i.name}
+                {i.wireless ? " (Wi-Fi)" : ""} — {i.addrs?.join(", ") || t("no address")}
                 {i.up ? "" : t(" (down)")}
               </option>
             ))}
           </Select>
         </Field>
+        {node?.runtime !== "local" && (
+          <div className="col-span-2 flex flex-col gap-1">
+            <Checkbox
+              checked={form.node_bridge ?? false}
+              onChange={(e) => set("node_bridge", e.target.checked)}
+              label={t("Reach the cameras from this node")}
+            />
+            <p className="text-xs text-muted">
+              {t(
+                "A node cannot talk to the macvlan cameras on its own network card: players, recorders and targets on this machine would not reach them. This adds a bridge interface, mv-bridge, with a route to each camera. Off by default because it changes the node's network; ipvlan cameras are not reachable from the node either way.",
+              )}
+            </p>
+            {node?.bridge?.enabled && <p className="text-xs text-ok">{t("Bridge active on {iface}.", { iface: node.bridge.parent ?? "" })}</p>}
+            {node?.bridge?.error && <p className="text-xs text-error">{node.bridge.error}</p>}
+          </div>
+        )}
         <div className="col-span-2 flex justify-end gap-2">
           <Button onClick={() => settings && setForm(settings)} disabled={update.isPending}>
             {t("Reset")}

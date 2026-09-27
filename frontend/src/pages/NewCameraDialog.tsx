@@ -31,6 +31,8 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
 
   const [name, setName] = useState("");
   const [ip, setIp] = useState("");
+  const [mode, setMode] = useState("");
+  const [ipMode, setIpMode] = useState("static");
   const [netmask, setNetmask] = useState("255.255.255.0");
   const [gateway, setGateway] = useState("");
   const [resolution, setResolution] = useState("");
@@ -62,6 +64,10 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
   }, [open]);
 
   const local = node?.runtime === "local";
+  // On Wi-Fi only ipvlan works: suggest it when the default parent is one.
+  const parentWireless = node?.interfaces?.find((i) => i.name === (node?.parent_interface || node?.default_interface))?.wireless ?? false;
+  const netMode = mode || (parentWireless ? "ipvlan" : "macvlan");
+  const dhcp = ipMode === "dhcp" && netMode !== "ipvlan";
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -70,7 +76,11 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
       name: name.trim(),
       profile_id: ref.id,
       profile_version: ref.version,
-      network: local ? undefined : { ip: ip.trim(), netmask: netmask.trim() || undefined, gateway: gateway.trim() || undefined },
+      network: local
+        ? undefined
+        : dhcp
+          ? { mode: "macvlan", ip_mode: "dhcp" }
+          : { mode: netMode as "macvlan" | "ipvlan", ip: ip.trim(), netmask: netmask.trim() || undefined, gateway: gateway.trim() || undefined },
       // Only what differs from the profile: a profile may not let either change.
       stream: {
         resolution: resolution && resolution !== stream?.default.resolution ? resolution : undefined,
@@ -142,16 +152,48 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
           ) : (
             <>
-              <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>
-                <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" required className="font-mono" />
+              <Field
+                label={t("Network mode")}
+                error={fieldErrors["network.mode"]}
+                hint={netMode === "ipvlan" ? t("The node's MAC: for Wi-Fi.") : t("Its own MAC: for wired networks.")}
+              >
+                <Select value={netMode} onChange={(e) => setMode(e.target.value)}>
+                  <option value="macvlan">{t("macvlan — its own MAC (wired)")}</option>
+                  <option value="ipvlan">{t("ipvlan — the node's MAC (Wi-Fi)")}</option>
+                </Select>
               </Field>
-              <Field label={t("Netmask")} error={fieldErrors["network.netmask"]}>
-                <Input value={netmask} onChange={(e) => setNetmask(e.target.value)} className="font-mono" />
+              <Field
+                label={t("Addressing")}
+                error={fieldErrors["network.ip_mode"]}
+                hint={
+                  dhcp
+                    ? profile?.factory_ip
+                      ? t("Without a DHCP server it takes the factory IP, {ip}.", { ip: profile.factory_ip })
+                      : t("It asks the LAN's DHCP server.")
+                    : undefined
+                }
+              >
+                <Select value={dhcp ? "dhcp" : "static"} onChange={(e) => setIpMode(e.target.value)}>
+                  <option value="static">{t("Static IP")}</option>
+                  <option value="dhcp" disabled={netMode === "ipvlan"}>
+                    {t("DHCP")}
+                  </option>
+                </Select>
               </Field>
-              <Field label={t("Gateway")} error={fieldErrors["network.gateway"]} hint={t("Empty: the node's gateway when it is in the subnet.")}>
-                <Input value={gateway} onChange={(e) => setGateway(e.target.value)} className="font-mono" />
-              </Field>
-              <div />
+              {!dhcp && (
+                <>
+                  <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>
+                    <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" required className="font-mono" />
+                  </Field>
+                  <Field label={t("Netmask")} error={fieldErrors["network.netmask"]}>
+                    <Input value={netmask} onChange={(e) => setNetmask(e.target.value)} className="font-mono" />
+                  </Field>
+                  <Field label={t("Gateway")} error={fieldErrors["network.gateway"]} hint={t("Empty: the node's gateway when it is in the subnet.")}>
+                    <Input value={gateway} onChange={(e) => setGateway(e.target.value)} className="font-mono" />
+                  </Field>
+                  <div />
+                </>
+              )}
             </>
           )}
 

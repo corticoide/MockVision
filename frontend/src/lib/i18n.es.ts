@@ -657,4 +657,52 @@ export const es: Record<string, string> = {
   "It also serves {streams}, with the same picture.": "También sirve {streams}, con la misma imagen.",
   "Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect (RN-09).":
     "Se aplica sin reiniciar: el stream se codifica una vez y la cámara cambia a él; sus visores se reconectan (RN-09).",
+  "Network mode": "Modo de red",
+  "The node's MAC: for Wi-Fi.": "La MAC del nodo: para Wi-Fi.",
+  "Its own MAC: for wired networks.": "MAC propia: para redes cableadas.",
+  "macvlan — its own MAC (wired)": "macvlan — MAC propia (cableada)",
+  "ipvlan — the node's MAC (Wi-Fi)": "ipvlan — la MAC del nodo (Wi-Fi)",
+  "Addressing": "Direccionamiento",
+  "Without a DHCP server it takes the factory IP, {ip}.": "Sin servidor DHCP toma la IP de fábrica, {ip}.",
+  "It asks the LAN's DHCP server.": "La pide al servidor DHCP de la LAN.",
+  "Static IP": "IP estática",
+  "DHCP": "DHCP",
+  "The network card cameras attach to. Empty: MOCKVISION_PARENT_IF, else the default route's interface.":
+    "La placa de red a la que se conectan las cámaras. Vacío: MOCKVISION_PARENT_IF, si no la interfaz de la ruta por defecto.",
+  "Reach the cameras from this node": "Llegar a las cámaras desde este nodo",
+  "A node cannot talk to the macvlan cameras on its own network card: players, recorders and targets on this machine would not reach them. This adds a bridge interface, mv-bridge, with a route to each camera. Off by default because it changes the node's network; ipvlan cameras are not reachable from the node either way.":
+    "Un nodo no puede hablar con las cámaras macvlan de su propia placa de red: reproductores, grabadores y destinos en esta máquina no llegarían a ellas. Esto agrega una interfaz puente, mv-bridge, con una ruta a cada cámara. Apagado por defecto porque cambia la red del nodo; las cámaras ipvlan no se alcanzan desde el nodo de ninguna forma.",
+  "Bridge active on {iface}.": "Puente activo en {iface}.",
+  "leased by DHCP": "asignada por DHCP",
+  "factory address: no DHCP server answered": "IP de fábrica: ningún servidor DHCP respondió",
+  "static": "estática",
+  "On the LAN now": "En la LAN ahora",
+  "MAC it answers with": "MAC con la que responde",
+  "the node's": "la del nodo",
+  "Mode": "Modo",
+  "Outbound firewall": "Firewall de salida",
+  "only toward the event targets": "solo hacia los destinos de eventos",
+  "not available on this node": "no disponible en este nodo",
+  "ipvlan: the camera uses the node's MAC. For Wi-Fi and switches that allow one MAC per port. No DHCP.":
+    "ipvlan: la cámara usa la MAC del nodo. Para Wi-Fi y switches que permiten una MAC por puerto. Sin DHCP.",
+  "macvlan: the camera has its own MAC, like a real device. For wired networks.":
+    "macvlan: la cámara tiene MAC propia, como un equipo real. Para redes cableadas.",
+  "The camera asks the LAN's DHCP server for an address, like a new camera. If none answers within about 15 s it takes the profile's factory address, {ip}.":
+    "La cámara pide una dirección al servidor DHCP de la LAN, como una cámara nueva. Si ninguno responde en unos 15 s toma la dirección de fábrica del perfil, {ip}.",
+  "The camera asks the LAN's DHCP server for an address, like a new camera.":
+    "La cámara pide una dirección al servidor DHCP de la LAN, como una cámara nueva.",
+  "ipvlan cameras share the node's MAC, so they need a static IP.":
+    "Las cámaras ipvlan comparten la MAC del nodo, así que necesitan IP estática.",
+  "A fixed address you choose, probed on the LAN before use.": "Una dirección fija que eliges, sondeada en la LAN antes de usarla.",
+  "The node's network card the camera attaches to.": "La placa de red del nodo a la que se conecta la cámara.",
+  "{iface} is a Wi-Fi interface: access points refuse the extra MACs of macvlan cameras. Choose ipvlan.":
+    "{iface} es una interfaz Wi-Fi: los puntos de acceso rechazan las MAC extra de las cámaras macvlan. Elige ipvlan.",
+  "Kept for macvlan; with ipvlan the camera answers with the node's MAC.":
+    "Se guarda para macvlan; con ipvlan la cámara responde con la MAC del nodo.",
+  "Up to 3; empty: the lease's, else the node's.": "Hasta 3; vacío: los de la concesión, si no los del nodo.",
+  "Start even if another device answers on this IP or MAC": "Arrancar aunque otro equipo responda en esta IP o MAC",
+  "Only to test how clients handle a conflict: two devices with one address break each other's traffic.":
+    "Solo para probar cómo manejan los clientes un conflicto: dos equipos con una misma dirección se rompen el tráfico entre sí.",
+  "Network changes apply when the camera restarts (RN-09). Its IP and MAC are probed on the LAN before use.":
+    "Los cambios de red se aplican cuando la cámara se reinicia (RN-09). Su IP y su MAC se sondean en la LAN antes de usarlas.",
 };

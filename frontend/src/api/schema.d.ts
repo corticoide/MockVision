@@ -781,6 +781,15 @@ export interface components {
             addrs: string[] | null;
             default: boolean;
             gateway?: string;
+            /** @description Wi-Fi: macvlan cameras cannot use it; ipvlan ones can (D27) */
+            wireless?: boolean;
+        };
+        /** @description The node's access to its own macvlan cameras (D26). */
+        Bridge: {
+            enabled: boolean;
+            interface?: string;
+            parent?: string;
+            error?: string;
         };
         CameraCounts: {
             total: number;
@@ -800,7 +809,10 @@ export interface components {
             mem_total: number;
             default_interface: string;
             default_gateway: string;
+            /** @description The interface cameras attach to by default */
             parent_interface: string;
+            /** @description What an empty parent interface in the settings means: MOCKVISION_PARENT_IF, else the default route's interface */
+            default_parent?: string;
             interfaces: components["schemas"]["Interface"][] | null;
             cameras: components["schemas"]["CameraCounts"];
             /** @description Where the panel and the API listen (D63) */
@@ -809,6 +821,9 @@ export interface components {
                 all_interfaces: boolean;
                 urls: string[];
             };
+            bridge?: components["schemas"]["Bridge"];
+            /** @description The node's DNS servers */
+            dns?: string[];
             /** Format: date-time */
             started_at: string;
         };
@@ -822,6 +837,8 @@ export interface components {
             max_jobs: number;
             /** @description Bound of each step of a job (D72) */
             job_step_timeout_seconds: number;
+            /** @description Let the node reach its macvlan cameras through an extra interface (D26); off by default */
+            node_bridge?: boolean;
         };
         SettingsPatch: {
             max_cameras?: number;
@@ -831,6 +848,7 @@ export interface components {
             events_retention_days?: number;
             max_jobs?: number;
             job_step_timeout_seconds?: number;
+            node_bridge?: boolean;
         };
         NodeMetrics: {
             /** Format: date-time */
@@ -1097,6 +1115,17 @@ export interface components {
             netns?: string;
             pid?: number;
             retries: number;
+            /** @description The address the camera holds */
+            ip?: string;
+            /**
+             * @description factory: DHCP found no server and the camera took the profile's address (D24)
+             * @enum {string}
+             */
+            ip_source?: "static" | "dhcp" | "factory";
+            /** @description The MAC it answers with while running: its own, or the node's with ipvlan */
+            mac?: string;
+            /** @description Its outbound firewall is in place */
+            firewall?: boolean;
             /** @description Saved changes a running camera applies when it restarts (RN-09). */
             pending_restart: ("network" | "protocols")[];
         };
@@ -1144,15 +1173,18 @@ export interface components {
             requests: number;
         };
         Network: {
-            mode: string;
+            /** @enum {string} */
+            mode: "macvlan" | "ipvlan";
             parent: string;
             mac: string;
-            ip_mode: string;
+            /** @enum {string} */
+            ip_mode: "static" | "dhcp";
             ip: string;
             netmask: string;
             prefix: number;
             gateway: string;
             dns: string[];
+            force: boolean;
         };
         Camera: {
             id: string;
@@ -1214,8 +1246,20 @@ export interface components {
             /** @description The whole network identity; a running camera applies it when it restarts (RN-09). */
             network?: components["schemas"]["NetworkInput"];
         };
-        /** @description Empty fields take the node's defaults. When editing, an empty MAC keeps the current one and default_mac goes back to the one derived from the camera ID. No DNS servers means the node's. */
+        /** @description Empty fields take the node's defaults. When editing, an empty MAC keeps the current one and default_mac goes back to the one derived from the camera ID; an empty mode or ip_mode and a missing force keep theirs. No DNS servers means the node's (or the lease's with DHCP). */
         NetworkInput: {
+            /**
+             * @description macvlan (default): the camera's own MAC. ipvlan: the node's MAC, for Wi-Fi and switches that limit MACs (D27)
+             * @enum {string}
+             */
+            mode?: "macvlan" | "ipvlan";
+            /**
+             * @description dhcp: the camera leases its address, and takes the profile's factory one when no server answers (D24). Not with ipvlan
+             * @enum {string}
+             */
+            ip_mode?: "static" | "dhcp";
+            /** @description Start even if another device answers on the camera's IP or MAC (D14); off by default */
+            force?: boolean;
             parent?: string;
             mac?: string;
             default_mac?: boolean;
