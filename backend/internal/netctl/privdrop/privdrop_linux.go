@@ -6,7 +6,6 @@
 package privdrop
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -25,7 +24,7 @@ func Drop(uid, gid int) error {
 	if uid <= 0 || gid <= 0 {
 		return fmt.Errorf("privdrop: refusing to switch to uid %d gid %d", uid, gid)
 	}
-	if err := allThreads(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); err != nil {
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1); err != nil {
 		return fmt.Errorf("privdrop: no_new_privs: %w", err)
 	}
 	last, err := lastCap()
@@ -34,12 +33,12 @@ func Drop(uid, gid int) error {
 	}
 	if os.Geteuid() == 0 {
 		for c := 0; c <= last; c++ {
-			if err := allThreads(unix.SYS_PRCTL, unix.PR_CAPBSET_DROP, uintptr(c), 0); err != nil && !errors.Is(err, unix.EINVAL) {
+			if err := allThreads(unix.SYS_PRCTL, unix.PR_CAPBSET_DROP, uintptr(c)); err != nil && !errors.Is(err, unix.EINVAL) {
 				return fmt.Errorf("privdrop: drop bounding capability %d: %w", c, err)
 			}
 		}
 	}
-	if err := allThreads(unix.SYS_PRCTL, unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0); err != nil && !errors.Is(err, unix.EINVAL) {
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL); err != nil && !errors.Is(err, unix.EINVAL) {
 		return fmt.Errorf("privdrop: clear ambient capabilities: %w", err)
 	}
 	if err := syscall.Setgroups([]int{}); err != nil {
@@ -55,7 +54,7 @@ func Drop(uid, gid int) error {
 	// survives it, so clear it explicitly.
 	hdr := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
 	var data [2]unix.CapUserData
-	if err := allThreads(unix.SYS_CAPSET, uintptr(unsafe.Pointer(&hdr)), uintptr(unsafe.Pointer(&data[0])), 0); err != nil {
+	if err := allThreads(unix.SYS_CAPSET, uintptr(unsafe.Pointer(&hdr)), uintptr(unsafe.Pointer(&data[0]))); err != nil {
 		return fmt.Errorf("privdrop: clear inheritable capabilities: %w", err)
 	}
 	return Verify()
@@ -71,7 +70,7 @@ func DropBounding() error {
 		return err
 	}
 	for c := 0; c <= last; c++ {
-		if err := allThreads(unix.SYS_PRCTL, unix.PR_CAPBSET_DROP, uintptr(c), 0); err != nil && !errors.Is(err, unix.EINVAL) {
+		if err := allThreads(unix.SYS_PRCTL, unix.PR_CAPBSET_DROP, uintptr(c)); err != nil && !errors.Is(err, unix.EINVAL) {
 			return fmt.Errorf("privdrop: drop bounding capability %d: %w", c, err)
 		}
 	}
@@ -85,17 +84,18 @@ func Harden(uid, gid int) error {
 	if os.Getuid() != uid || os.Geteuid() != uid || os.Getgid() != gid || os.Getegid() != gid {
 		return fmt.Errorf("privdrop: running as uid %d gid %d, expected %d and %d", os.Geteuid(), os.Getegid(), uid, gid)
 	}
-	if err := allThreads(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); err != nil {
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1); err != nil {
 		return fmt.Errorf("privdrop: no_new_privs: %w", err)
 	}
-	if err := allThreads(unix.SYS_PRCTL, unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0); err != nil && !errors.Is(err, unix.EINVAL) {
+	if err := allThreads(unix.SYS_PRCTL, unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL); err != nil && !errors.Is(err, unix.EINVAL) {
 		return fmt.Errorf("privdrop: clear ambient capabilities: %w", err)
 	}
 	return Verify()
 }
 
-func allThreads(trap, a1, a2, a3 uintptr) error {
-	_, _, errno := syscall.AllThreadsSyscall(trap, a1, a2, a3)
+// allThreads makes a system call on every thread of the process.
+func allThreads(trap, a1, a2 uintptr) error {
+	_, _, errno := syscall.AllThreadsSyscall(trap, a1, a2, 0)
 	if errno == syscall.ENOTSUP {
 		return errors.New("the binary was built with cgo; build it with CGO_ENABLED=0")
 	}
@@ -115,65 +115,6 @@ func lastCap() (int, error) {
 		return 0, fmt.Errorf("privdrop: cap_last_cap: %w", err)
 	}
 	return n, nil
-}
-
-// Status is the privilege state of a process, from /proc/<pid>/status.
-type Status struct {
-	Uid, Gid                       string
-	CapInh, CapPrm, CapEff, CapBnd string
-	CapAmb                         string
-	NoNewPrivs                     string
-}
-
-// None reports whether the process holds no capability at all.
-func (s Status) None() bool {
-	for _, v := range []string{s.CapInh, s.CapPrm, s.CapEff, s.CapBnd, s.CapAmb} {
-		if strings.Trim(v, "0") != "" {
-			return false
-		}
-	}
-	return true
-}
-
-// ReadStatus parses /proc/<pid>/status; pid 0 means the current process.
-func ReadStatus(pid int) (Status, error) {
-	path := "/proc/self/status"
-	if pid > 0 {
-		path = fmt.Sprintf("/proc/%d/status", pid)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return Status{}, err
-	}
-	defer f.Close()
-	var s Status
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(sc.Text(), ":")
-		if !ok {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		switch k {
-		case "Uid":
-			s.Uid = v
-		case "Gid":
-			s.Gid = v
-		case "CapInh":
-			s.CapInh = v
-		case "CapPrm":
-			s.CapPrm = v
-		case "CapEff":
-			s.CapEff = v
-		case "CapBnd":
-			s.CapBnd = v
-		case "CapAmb":
-			s.CapAmb = v
-		case "NoNewPrivs":
-			s.NoNewPrivs = v
-		}
-	}
-	return s, sc.Err()
 }
 
 // Verify checks that the current process and all its threads hold no
@@ -202,12 +143,28 @@ func Verify() error {
 	return nil
 }
 
-func readTaskStatus(tid int) (Status, error) {
+// threadStatus is the privilege state of a thread, from its /proc status.
+type threadStatus struct {
+	CapInh, CapPrm, CapEff, CapBnd, CapAmb string
+	NoNewPrivs                             string
+}
+
+// None reports whether the thread holds no capability at all.
+func (s threadStatus) None() bool {
+	for _, v := range []string{s.CapInh, s.CapPrm, s.CapEff, s.CapBnd, s.CapAmb} {
+		if strings.Trim(v, "0") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func readTaskStatus(tid int) (threadStatus, error) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/self/task/%d/status", tid))
 	if err != nil {
-		return Status{}, err
+		return threadStatus{}, err
 	}
-	var s Status
+	var s threadStatus
 	for _, line := range strings.Split(string(b), "\n") {
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {

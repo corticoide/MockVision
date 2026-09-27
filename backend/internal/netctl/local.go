@@ -42,7 +42,7 @@ func NewLocalRuntime(exe string, log *slog.Logger) *LocalRuntime {
 }
 
 // Kind implements Runtime.
-func (l *LocalRuntime) Kind() string { return "local" }
+func (l *LocalRuntime) Kind() string { return KindLocal }
 
 // Exits implements Runtime.
 func (l *LocalRuntime) Exits() <-chan Exit { return l.exits }
@@ -145,7 +145,6 @@ func (l *LocalRuntime) Live(context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// Shutdown stops every camera.
 // SetAddress implements Runtime; local cameras answer on 127.0.0.1 and
 // never lease an address.
 func (l *LocalRuntime) SetAddress(context.Context, AddressSpec) error {
@@ -161,6 +160,7 @@ func (l *LocalRuntime) SetBridge(context.Context, BridgeSpec) (BridgeState, erro
 	return BridgeState{}, nil
 }
 
+// Shutdown stops every camera.
 func (l *LocalRuntime) Shutdown() {
 	ids, _ := l.Live(context.Background())
 	for _, id := range ids {

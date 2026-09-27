@@ -153,7 +153,7 @@ func TestMasks(t *testing.T) {
 			t.Errorf("MaskToPrefix(%q) = %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "255.0.255.0", "33", "abc"} {
+	for _, bad := range []string{"", "255.0.255.0", "33", "abc", "24abc", "-1"} {
 		if _, err := MaskToPrefix(bad); err == nil {
 			t.Errorf("MaskToPrefix(%q) should fail", bad)
 		}
@@ -163,6 +163,18 @@ func TestMasks(t *testing.T) {
 	}
 	if got := LastAddr(netip.MustParsePrefix("10.1.2.0/23")); got.String() != "10.1.3.255" {
 		t.Errorf("LastAddr = %s", got)
+	}
+}
+
+func TestGatewayIn(t *testing.T) {
+	ip := netip.MustParseAddr("10.1.0.50")
+	if gw, ok := GatewayIn(ip, 24, "10.1.0.1"); !ok || gw.String() != "10.1.0.1" {
+		t.Fatalf("router in the subnet: %v %v", gw, ok)
+	}
+	for _, bad := range []string{"", "10.2.0.1", "10.1.0.50", "fe80::1", "router"} {
+		if gw, ok := GatewayIn(ip, 24, bad); ok {
+			t.Errorf("GatewayIn(%q) = %v, want none", bad, gw)
+		}
 	}
 }
 

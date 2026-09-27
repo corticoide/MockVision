@@ -78,10 +78,7 @@ func (s *Service) storeAsset(ctx context.Context, data []byte, info media.ImageI
 		ID: ulid.Make().String(), Sha256: sha, Kind: "image", Mime: info.MIME, Width: int64(info.Width), Height: int64(info.Height),
 		Size: int64(len(data)), Filename: filename, Builtin: store.Int(builtin), CreatedAt: time.Now().UnixMilli(),
 	}
-	err := s.store.W().InsertAsset(ctx, db.InsertAssetParams{
-		ID: row.ID, Sha256: row.Sha256, Kind: row.Kind, Mime: row.Mime, Width: row.Width, Height: row.Height,
-		Size: row.Size, Filename: row.Filename, Builtin: row.Builtin, CreatedAt: row.CreatedAt,
-	})
+	err := s.store.W().InsertAsset(ctx, db.InsertAssetParams(row))
 	if err != nil {
 		if store.IsUnique(err) {
 			if existing, err := s.store.R().GetAssetBySHA256(ctx, sha); err == nil {
@@ -518,9 +515,12 @@ func (s *Service) regenerateStreams(ctx context.Context, id string) {
 		s.log.Warn("cannot regenerate streams", "camera", id, "error", err)
 		return
 	}
-	if ss := s.session(id); ss != nil && ss.active() {
-		if err := ss.conn().Request(ctx, ipc.TypeReload, ipc.Reload{Streams: streams}, nil); err != nil {
-			s.log.Warn("camera did not reload its streams", "camera", id, "error", err)
+	// A camera already serving these streams keeps its viewers connected.
+	if ss := s.session(id); ss != nil && !ss.serves(streams) {
+		if s.tellCamera(ctx, id, ipc.TypeReload, ipc.Reload{Streams: streams}) {
+			ss.mu.Lock()
+			ss.streams = streams
+			ss.mu.Unlock()
 		}
 	}
 	if v, err := s.GetCamera(ctx, id); err == nil {

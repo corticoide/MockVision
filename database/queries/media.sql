@@ -53,3 +53,6 @@ WHERE renditions.created_at < @before
 
 -- name: DeleteRendition :exec
 DELETE FROM renditions WHERE id = @id;
+
+-- name: ListRenditionStates :many
+SELECT id, status, error FROM renditions;

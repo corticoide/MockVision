@@ -164,29 +164,34 @@ func (r *Runner) Run(ctx context.Context) {
 }
 
 func (r *Runner) dispatch(ctx context.Context) {
+	if r.freeSlots() <= 0 {
+		return
+	}
+	// The queue is read without the lock, which cancels, answers and the
+	// progress of running jobs take; each job is checked again under it.
+	rows, err := r.cfg.Store.R().ListJobsByStatus(ctx, db.ListJobsByStatusParams{Status: string(Queued), Limit: int64(r.freeSlots())})
+	if err != nil {
+		r.cfg.Log.Warn("cannot read the job queue", "error", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopping {
 		return
 	}
-	// A job waiting for an answer holds no slot: a question left open
-	// must not hold back the encodings cameras wait for.
-	busy := 0
-	for _, ex := range r.running {
-		if ex.job.Status != Waiting {
-			busy++
-		}
-	}
-	free := r.cfg.MaxRunning() - busy
-	if free <= 0 {
-		return
-	}
-	rows, err := r.cfg.Store.R().ListJobsByStatus(ctx, db.ListJobsByStatusParams{Status: string(Queued), Limit: int64(free)})
-	if err != nil {
-		r.cfg.Log.Warn("cannot read the job queue", "error", err)
-		return
-	}
+	free := r.freeSlotsLocked()
 	for _, row := range rows {
+		if free <= 0 {
+			return
+		}
+		// A cancel may have come since the queue was read.
+		row, err := r.cfg.Store.R().GetJob(ctx, row.ID)
+		if err != nil || Status(row.Status) != Queued {
+			continue
+		}
 		j := jobFrom(row)
 		kind, ok := r.kinds[j.Type]
 		if !ok {
@@ -212,7 +217,31 @@ func (r *Runner) dispatch(ctx context.Context) {
 		r.running[j.ID] = ex
 		r.wg.Add(1)
 		go r.execute(jctx, ex, kind)
+		free--
 	}
+}
+
+// freeSlots is how many more jobs may run now: none while stopping.
+func (r *Runner) freeSlots() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopping {
+		return 0
+	}
+	return r.freeSlotsLocked()
+}
+
+// freeSlotsLocked is freeSlots with r.mu held. A job waiting for an answer
+// holds no slot: a question left open must not hold back the encodings
+// cameras wait for.
+func (r *Runner) freeSlotsLocked() int {
+	busy := 0
+	for _, ex := range r.running {
+		if ex.job.Status != Waiting {
+			busy++
+		}
+	}
+	return r.cfg.MaxRunning() - busy
 }
 
 func (r *Runner) execute(ctx context.Context, ex *execution, kind Kind) {

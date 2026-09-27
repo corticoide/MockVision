@@ -84,6 +84,9 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 		if spec.Mode == string(domain.NetIPvlan) && (errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP)) {
 			return res, errorf(CodeUnsupported, "this kernel has no ipvlan support; use macvlan")
 		}
+		if errors.Is(err, unix.EBUSY) {
+			return res, parentBusy(spec.Parent, spec.Mode)
+		}
 		if errors.Is(err, unix.EADDRINUSE) {
 			return res, errorf(CodeMACInUse, "%s", localMACConflict(mac, spec.Parent))
 		}
@@ -180,7 +183,20 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 	if err != nil {
 		return nil, err
 	}
-	if !spec.SkipProbe {
+	want := &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(a.Prefix, 32)}
+	addrs, err := nh.AddrList(eth, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, err
+	}
+	// An address the interface already has is the camera's own: a renewal
+	// that changes the prefix or the router is not probed again.
+	held := false
+	for _, old := range addrs {
+		if old.IP.Equal(want.IP) {
+			held = true
+		}
+	}
+	if !spec.SkipProbe && !held {
 		probeNS, probeIf, probeMAC := ns.fd, ifindex, mac
 		if spec.Mode == string(domain.NetIPvlan) {
 			hh, err := netlink.NewHandleAt(host)
@@ -207,11 +223,6 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 		case err != nil:
 			return nil, fmt.Errorf("ARP probe: %w", err)
 		}
-	}
-	want := &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(a.Prefix, 32)}
-	addrs, err := nh.AddrList(eth, netlink.FAMILY_V4)
-	if err != nil {
-		return nil, err
 	}
 	have := false
 	for _, old := range addrs {
@@ -255,6 +266,16 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 		}()
 	}
 	return warnings, nil
+}
+
+// parentBusy explains an EBUSY from the kernel: a network card takes
+// macvlan or ipvlan children, not both, and one in a bridge or a bond
+// takes neither.
+func parentBusy(parent, mode string) *Error {
+	if mode == string(domain.NetIPvlan) {
+		return errorf(CodeParentBusy, "%s cannot take an ipvlan interface: it already has macvlan interfaces (cameras or the node bridge), or belongs to a bridge or a bond", parent)
+	}
+	return errorf(CodeParentBusy, "%s cannot take a macvlan interface: it already has ipvlan cameras, or belongs to a bridge or a bond", parent)
 }
 
 // localMACConflict describes a MAC another interface on the parent has.

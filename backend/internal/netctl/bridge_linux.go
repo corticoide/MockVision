@@ -1,6 +1,7 @@
 package netctl
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -62,6 +63,9 @@ func createBridge(host netns.NsHandle, parent string) (*bridge, error) {
 		Mode:      netlink.MACVLAN_MODE_BRIDGE,
 	}
 	if err := h.LinkAdd(mv); err != nil {
+		if errors.Is(err, unix.EBUSY) {
+			return nil, parentBusy(parent, "macvlan")
+		}
 		return nil, fmt.Errorf("create %s: %w", bridgeName, err)
 	}
 	if b.link, err = h.LinkByName(bridgeName); err != nil {
@@ -80,6 +84,15 @@ func createBridge(host netns.NsHandle, parent string) (*bridge, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// addrs lists the node addresses the bridge routes from.
+func (b *bridge) addrs() []string {
+	out := make([]string, len(b.nodeIPs))
+	for i, p := range b.nodeIPs {
+		out[i] = p.String()
+	}
+	return out
 }
 
 // remove deletes the bridge, and the routes through it with it.

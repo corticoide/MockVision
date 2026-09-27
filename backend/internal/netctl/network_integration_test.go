@@ -270,6 +270,18 @@ func TestFirewall(t *testing.T) {
 	if err := dial(ns.fd, "10.96.0.20:9001"); err != nil {
 		t.Fatalf("the new target is still refused: %v", err)
 	}
+	// A DNS server is reachable on port 53 only.
+	listen(t, dev.fd, "10.96.0.20:53")
+	if err := dial(ns.fd, "10.96.0.20:53"); err == nil {
+		t.Fatal("the camera reached port 53 of a host that is not its DNS server")
+	}
+	fw.DNS = []string{"10.96.0.20"}
+	if err := applyFirewall(int(ns.fd), spec.Sockets, false, fw); err != nil {
+		t.Fatal(err)
+	}
+	if err := dial(ns.fd, "10.96.0.20:53"); err != nil {
+		t.Fatalf("the camera cannot reach its DNS server: %v", err)
+	}
 }
 
 // A DHCP camera's socket broadcasts before the camera has an address, and

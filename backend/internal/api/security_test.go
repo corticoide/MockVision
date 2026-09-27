@@ -135,7 +135,7 @@ func TestWebSocketEndsWithItsCredential(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { c.CloseNow() })
+		t.Cleanup(func() { _ = c.CloseNow() })
 		return c
 	}
 	ended := func(c *websocket.Conn, what string) {

@@ -116,11 +116,15 @@ type Configure struct {
 }
 
 // Reload replaces parts of the configuration; nil fields stay as they are.
+// Targets is a pointer because a camera may be left without any: an empty
+// list must reach it, and would vanish as omitempty.
 type Reload struct {
 	Streams []Stream       `json:"streams,omitempty"`
-	Targets []Target       `json:"targets,omitempty"`
+	Targets *[]Target      `json:"targets,omitempty"`
 	Users   []engine.User  `json:"users,omitempty"`
 	State   map[string]any `json:"state,omitempty"`
+	// DNS replaces the camera's DNS servers, after a lease brought others.
+	DNS []string `json:"dns,omitempty"`
 }
 
 // Endpoint is where an engine listens.

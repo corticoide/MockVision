@@ -1,8 +1,8 @@
 package app
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 )
 
 // CameraFilter selects cameras; empty fields match every camera. Query
@@ -35,7 +36,8 @@ func (f CameraFilter) Match(c *CameraView) bool {
 		return false
 	}
 	if q := strings.ToLower(strings.TrimSpace(f.Query)); q != "" {
-		fields := append([]string{c.Name, c.Network.IP, c.Network.MAC, c.Serial}, c.Tags...)
+		// The address it holds, as the panel shows: a DHCP camera's lease.
+		fields := append([]string{c.Name, cmp.Or(c.Status.IP, c.Network.IP), c.Network.MAC, c.Serial}, c.Tags...)
 		return slices.ContainsFunc(fields, func(s string) bool { return strings.Contains(strings.ToLower(s), q) })
 	}
 	return true
@@ -87,7 +89,8 @@ func (s *Service) BulkCameras(ctx context.Context, actor Actor, in BulkInput) ([
 	case BulkRestart:
 		op = func(ctx context.Context, id string) (*CameraView, error) { return s.RestartCamera(ctx, actor, id) }
 	case BulkDelete:
-		op = func(ctx context.Context, id string) (*CameraView, error) { return nil, s.DeleteCamera(ctx, actor, id) }
+		// A deleted camera has no view left.
+		op = func(ctx context.Context, id string) (*CameraView, error) { return nil, s.DeleteCamera(ctx, actor, id) } //nolint:unparam // every action has this shape
 	case BulkClone:
 		// One at a time: each copy takes the next free name and address.
 		workers = 1
@@ -146,11 +149,10 @@ func (s *Service) cloneNext(ctx context.Context, actor Actor, id string, start b
 		return nil, err
 	}
 	in := CloneCameraInput{Name: name, Start: start, Network: NetworkInput{
-		Mode: b.net.Mode, IPMode: b.net.IpMode, Parent: b.net.ParentIf, Netmask: b.net.Netmask, Gateway: b.net.Gateway,
+		Mode: b.net.Mode, IPMode: b.net.IpMode, Parent: b.net.ParentIf, Netmask: b.net.Netmask, Gateway: b.net.Gateway, DNS: b.dns(),
 	}}
-	_ = json.Unmarshal([]byte(b.net.DnsJson), &in.Network.DNS)
 	// A DHCP copy leases its own address.
-	if s.rt.Kind() != "local" && b.net.IpMode != string(domain.IPDHCP) {
+	if s.rt.Kind() != netctl.KindLocal && b.net.IpMode != string(domain.IPDHCP) {
 		ip, err := s.nextFreeIP(ctx, b.net.Ip, b.net.Netmask)
 		if err != nil {
 			return nil, err

@@ -8,12 +8,14 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 )
 
@@ -136,7 +138,7 @@ func (c *dhcpClient) acquire(ctx context.Context) (*dhcpv4.DHCPv4, error) {
 			lastErr = err
 			continue
 		}
-		if _, err := c.check(ack); err != nil {
+		if err := c.check(ack); err != nil {
 			lastErr = err
 			continue
 		}
@@ -183,8 +185,10 @@ func (c *dhcpClient) keep(ctx context.Context, ack *dhcpv4.DHCPv4) {
 			c.report(ipc.TypeDHCPLost, ipc.DHCPStatus{Reason: err.Error()})
 			return
 		}
-		if !next.YourIPAddr.Equal(ack.YourIPAddr) || c.lease(next).Prefix != c.lease(ack).Prefix {
-			c.report(ipc.TypeDHCPLease, c.lease(next))
+		// The service acts on any change: another address restarts the
+		// camera, another prefix, router or DNS server is applied in place.
+		if l := c.lease(next); !sameLease(l, c.lease(ack)) {
+			c.report(ipc.TypeDHCPLease, l)
 		}
 		c.mu.Lock()
 		c.bound = next
@@ -210,7 +214,7 @@ func (c *dhcpClient) renew(ctx context.Context, ack *dhcpv4.DHCPv4, rebind, expi
 		wait = max(min(wait, time.Minute), time.Second)
 		next, err := c.exchange(ctx, req, to, wait, dhcpv4.MessageTypeAck)
 		if err == nil {
-			if _, err := c.check(next); err != nil {
+			if err := c.check(next); err != nil {
 				return nil, err
 			}
 			return next, nil
@@ -271,13 +275,18 @@ func (c *dhcpClient) exchange(ctx context.Context, msg *dhcpv4.DHCPv4, to *net.U
 }
 
 // check validates what a server leased before it reaches the service.
-func (c *dhcpClient) check(ack *dhcpv4.DHCPv4) (ipc.Lease, error) {
-	l := c.lease(ack)
-	ip, err := netip.ParseAddr(l.IP)
+func (c *dhcpClient) check(ack *dhcpv4.DHCPv4) error {
+	ip, err := netip.ParseAddr(ack.YourIPAddr.String())
 	if err != nil || !ip.Is4() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
-		return l, fmt.Errorf("the server leased an unusable address %q", l.IP)
+		return fmt.Errorf("the server leased an unusable address %q", ack.YourIPAddr)
 	}
-	return l, nil
+	return nil
+}
+
+// sameLease reports whether two leases give the camera the same
+// addressing; the lease time and the server do not count.
+func sameLease(a, b ipc.Lease) bool {
+	return a.IP == b.IP && a.Prefix == b.Prefix && a.Router == b.Router && slices.Equal(a.DNS, b.DNS)
 }
 
 // lease turns an ACK into what the service needs.
@@ -292,7 +301,7 @@ func (c *dhcpClient) lease(ack *dhcpv4.DHCPv4) ipc.Lease {
 		l.Router = r[0].String()
 	}
 	for _, d := range ack.DNS() {
-		if d.To4() != nil && len(l.DNS) < 3 {
+		if d.To4() != nil && len(l.DNS) < domain.MaxDNS {
 			l.DNS = append(l.DNS, d.String())
 		}
 	}
