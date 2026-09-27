@@ -1,6 +1,7 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type CreateCamera, errorMessage } from "@/api/client";
 import { useAssets, useCreateCamera, useNode, useProfile, useProfiles, useTargets } from "@/api/queries";
+import { NetworkModeFields } from "@/components/NetworkModeFields";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/card";
@@ -8,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
 import { codecLabel, streamLabel } from "@/lib/media";
+import { defaultParent, isWireless } from "@/lib/network";
 import { navigate } from "@/lib/router";
 
 export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -48,13 +50,18 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
   useEffect(() => {
     if (!profileKey && available.length > 0) setProfileKey(`${available[0].profile_id}@${available[0].version}`);
   }, [available, profileKey]);
+  // A profile, once chosen and loaded, brings its stream defaults and its
+  // factory account; what is typed afterwards stays.
+  const applied = useRef("");
   useEffect(() => {
+    if (!profile || `${profile.profile_id}@${profile.version}` !== profileKey || applied.current === profileKey) return;
+    applied.current = profileKey;
     if (stream) {
       setResolution(stream.default.resolution);
       setCodec(stream.default.codec);
     }
-    if (profile && !username) setUsername(profile.factory_users[0]?.username ?? "admin");
-  }, [stream, profile, username]);
+    setUsername(profile.factory_users[0]?.username ?? "admin");
+  }, [profile, stream, profileKey]);
   useEffect(() => {
     if (open) {
       setFieldErrors({});
@@ -65,8 +72,7 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
 
   const local = node?.runtime === "local";
   // On Wi-Fi only ipvlan works: suggest it when the default parent is one.
-  const parentWireless = node?.interfaces?.find((i) => i.name === (node?.parent_interface || node?.default_interface))?.wireless ?? false;
-  const netMode = mode || (parentWireless ? "ipvlan" : "macvlan");
+  const netMode = mode || (isWireless(node, defaultParent(node)) ? "ipvlan" : "macvlan");
   const dhcp = ipMode === "dhcp" && netMode !== "ipvlan";
 
   const submit = (e: FormEvent) => {
@@ -152,34 +158,15 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
           ) : (
             <>
-              <Field
-                label={t("Network mode")}
-                error={fieldErrors["network.mode"]}
-                hint={netMode === "ipvlan" ? t("The node's MAC: for Wi-Fi.") : t("Its own MAC: for wired networks.")}
-              >
-                <Select value={netMode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="macvlan">{t("macvlan — its own MAC (wired)")}</option>
-                  <option value="ipvlan">{t("ipvlan — the node's MAC (Wi-Fi)")}</option>
-                </Select>
-              </Field>
-              <Field
-                label={t("Addressing")}
-                error={fieldErrors["network.ip_mode"]}
-                hint={
-                  dhcp
-                    ? profile?.factory_ip
-                      ? t("Without a DHCP server it takes the factory IP, {ip}.", { ip: profile.factory_ip })
-                      : t("It asks the LAN's DHCP server.")
-                    : undefined
-                }
-              >
-                <Select value={dhcp ? "dhcp" : "static"} onChange={(e) => setIpMode(e.target.value)}>
-                  <option value="static">{t("Static IP")}</option>
-                  <option value="dhcp" disabled={netMode === "ipvlan"}>
-                    {t("DHCP")}
-                  </option>
-                </Select>
-              </Field>
+              <NetworkModeFields
+                value={{ mode: netMode, ipMode }}
+                onChange={(next) => {
+                  setMode(next.mode);
+                  setIpMode(next.ipMode);
+                }}
+                factoryIP={profile?.factory_ip}
+                errors={fieldErrors}
+              />
               {!dhcp && (
                 <>
                   <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>

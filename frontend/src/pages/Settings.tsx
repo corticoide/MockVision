@@ -110,7 +110,7 @@ function LimitsCard() {
             />
             <p className="text-xs text-muted">
               {t(
-                "A node cannot talk to the macvlan cameras on its own network card: players, recorders and targets on this machine would not reach them. This adds a bridge interface, mv-bridge, with a route to each camera. Off by default because it changes the node's network; ipvlan cameras are not reachable from the node either way.",
+                "Adds the mv-bridge interface so players, recorders and targets on this node reach its macvlan cameras. Off by default because it changes the node's network; ipvlan cameras stay out of reach either way.",
               )}
             </p>
             {node?.bridge?.enabled && <p className="text-xs text-ok">{t("Bridge active on {iface}.", { iface: node.bridge.parent ?? "" })}</p>}

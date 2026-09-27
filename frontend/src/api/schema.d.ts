@@ -789,6 +789,8 @@ export interface components {
             enabled: boolean;
             interface?: string;
             parent?: string;
+            /** @description The node's addresses on the parent the bridge routes from; it is set again when they change */
+            node_ips?: string[];
             error?: string;
         };
         CameraCounts: {
@@ -1107,6 +1109,9 @@ export interface components {
         CameraStatus: {
             /** @enum {string} */
             state: "stopped" | "provisioning" | "starting" | "running" | "degraded" | "restarting" | "stopping" | "error";
+            /** @description A stable word for the reason, which the panel explains in the user's language: ip_in_use, mac_in_use, no_interface, parent_busy, unsupported, invalid, dhcp_waiting, dhcp_no_factory, dhcp_factory_in_use, stream, config, launch, exited, no_hello, not_ready, config_rejected, camera_failed, no_heartbeat, admission, lease_restart or lease_lost. New codes may come; show reason when the code is unknown. */
+            reason_code?: string;
+            /** @description The reason in English */
             reason: string;
             /** Format: date-time */
             started_at: string | null;

@@ -244,7 +244,7 @@ function StreamForm({
           form.discard();
           setErrors({});
         }}
-        note={t("Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect (RN-09).")}
+        note={t("Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect.")}
       />
     </>
   );

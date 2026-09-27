@@ -126,7 +126,7 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note={t("The protocols come from the profile (RN-04). Changes apply when the camera restarts.")}
+          note={t("The protocols come from the profile. Changes apply when the camera restarts.")}
         />
       </div>
     </Card>

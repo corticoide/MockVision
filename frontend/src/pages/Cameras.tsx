@@ -12,6 +12,7 @@ import { plural, type Translate, useT } from "@/lib/i18n";
 import { Link, setSearch, useSearch } from "@/lib/router";
 import { formatBytes, formatPercent } from "@/lib/utils";
 import { cameraIP } from "@/lib/network";
+import { reasonText } from "@/lib/reasons";
 import { CloneDialog } from "./camera/dialogs";
 import { NewCameraDialog } from "./NewCameraDialog";
 
@@ -189,7 +190,7 @@ export function CamerasPage() {
                     </TD>
                     <TD>
                       <div className="flex items-center gap-2">
-                        <StateBadge state={c.status.state} reason={c.status.reason} />
+                        <StateBadge state={c.status.state} reason={reasonText(c.status, t)} />
                         {c.status.pending_restart.length > 0 && (
                           <Badge tone="warn" icon={<RotateCw />} title={t("Saved {what} changes apply after a restart", { what: c.status.pending_restart.join(" and ") })}>
                             {t("restart pending")}
@@ -197,7 +198,7 @@ export function CamerasPage() {
                         )}
                         {c.status.state === "error" && (
                           <span className="max-w-72 truncate text-xs text-error" title={c.status.reason}>
-                            {c.status.reason}
+                            {reasonText(c.status, t)}
                           </span>
                         )}
                       </div>
