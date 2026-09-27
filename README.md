@@ -17,8 +17,10 @@ the outside; it does not replace one.
 ## What the demo does
 
 - A camera created in the panel appears on the LAN with its own IP and MAC
-  (macvlan). Before taking the IP it runs an ARP probe, and it announces
-  itself with gratuitous ARP.
+  (macvlan), or with the node's MAC on Wi-Fi (ipvlan). It takes a static IP
+  or leases one by DHCP, falling back to its factory address as a real one
+  does. Before using its IP and MAC it probes the LAN for them, and it
+  announces itself with gratuitous ARP.
 - RTSP streams looped from a picture: main, sub and third, as the profile
   defines them, in H.264, H.265 or MJPEG. Each picture is encoded once per
   stream setting and the loop costs almost no CPU.
@@ -34,9 +36,11 @@ the outside; it does not replace one.
 
 - Linux on amd64 or arm64: Debian 12 or 13, Ubuntu 24.04 or later, or
   Raspberry Pi OS 64-bit. The kernel needs macvlan.
-- **A wired network.** macvlan gives every camera an extra MAC, and Wi-Fi
-  does not accept extra MACs. Switches with port security can block them
-  too. In a VM, the hypervisor must allow promiscuous mode or MAC changes.
+- **A wired network**, for cameras with their own MAC (macvlan): Wi-Fi
+  does not accept extra MACs, and switches with port security can block
+  them too. In a VM, the hypervisor must allow promiscuous mode or MAC
+  changes. On Wi-Fi, cameras use the node's MAC (ipvlan, kernel module
+  `ipvlan`) and a static IP.
 - Docker with Compose v2, or a native install with FFmpeg and systemd.
   Docker Desktop on Windows or macOS does not work, because it runs behind
   NAT.
@@ -92,8 +96,9 @@ latency.
 > **Test from another device.** Linux does not let a host reach its own
 > macvlan interfaces. The node therefore cannot open its cameras' streams,
 > and its cameras cannot deliver events to a receiver running on the node.
-> Put the client and the targets on other machines. The panel's snapshot
-> preview works anyway, because it does not use the network.
+> Put the client and the targets on other machines, or turn on **Settings →
+> Reach the cameras from this node** (see [Network](#network)). The panel's
+> snapshot preview works anyway, because it does not use the network.
 
 ### Automation with API tokens
 
@@ -140,6 +145,40 @@ camera switches to it without restarting.
   frame as a JPEG; over RTSP it carries at most 2040×2040 in multiples of 8.
 - A client that connects gets a keyframe at once, as from a real encoder.
 
+### Network
+
+The camera's **Network** tab, and the new-camera dialog, choose how it joins
+the LAN. Changes apply when the camera restarts; the tab shows the address
+it holds now and where it came from.
+
+- **Mode.** *macvlan* (the default) gives the camera a MAC of its own, as a
+  real device, on wired networks. *ipvlan* answers with the node's MAC: for
+  Wi-Fi, and for switch ports that allow one MAC. ipvlan cameras need a
+  static IP, since DHCP servers tell clients apart by their MAC.
+- **Addressing.** A static IP, or DHCP: the camera asks the LAN's server,
+  like a new camera out of the box, and renews its lease. When no server
+  answers within about 15 seconds it takes the factory address of its
+  profile (`192.168.5.190` for the demo profile), so a client in that subnet
+  finds it as it would a real one. It keeps asking; a later lease restarts
+  it on the new address. The DNS servers are the camera's own, else the
+  lease's, else the node's.
+- **Probes.** Before taking an IP the camera sends an ARP probe (RFC 5227).
+  Before taking a MAC it looks for it in the node's tables and interfaces,
+  asks for it over IPv6 and listens for a moment. An address in use stops
+  the start with the device that has it. **Start even if another device
+  answers** skips that, to test how clients handle a conflict; the kernel
+  still refuses a MAC another interface of the node has.
+- **Outbound firewall.** A camera connects only to the node's event targets
+  (their host names are resolved again every minute), its DNS servers and
+  DHCP. Answers to its clients, RTP from its own ports and loopback pass;
+  nothing else leaves. Clients reach a camera from anywhere, as a real one.
+- **Reaching the cameras from the node.** **Settings → Reach the cameras
+  from this node** adds a bridge interface, `mv-bridge`, and a route to each
+  macvlan camera, so players, recorders and targets on the node itself work.
+  The parent interface needs an IPv4 address. It is off by default because
+  it changes the node's network; ipvlan cameras are out of reach of the node
+  either way.
+
 ### Configuration
 
 `compose.yaml` passes the two settings most installs need. Others go in its
@@ -174,7 +213,7 @@ executable by the camera user (mode 0755): cameras start as that user.
 One binary runs as three kinds of process:
 
 ```
-mockvision run      root, 9 capabilities   network helper: namespaces, macvlan, ARP, launching cameras
+mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/ipvlan, probes, firewall, launching cameras
  └─ mockvision serve   uid mockvision, none   panel, REST API, WebSocket, SQLite, reconciler
      └─ FFmpeg, package validator   confined: seccomp and Landlock
  └─ mockvision camera  uid mockvision-cam, none   one per camera, in its network and PID namespaces
@@ -194,7 +233,9 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan, 
   files to its streams and what DNS and TLS need. It then serves the
   profile's engines (`rtsp`, `http-api`, `http-push`) and talks to the
   service in JSON lines; the service checks what it reports against the
-  profile.
+  profile. A DHCP camera leases its address itself, over a socket the helper
+  opened for it: it parses what servers send without privileges, the
+  service checks the lease and the helper sets it.
 - **FFmpeg**, which decodes uploaded pictures, and the **package validator**
   run confined too: FFmpeg reaches only the picture it reads and the
   rendition it writes, the validator no file at all. Neither can read the
@@ -220,7 +261,7 @@ or MAC on the LAN.
 | Command | What it runs |
 |---|---|
 | `make test` | `go vet`, unit tests and the panel's type check |
-| `make test-integration` | network namespaces and macvlan on a virtual link (root) |
+| `make test-integration` | network namespaces, macvlan, ipvlan, MAC probe, firewall, DHCP socket and bridge on a virtual link (root) |
 | `make e2e` | the demo's acceptance criteria on an isolated virtual LAN (root, iproute2, ffmpeg, curl, python3) |
 | `make e2e-compose` | the same criteria against the Docker image started with `compose.yaml` |
 | `make generate` | sqlc queries and the panel's API types from `openapi.yaml` |
