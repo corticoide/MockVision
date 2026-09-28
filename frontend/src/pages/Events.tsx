@@ -36,7 +36,7 @@ export function EventsPage() {
           <Empty title={t("Loading events…")} />
         ) : events.length === 0 ? (
           <Empty icon={<Activity />} title={t("No events yet")}>
-            {t('Start a camera linked to a target and press "Line crossing" in Cameras.')}
+            {t("Start a camera linked to a target and trigger an event from its page, or give it a random trigger.")}
           </Empty>
         ) : (
           <EventTable events={events} />

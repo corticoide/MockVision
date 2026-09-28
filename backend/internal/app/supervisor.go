@@ -563,7 +563,8 @@ func (ss *session) configure(ctx context.Context, conn *ipc.Conn, ip string) (*c
 }
 
 // sync sends a camera that just started what was edited while it started:
-// accounts, targets, parameters and, when their settings changed, streams.
+// accounts, targets, parameters, rules and triggers and, when their
+// settings changed, streams.
 func (ss *session) sync(ctx context.Context) {
 	s := ss.s
 	b, err := s.loadBundle(ctx, ss.id)
@@ -575,7 +576,7 @@ func (ss *session) sync(ctx context.Context) {
 		s.log.Warn("cannot bring the camera up to date", "camera", ss.id, "error", err)
 		return
 	}
-	s.tellCamera(ctx, ss.id, ipc.TypeReload, ipc.Reload{Users: cfg.Users, Targets: &cfg.Targets, State: cfg.State})
+	s.tellCamera(ctx, ss.id, ipc.TypeReload, ipc.Reload{Users: cfg.Users, Targets: &cfg.Targets, State: cfg.State, VCA: &cfg.VCA})
 	s.regenerateStreamsLater(ss.id)
 }
 
@@ -846,7 +847,7 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		if err := msg.Decode(&ev); err != nil {
 			return nil, err
 		}
-		s.recordEvent(ctx, ss.id, ev.Event)
+		s.recordEvent(ctx, ss.id, ev.Event, ev.TriggerID)
 	case ipc.TypeDelivery:
 		var d engine.DeliveryReport
 		if err := msg.Decode(&d); err != nil {
@@ -1135,6 +1136,7 @@ func (s *Service) buildConfigure(b *cameraBundle, streams []ipc.Stream, ip strin
 		return cfg, err
 	}
 	cfg.Targets = targets
+	cfg.VCA = vcaConfig(b)
 	return cfg, nil
 }
 

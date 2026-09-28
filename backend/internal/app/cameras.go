@@ -113,6 +113,9 @@ type cameraBundle struct {
 	streams []db.CameraStream
 	targets []db.ListCameraTargetsRow
 	status  *db.CameraStatus
+	// The camera's analytics: its rules and stored triggers, in order.
+	rules    []domain.Rule
+	triggers []domain.Trigger
 }
 
 func (s *Service) profileDoc(p db.Profile) (*profile.Document, error) {
@@ -160,6 +163,16 @@ func (s *Service) loadBundle(ctx context.Context, id string) (*cameraBundle, err
 	if b.targets, err = q.ListCameraTargets(ctx, id); err != nil {
 		return nil, err
 	}
+	rules, err := q.ListCameraRules(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	b.rules = rulesOf(rules)
+	triggers, err := q.ListCameraTriggers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	b.triggers = triggersOf(triggers)
 	if st, err := q.GetCameraStatus(ctx, id); err == nil {
 		b.status = &st
 	}
@@ -199,6 +212,14 @@ func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
 		return nil, err
 	}
 	statuses, err := q.ListCameraStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := q.ListAllRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	triggers, err := q.ListAllTriggers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +277,16 @@ func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
 	for _, st := range statuses {
 		if b := byID[st.CameraID]; b != nil {
 			b.status = &st
+		}
+	}
+	for _, r := range rules {
+		if b := byID[r.CameraID]; b != nil {
+			b.rules = append(b.rules, ruleOf(r))
+		}
+	}
+	for _, t := range triggers {
+		if b := byID[t.CameraID]; b != nil {
+			b.triggers = append(b.triggers, triggerOf(t))
 		}
 	}
 	return out, nil
@@ -414,7 +445,7 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 			ID: id, Name: in.Name, ProfileID: prof.ProfileID, ProfileVersion: prof.Version, Serial: serialFor(id, doc.Identity.Serial),
 			DesiredState: string(domain.DesiredStopped), Autostart: store.Int(autostart), TagsJson: string(tags), CreatedAt: now, UpdatedAt: now,
 		},
-		netw: netw, users: cu,
+		netw: netw, users: cu, rules: factoryRules(doc),
 	}
 	for _, key := range profile.SortedKeys(values) {
 		origin := "profile"
@@ -471,6 +502,10 @@ type newCamera struct {
 	users   []domain.CameraUser
 	streams []db.CameraStream
 	targets []db.ListCameraTargetsRow
+	// Rules and triggers come with their own IDs: a new camera has its
+	// profile's factory rules, a copy those of its source.
+	rules    []domain.Rule
+	triggers []domain.Trigger
 }
 
 // insertCamera stores a new camera and all it has in one transaction; the
@@ -506,6 +541,15 @@ func (s *Service) insertCamera(ctx context.Context, c newCamera) error {
 			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t.ID, EventTypesJson: t.EventTypesJson, OverridesJson: t.OverridesJson}); err != nil {
 				return err
 			}
+		}
+		if err := insertRules(ctx, q, id, c.rules); err != nil {
+			return err
+		}
+		if err := insertTriggers(ctx, q, id, c.triggers); err != nil {
+			return err
+		}
+		if err := q.MarkFactoryRulesApplied(ctx, id); err != nil {
+			return err
 		}
 		return q.UpsertCameraStatus(ctx, db.UpsertCameraStatusParams{CameraID: id, ActualState: string(domain.StateStopped), UpdatedAt: now})
 	})
@@ -841,12 +885,21 @@ func (s *Service) cameraView(b *cameraBundle, rendition func(id string) (db.List
 		Tags:         nonNil(tags),
 		Network: NetworkView{Mode: b.net.Mode, Parent: b.net.ParentIf, MAC: b.net.Mac, IPMode: b.net.IpMode, IP: b.net.Ip,
 			Netmask: b.net.Netmask, Prefix: prefix, Gateway: b.net.Gateway, DNS: nonNil(b.dns()), Force: store.Bool(b.net.Force)},
-		CreatedAt: store.Time(b.cam.CreatedAt),
-		UpdatedAt: store.Time(b.cam.UpdatedAt),
-		Users:     []UserView{},
-		Targets:   []TargetRef{},
-		Streams:   []StreamView{},
-		Endpoints: []EndpointView{},
+		CreatedAt:  store.Time(b.cam.CreatedAt),
+		UpdatedAt:  store.Time(b.cam.UpdatedAt),
+		Users:      []UserView{},
+		Targets:    []TargetRef{},
+		Streams:    []StreamView{},
+		Endpoints:  []EndpointView{},
+		Rules:      b.rules,
+		Triggers:   b.triggers,
+		EventTypes: cameraEvents(b.doc),
+	}
+	if v.Rules == nil {
+		v.Rules = []domain.Rule{}
+	}
+	if v.Triggers == nil {
+		v.Triggers = []domain.Trigger{}
 	}
 	v.Status = StatusView{State: string(domain.StateStopped)}
 	if b.status != nil {

@@ -2,12 +2,13 @@ import { ArrowLeft, CopyPlus, Play, RotateCcw, RotateCw, ScrollText, Square, Tra
 import { useState } from "react";
 import { type Camera, errorMessage } from "@/api/client";
 import { useCameraTopic } from "@/api/live";
-import { useCamera, useCameraAction, useDeleteCamera, useEvents, useTrigger } from "@/api/queries";
+import { useCamera, useCameraAction, useDeleteCamera, useEvents, useProfile } from "@/api/queries";
 import { LevelBadge, Mono, StateBadge } from "@/components/badges";
 import { EventTable } from "@/components/EventTable";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { useT } from "@/lib/i18n";
 import { Link, navigate } from "@/lib/router";
@@ -20,6 +21,8 @@ import { MediaTab } from "./MediaTab";
 import { NetworkTab } from "./NetworkTab";
 import { isRunning } from "./parts";
 import { ProtocolsTab } from "./ProtocolsTab";
+import { RulesTab } from "./RulesTab";
+import { ManualEventForm, TriggersTab } from "./TriggersTab";
 import { UsersTab } from "./UsersTab";
 
 const sections = [
@@ -27,6 +30,8 @@ const sections = [
   { id: "network", label: "Network" },
   { id: "protocols", label: "Protocols" },
   { id: "media", label: "Media" },
+  { id: "rules", label: "Rules" },
+  { id: "triggers", label: "Triggers" },
   { id: "users", label: "Users" },
   { id: "config", label: "Configuration" },
   { id: "events", label: "Events" },
@@ -76,6 +81,8 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         {current === "network" && <NetworkTab camera={camera} />}
         {current === "protocols" && <ProtocolsTab camera={camera} />}
         {current === "media" && <MediaTab camera={camera} />}
+        {current === "rules" && <RulesTab camera={camera} />}
+        {current === "triggers" && <TriggersTab camera={camera} />}
         {current === "users" && <UsersTab camera={camera} />}
         {current === "config" && <ConfigTab camera={camera} />}
         {current === "events" && <EventsTab camera={camera} />}
@@ -86,11 +93,11 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
 
 function Header({ camera }: { camera: Camera }) {
   const action = useCameraAction();
-  const trigger = useTrigger();
   const del = useDeleteCamera();
   const t = useT();
   const [cloning, setCloning] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [firing, setFiring] = useState(false);
   const state = camera.status.state;
   const running = isRunning(camera);
   const busy = ["provisioning", "starting", "stopping", "restarting"].includes(state) || action.isPending;
@@ -123,22 +130,8 @@ function Header({ camera }: { camera: Camera }) {
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!running || trigger.isPending}
-            title={t("Send a line-crossing event to the camera's targets")}
-            onClick={() =>
-              trigger.mutate(
-                { id: camera.id, type: "line_crossing" },
-                {
-                  onSuccess: () => toast(t("Line crossing sent from {name}", { name: camera.name }), "ok"),
-                  onError: (err) => toast(errorMessage(err), "error"),
-                },
-              )
-            }
-          >
-            <Zap /> {t("Line crossing")}
+          <Button size="sm" variant="secondary" disabled={!running} title={t("Send an event to the camera's targets")} onClick={() => setFiring(true)}>
+            <Zap /> {t("Trigger event")}
           </Button>
           {canStart ? (
             <Button size="sm" variant="primary" disabled={busy} onClick={() => run("start")}>
@@ -181,7 +174,25 @@ function Header({ camera }: { camera: Camera }) {
       </div>
       <CloneDialog camera={camera} open={cloning} onClose={() => setCloning(false)} />
       <ResetDialog camera={camera} open={resetting} onClose={() => setResetting(false)} />
+      <TriggerDialog camera={camera} open={firing} onClose={() => setFiring(false)} />
     </div>
+  );
+}
+
+/** A manual trigger from the header: the Triggers tab's form in a dialog. */
+function TriggerDialog({ camera, open, onClose }: { camera: Camera; open: boolean; onClose: () => void }) {
+  const t = useT();
+  const { data: profile } = useProfile(open ? { id: camera.profile.id, version: camera.profile.version } : null);
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t("Trigger an event on {name}", { name: camera.name })}
+      description={t("The camera sends it to its targets at once. What you leave empty, the camera makes up.")}
+      className="w-[640px]"
+    >
+      {profile ? <ManualEventForm key={String(open)} camera={camera} profile={profile} onSent={onClose} /> : <p className="text-[13px] text-muted">{t("Loading…")}</p>}
+    </Dialog>
   );
 }
 
@@ -221,15 +232,16 @@ function EventsTab({ camera }: { camera: Camera }) {
   const { data, isLoading, error } = useEvents(camera.id);
   const t = useT();
   const events = data?.items ?? [];
+  const triggerNames = Object.fromEntries(camera.triggers.map((x) => [x.id, x.name]));
   if (error) return <Notice tone="error">{errorMessage(error)}</Notice>;
   return (
     <Card>
       {isLoading ? (
         <Empty title={t("Loading events…")} />
       ) : events.length === 0 ? (
-        <Empty title={t("No events from this camera yet")}>{t('Press "Line crossing" while the camera runs.')}</Empty>
+        <Empty title={t("No events from this camera yet")}>{t('Press "Trigger event" while the camera runs, or add a random trigger.')}</Empty>
       ) : (
-        <EventTable events={events} showCamera={false} />
+        <EventTable events={events} showCamera={false} triggerNames={triggerNames} />
       )}
     </Card>
   );

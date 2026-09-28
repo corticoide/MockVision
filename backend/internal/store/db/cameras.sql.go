@@ -121,7 +121,7 @@ func (q *Queries) DeleteCameraUsers(ctx context.Context, cameraID string) error 
 }
 
 const getCamera = `-- name: GetCamera :one
-SELECT id, name, profile_id, profile_version, serial, desired_state, autostart, tags_json, created_at, updated_at FROM cameras WHERE id = ?1
+SELECT id, name, profile_id, profile_version, serial, desired_state, autostart, tags_json, created_at, updated_at, factory_rules_applied FROM cameras WHERE id = ?1
 `
 
 func (q *Queries) GetCamera(ctx context.Context, id string) (Camera, error) {
@@ -138,6 +138,7 @@ func (q *Queries) GetCamera(ctx context.Context, id string) (Camera, error) {
 		&i.TagsJson,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FactoryRulesApplied,
 	)
 	return i, err
 }
@@ -771,7 +772,7 @@ func (q *Queries) ListCameraUsers(ctx context.Context, cameraID string) ([]Camer
 }
 
 const listCameras = `-- name: ListCameras :many
-SELECT id, name, profile_id, profile_version, serial, desired_state, autostart, tags_json, created_at, updated_at FROM cameras ORDER BY name
+SELECT id, name, profile_id, profile_version, serial, desired_state, autostart, tags_json, created_at, updated_at, factory_rules_applied FROM cameras ORDER BY name
 `
 
 func (q *Queries) ListCameras(ctx context.Context) ([]Camera, error) {
@@ -794,6 +795,7 @@ func (q *Queries) ListCameras(ctx context.Context) ([]Camera, error) {
 			&i.TagsJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FactoryRulesApplied,
 		); err != nil {
 			return nil, err
 		}

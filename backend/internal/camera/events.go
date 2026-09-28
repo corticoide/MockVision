@@ -29,6 +29,9 @@ type eventBus struct {
 	subs    map[string]func(engine.Dispatch)
 	last    map[string]time.Time
 	targets []ipc.Target
+	// observe sees every event the camera emits before it goes out, so the
+	// counts a template reads include it.
+	observe func(engine.Event)
 }
 
 func newEventBus(rt *Runtime) *eventBus {
@@ -41,7 +44,14 @@ func (b *eventBus) setTargets(t []ipc.Target) {
 	b.mu.Unlock()
 }
 
+// Emit implements engine.Events.
 func (b *eventBus) Emit(ctx context.Context, e engine.Event) (engine.Event, error) {
+	return b.emit(ctx, e, "")
+}
+
+// emit logs an event with the service, naming the stored trigger behind it,
+// and hands it to the engines that deliver its transports.
+func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (engine.Event, error) {
 	spec, ok := b.rt.model.Doc.Events[e.Type]
 	if !ok {
 		return e, fmt.Errorf("the profile does not define event type %s", e.Type)
@@ -68,7 +78,10 @@ func (b *eventBus) Emit(ctx context.Context, e engine.Event) (engine.Event, erro
 	if e.At.IsZero() {
 		e.At = now
 	}
-	if err := b.rt.conn.Notify(ipc.TypeEvent, ipc.EventMsg{Event: e}); err != nil {
+	if b.observe != nil {
+		b.observe(e)
+	}
+	if err := b.rt.conn.Notify(ipc.TypeEvent, ipc.EventMsg{Event: e, TriggerID: triggerID}); err != nil {
 		return e, err
 	}
 

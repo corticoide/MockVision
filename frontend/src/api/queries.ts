@@ -17,7 +17,10 @@ import {
   type Job,
   type JobDetail,
   type JobPage,
+  type ManualEvent,
+  type RuleInput,
   type Settings,
+  type TriggerInput,
   type TargetInput,
   type TokenInput,
   type UpdateCamera,
@@ -300,17 +303,68 @@ export function usePatchConfig(id: string) {
   });
 }
 
+/** A manual trigger: the camera emits the event and delivers it. */
 export function useTrigger() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { id: string; type: string; direction?: "A->B" | "B->A" | "none" }) =>
+    mutationFn: async ({ id, ...body }: ManualEvent & { id: string }) =>
+      unwrap(await api.POST("/cameras/{id}/events", { params: { path: { id } }, body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["events"] }),
+  });
+}
+
+/** Emits one event of a stored trigger now, enabled or not. */
+export function useFireTrigger() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; trigger: string }) =>
+      unwrap(await api.POST("/cameras/{id}/triggers/{trigger}/actions/fire", { params: { path: { id: v.id, trigger: v.trigger } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["events"] }),
+  });
+}
+
+/** What a running camera counted, with its heat map at cols by rows cells
+ * (none for 0); refreshed while the tab is open. */
+export function useCameraAnalytics(id: string, cols: number, rows: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["cameras", id, "analytics", cols, rows],
+    queryFn: async () =>
       unwrap(
-        await api.POST("/cameras/{id}/events", {
-          params: { path: { id: v.id } },
-          body: { type: v.type, direction: v.direction },
+        await api.GET("/cameras/{id}/analytics", {
+          params: { path: { id }, query: cols > 0 ? { cols, rows } : {} },
         }),
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["events"] }),
+    enabled,
+    refetchInterval: 5000,
+    retry: false,
+  });
+}
+
+export function useResetAnalytics(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.POST("/cameras/{id}/analytics/actions/reset", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras", id, "analytics"] }),
+  });
+}
+
+export function useSetCameraRules(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (rules: RuleInput[]) => unwrap(await api.PUT("/cameras/{id}/rules", { params: { path: { id } }, body: { rules } })),
+    onSuccess: (camera) => {
+      patchCameraCache(qc, camera);
+      void qc.invalidateQueries({ queryKey: ["cameras", id, "analytics"] });
+    },
+  });
+}
+
+export function useSetCameraTriggers(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (triggers: TriggerInput[]) =>
+      unwrap(await api.PUT("/cameras/{id}/triggers", { params: { path: { id } }, body: { triggers } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
   });
 }
 

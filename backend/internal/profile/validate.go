@@ -111,8 +111,9 @@ func (v *validator) errorf(step, pointer, format string, args ...any) {
 	v.add(step, SeverityError, pointer, format, args...)
 }
 
-func (v *validator) warnf(step, pointer, format string, args ...any) {
-	v.add(step, SeverityWarning, pointer, format, args...)
+// warnf reports a warning; only the lint step has them.
+func (v *validator) warnf(pointer, format string, args ...any) {
+	v.add(StepLint, SeverityWarning, pointer, format, args...)
 }
 
 // Validate runs the document steps of the import pipeline: safe YAML read,
@@ -468,12 +469,60 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 		}
 		spec := doc.Events[typ]
 		if len(spec.Transports) == 0 {
-			v.warnf(StepLint, ptr, "event %s has no transport and cannot be enabled on a camera", typ)
+			v.warnf(ptr, "event %s has no transport and cannot be enabled on a camera", typ)
 		}
 		for _, t := range SortedKeys(spec.Transports) {
 			if !delivers[t] {
 				v.errorf(StepLint, ptr+"/transports/"+escapePointer(t), "no engine of this profile delivers %s; add an engine instance such as push: {engine: http-push@^1}", t)
 			}
+		}
+	}
+	v.lintVCA(doc)
+}
+
+// lintVCA checks that the analytics and their events agree: each kind of
+// rule raises some event, the events that come from a kind of rule have it,
+// reports come from no rule, and the factory rules are valid rules of the
+// profile.
+func (v *validator) lintVCA(doc *Document) {
+	var kinds []string
+	if doc.VCA != nil {
+		kinds = doc.VCA.Rules
+	}
+	caps := doc.VCACaps()
+	for _, kind := range kinds {
+		if len(caps.RuleEvents(domain.RuleType(kind))) == 0 {
+			canonical := "line_crossing"
+			if kind == string(domain.RuleRegion) {
+				canonical = "region_entrance, region_exit, loitering or intrusion"
+			}
+			v.warnf("/vca/rules", "%s rules raise no event: define %s, or an event with rule: %s", kind, canonical, kind)
+		}
+	}
+	for _, typ := range SortedKeys(doc.Events) {
+		spec, ptr := doc.Events[typ], "/events/"+escapePointer(typ)
+		if spec.Report && (spec.Rule == "line" || spec.Rule == "region") {
+			v.errorf(StepLint, ptr+"/rule", "%s is a report and comes from no rule", typ)
+			continue
+		}
+		if kind := spec.RuleType(typ); kind != "" && !contains(kinds, string(kind)) {
+			v.warnf(ptr, "%s events come from %s rules, which vca.rules lacks: cameras cannot raise them; add %s to vca.rules", typ, kind, kind)
+		}
+	}
+	if doc.VCA == nil || len(doc.VCA.FactoryRules) == 0 {
+		return
+	}
+	var verr *domain.ValidationError
+	if err := domain.ValidateRules(doc.FactoryRules(), caps); errors.As(err, &verr) {
+		for _, f := range verr.Fields {
+			// rules[2].points -> /vca/factory_rules/2/points
+			ptr := "/vca/factory_rules"
+			if rest, ok := strings.CutPrefix(f.Field, "rules["); ok {
+				if i, tail, ok := strings.Cut(rest, "]"); ok {
+					ptr += "/" + i + strings.ReplaceAll(tail, ".", "/")
+				}
+			}
+			v.errorf(StepLint, ptr, "%s", f.Message)
 		}
 	}
 }
@@ -505,6 +554,17 @@ func (v *validator) lintFactoryNetwork(n FactoryNetwork) {
 
 func (v *validator) lintBind(doc *Document, key string, p Param, ptr string) {
 	parts := strings.Split(p.Bind, ".")
+	if parts[0] == "events" {
+		// events.<type>.enabled switches the camera's analytics for a type.
+		typ := strings.TrimSuffix(strings.TrimPrefix(p.Bind, "events."), ".enabled")
+		if p.Type != TypeBool {
+			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be a bool", key, p.Bind)
+		}
+		if _, ok := doc.Events[typ]; !ok {
+			v.warnf(ptr+"/bind", "%s switches %s events, which the profile does not define", key, typ)
+		}
+		return
+	}
 	if parts[0] != "media" {
 		return
 	}
@@ -603,7 +663,7 @@ func (v *validator) lintStream(name string, s Stream) {
 				v.errorf(StepLint, ptr+"/default/resolution", "MJPEG over RTSP carries at most %dx%d in multiples of 8; the default %s does not fit", media.MaxMJPEGSize, media.MaxMJPEGSize, r)
 				continue
 			}
-			v.warnf(StepLint, ptr+"/resolutions/"+strconv.Itoa(i), "%s cannot be streamed as MJPEG (at most %dx%d in multiples of 8); choosing both fails", r, media.MaxMJPEGSize, media.MaxMJPEGSize)
+			v.warnf(ptr+"/resolutions/"+strconv.Itoa(i), "%s cannot be streamed as MJPEG (at most %dx%d in multiples of 8); choosing both fails", r, media.MaxMJPEGSize, media.MaxMJPEGSize)
 		}
 	}
 	if !contains(s.Resolutions, d.Resolution) {

@@ -24,8 +24,8 @@ func TestDemoProfileIsValid(t *testing.T) {
 	for _, p := range res.Problems {
 		t.Logf("%s:%d [%s/%s] %s (%s)", p.File, p.Line, p.Step, p.Severity, p.Message, p.Pointer)
 	}
-	if !res.OK() {
-		t.Fatal("the demo profile must validate")
+	if !res.OK() || len(res.Problems) > 0 {
+		t.Fatal("the demo profile must validate without warnings")
 	}
 	if res.Doc.Profile.ID != "milesight/demo" || len(res.Resolved) == 0 {
 		t.Fatalf("unexpected result: %+v", res.Doc.Profile)
@@ -188,6 +188,50 @@ func TestProblemsCarryLines(t *testing.T) {
 		expectProblem(t, res, profile.StepLint, 0, "must be an enum of the stream's codecs")
 	})
 
+	t.Run("analytics without their events", func(t *testing.T) {
+		data := noFactoryRules(t, base, "  line_crossing:\n    vendor_name: LineCrossing", "  custom:crossing:\n    vendor_name: LineCrossing")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "rules: [line, region]"), "line rules raise no event: define line_crossing, or an event with rule: line")
+		expectProblem(t, res, profile.StepLint, lineOf(data, "bind: events.line_crossing.enabled"), "switches line_crossing events, which the profile does not define")
+		if !res.OK() {
+			t.Fatalf("warnings must not fail: %+v", res.Problems)
+		}
+		data = noFactoryRules(t, base, "rules: [line, region]", "rules: [line]")
+		res = profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "vendor_name: Loitering"), "loitering events come from region rules, which vca.rules lacks: cameras cannot raise them")
+	})
+
+	t.Run("custom events on rules", func(t *testing.T) {
+		data := replace(t, base, "  line_crossing:\n    vendor_name: LineCrossing", "  custom:tripwire:\n    vendor_name: Tripwire\n    rule: line")
+		data = replace(t, data, "bind: events.line_crossing.enabled", "bind: events.custom:tripwire.enabled")
+		data = replace(t, data, "      points: [{ x: 0.1, y: 0.6 }, { x: 0.9, y: 0.6 }]", "      points: [{ x: 0.1, y: 0.6 }, { x: 0.9, y: 0.6 }]\n      events: [custom:tripwire]")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		if !res.OK() || len(res.Problems) > 0 {
+			t.Fatalf("a custom line event must be valid: %+v", res.Problems)
+		}
+	})
+
+	t.Run("factory rules the profile cannot raise", func(t *testing.T) {
+		data := replace(t, base, "  line_crossing:\n    vendor_name: LineCrossing", "  custom:crossing:\n    vendor_name: LineCrossing")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "- name: Line 1"), "the camera's profile does not deliver line_crossing events")
+		if res.OK() {
+			t.Fatal("a factory rule that cannot be drawn must fail")
+		}
+	})
+
+	t.Run("report on a rule", func(t *testing.T) {
+		data := replace(t, base, "    report: true", "    report: true\n    rule: region")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "rule: region"), "is a report and comes from no rule")
+	})
+
+	t.Run("event switch of another type", func(t *testing.T) {
+		data := replace(t, base, "  Event.LineCrossing.Enable:\n    type: bool\n    default: true", "  Event.LineCrossing.Enable:\n    type: int\n    default: 1")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, 0, "is bound to events.line_crossing.enabled and must be a bool")
+	})
+
 	t.Run("template file in loose yaml", func(t *testing.T) {
 		data := replace(t, base, "          body: |\n            {\n              \"deviceName\"", "          template: templates/info.json\n          x: |\n            {\n              \"deviceName\"")
 		res := profile.Validate(profile.Input{Data: data}, cat)
@@ -195,6 +239,18 @@ func TestProblemsCarryLines(t *testing.T) {
 			t.Fatal("expected problems")
 		}
 	})
+}
+
+// noFactoryRules edits a profile and drops its factory rules.
+func noFactoryRules(t *testing.T, base []byte, old, new string) []byte {
+	t.Helper()
+	data := replace(t, base, old, new)
+	i := strings.Index(string(data), "  # As the camera ships:")
+	j := strings.Index(string(data), "\ncoverage:")
+	if i < 0 || j < i {
+		t.Fatal("factory rules not found")
+	}
+	return append(append([]byte{}, data[:i]...), data[j+1:]...)
 }
 
 func TestAliasesAreBounded(t *testing.T) {

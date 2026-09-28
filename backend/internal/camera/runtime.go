@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/buildinfo"
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/profile"
@@ -70,6 +71,7 @@ type Runtime struct {
 	state     *stateStore
 	media     *mediaStore
 	events    *eventBus
+	vca       *vcaRuntime
 	templates *tmpl.Compiler
 	tel       *telemetry
 	identity  engine.Identity
@@ -104,6 +106,8 @@ func NewRuntime(opts Options) *Runtime {
 		stopReq:    make(chan time.Duration, 1),
 	}
 	rt.events = newEventBus(rt)
+	rt.vca = newVCA(rt)
+	rt.events.observe = rt.vca.observe
 	rt.tel = newTelemetry(rt)
 	return rt
 }
@@ -201,6 +205,8 @@ loop:
 	}
 	stopCtx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
+	// Triggers stop first: no event is raised while engines go away.
+	r.vca.stop()
 	r.stopEngines(stopCtx)
 	_ = r.conn.Notify(ipc.TypeBye, ipc.Bye{Reason: reason})
 	r.conn.Close()
@@ -244,6 +250,12 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, ipc.Errorf("trigger", "%v", err)
 		}
 		return ipc.TriggerResult{Event: ev}, nil
+	case ipc.TypeAnalytics:
+		var q ipc.AnalyticsQuery
+		if err := msg.Decode(&q); err != nil {
+			return nil, err
+		}
+		return r.vca.analytics(q), nil
 	case ipc.TypeStateSet:
 		var ss ipc.StateSet
 		if err := msg.Decode(&ss); err != nil {
@@ -309,10 +321,28 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 			r.log.Warn("cannot report state change", "error", err)
 		}
 	})
+	r.vca.setCaps(doc.VCACaps())
 	r.templates = tmpl.NewCompiler(tmpl.Env{
 		State:    r.state.Get,
 		Canon:    r.state.Canon,
 		Snapshot: func() ([]byte, error) { return r.media.Snapshot("main") },
+		Analytics: func() any {
+			return r.vca.analytics(ipc.AnalyticsQuery{})
+		},
+		Heatmap: func(cols, rows int) [][]int {
+			h := r.vca.analytics(ipc.AnalyticsQuery{Cols: cols, Rows: rows}).Heat
+			out := make([][]int, h.Rows)
+			for i := range out {
+				out[i] = h.Cells[i*h.Cols : (i+1)*h.Cols]
+			}
+			return out
+		},
+		LineCount: func(rule, direction string) int {
+			return r.vca.stats.lineCount(r.vca.currentRules(), rule, direction)
+		},
+		Occupancy: func(rule string) int {
+			return r.vca.stats.occupancy(r.vca.currentRules(), rule)
+		},
 	})
 	if r.opts.Confine {
 		if err := r.confine(cfg.Streams); err != nil {
@@ -344,6 +374,8 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		ready.Endpoints = append(ready.Endpoints, re.endpoints...)
 	}
 	sort.Slice(ready.Endpoints, func(i, j int) bool { return ready.Endpoints[i].Instance < ready.Endpoints[j].Instance })
+	// Random triggers start once the engines that deliver their events run.
+	r.vca.set(cfg.VCA)
 	return ready, nil
 }
 
@@ -487,6 +519,9 @@ func (r *Runtime) reload(rl *ipc.Reload) error {
 	if rl.Users != nil {
 		r.accounts.set(rl.Users)
 	}
+	if rl.VCA != nil {
+		r.vca.set(*rl.VCA)
+	}
 	if rl.Streams != nil {
 		if err := r.media.replace(rl.Streams); err != nil {
 			return err
@@ -495,37 +530,16 @@ func (r *Runtime) reload(rl *ipc.Reload) error {
 	return nil
 }
 
+// trigger emits the event the service asked for: a manual one, or one of a
+// stored trigger's.
 func (r *Runtime) trigger(ctx context.Context, tr *ipc.Trigger) (engine.Event, error) {
 	if r.model == nil {
 		return engine.Event{}, errors.New("camera not configured")
 	}
-	e := engine.Event{
-		Type:      tr.Type,
-		Trigger:   "manual",
-		Direction: tr.Direction,
-		Rule:      tr.Rule,
-		Object:    tr.Object,
-		Plate:     tr.Plate,
-		Speed:     tr.Speed,
-		Custom:    tr.Custom,
+	if tr.TriggerID != "" {
+		return r.vca.fire(ctx, tr.TriggerID, domain.TriggerManual)
 	}
-	switch tr.Type {
-	case "line_crossing":
-		if e.Rule == nil {
-			e.Rule = &engine.Rule{ID: "1", Name: "Line 1", Type: "line"}
-		}
-		if e.Direction == "" {
-			e.Direction = "A->B"
-		}
-	case "region_entrance", "region_exit", "loitering", "intrusion":
-		if e.Rule == nil {
-			e.Rule = &engine.Rule{ID: "1", Name: "Region 1", Type: "region"}
-		}
-	}
-	if e.Object == nil && e.Rule != nil {
-		e.Object = &engine.Object{Class: "car", Confidence: 0.92}
-	}
-	return r.events.Emit(ctx, e)
+	return r.vca.manual(ctx, tr)
 }
 
 func (r *Runtime) heartbeat(cpu *cpuSampler) {

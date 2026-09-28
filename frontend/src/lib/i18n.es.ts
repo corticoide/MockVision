@@ -56,8 +56,11 @@ export const es: Record<string, string> = {
   // Camera actions (shared by list and detail)
   "New camera": "Nueva cámara",
   "Line crossing": "Cruce de línea",
-  "Send a line-crossing event to the camera's targets": "Envía un evento de cruce de línea a los destinos de la cámara",
-  "Line crossing sent from {name}": "Cruce de línea enviado desde {name}",
+  "Send an event to the camera's targets": "Envía un evento a los destinos de la cámara",
+  "Trigger event": "Disparar evento",
+  "{event} sent from {name}": "{event}: enviado desde {name}",
+  "Fire {event} now": "Disparar {event} ahora",
+  "Fire {event} on {name}": "Disparar {event} en {name}",
   Start: "Iniciar",
   Stop: "Detener",
   Restart: "Reiniciar",
@@ -102,8 +105,8 @@ export const es: Record<string, string> = {
   "All cameras": "Todas las cámaras",
   "Loading events…": "Cargando eventos…",
   "No events yet": "Todavía no hay eventos",
-  'Start a camera linked to a target and press "Line crossing" in Cameras.':
-    "Inicia una cámara vinculada a un destino y pulsa «Cruce de línea» en Cámaras.",
+  "Start a camera linked to a target and trigger an event from its page, or give it a random trigger.":
+    "Inicia una cámara vinculada a un destino y dispara un evento desde su página, o dale un disparador aleatorio.",
   "Showing the latest {n} events.": "Mostrando los últimos {n} eventos.",
   Time: "Hora",
   Type: "Tipo",
@@ -254,7 +257,8 @@ export const es: Record<string, string> = {
     "Los cambios guardados en {what} se aplican cuando la cámara se reinicia; sigue funcionando con los anteriores.",
   "Restart now": "Reiniciar ahora",
   "No events from this camera yet": "Esta cámara todavía no tiene eventos",
-  'Press "Line crossing" while the camera runs.': "Pulsa «Cruce de línea» mientras la cámara funciona.",
+  'Press "Trigger event" while the camera runs, or add a random trigger.':
+    "Pulsa «Disparar evento» mientras la cámara funciona, o agrega un disparador aleatorio.",
 
   // Camera detail: shared parts
   "Snapshot of {name}": "Instantánea de {name}",
@@ -360,21 +364,143 @@ export const es: Record<string, string> = {
   "Applied at once. The last change wins, from the panel or a client of the emulated API.":
     "Se aplica de inmediato. Gana el último cambio, ya sea del panel o de un cliente de la API emulada.",
 
+  // Rules and triggers (feature 7)
+  "Heat map": "Mapa de calor",
+  "Start the counts again from zero": "Volver a contar desde cero",
+  "Counts reset": "Conteos reiniciados",
+  "Reset counts": "Reiniciar conteos",
+  "The camera counts crossings, entries and exits, and where objects were, from its events since {time}.":
+    "La cámara cuenta cruces, entradas y salidas, y dónde estuvieron los objetos, a partir de sus eventos desde {time}.",
+  "Start the camera to see what it counts: crossings, entries and exits, and a heat map.":
+    "Inicia la cámara para ver lo que cuenta: cruces, entradas y salidas, y un mapa de calor.",
+  "What the line reports.": "Lo que informa la línea.",
+  "Inside {n}": "Adentro {n}",
+  "In {n}": "Entraron {n}",
+  "Out {n}": "Salieron {n}",
+  Rules: "Reglas",
+  Triggers: "Disparadores",
+  Rule: "Regla",
+  Source: "Origen",
+  Manual: "Manual",
+  Random: "Aleatorio",
+  "Region entrance": "Entrada a región",
+  "Region exit": "Salida de región",
+  Loitering: "Permanencia",
+  Intrusion: "Intrusión",
+  Motion: "Movimiento",
+  "License plate": "Patente",
+  Speed: "Velocidad",
+  Tampering: "Sabotaje",
+  "Both ways": "Ambos sentidos",
+  Line: "Línea",
+  Region: "Región",
+  "Line {n}": "Línea {n}",
+  "Region {n}": "Región {n}",
+  "Random {n}": "Aleatorio {n}",
+  Unnamed: "Sin nombre",
+  "This camera has no video analytics": "Esta cámara no tiene analítica de video",
+  "Its profile declares no rules: its events can still be fired from the Triggers tab.":
+    "Su perfil no declara reglas: sus eventos se pueden disparar igual desde la pestaña Disparadores.",
+  "Draw a line": "Dibujar una línea",
+  "Draw a region": "Dibujar una región",
+  "Draw it again": "Dibujarla de nuevo",
+  "A camera has at most 16 rules.": "Una cámara tiene como máximo 16 reglas.",
+  "Rules on the picture of {name}": "Reglas sobre la imagen de {name}",
+  "Corner {n} of {name}: {x} % across, {y} % down; arrows move it":
+    "Esquina {n} de {name}: {x} % a lo ancho, {y} % a lo alto; las flechas la mueven",
+  "Select a rule to edit it: drag its corners or the whole shape; a focused corner moves with the arrow keys.":
+    "Selecciona una regla para editarla: arrastra sus esquinas o la figura entera; una esquina con foco se mueve con las flechas.",
+  "Click where the line starts and where it ends. Side A is on its left, walking from the first point to the second.":
+    "Haz clic donde empieza la línea y donde termina. El lado A queda a su izquierda, yendo del primer punto al segundo.",
+  "Click each corner. Click the first one again, double-click or press Enter to close it; Backspace removes the last corner, Escape cancels.":
+    "Haz clic en cada esquina. Vuelve a hacer clic en la primera, haz doble clic o pulsa Enter para cerrarla; Retroceso quita la última esquina y Escape cancela.",
+  "Rules say where events happen; triggers say when. The camera does not look at the picture: an event names the rule, the direction and an object placed on it.":
+    "Las reglas dicen dónde ocurren los eventos; los disparadores, cuándo. La cámara no analiza la imagen: cada evento nombra la regla, la dirección y un objeto ubicado sobre ella.",
+  "No rules yet. Draw a line or a region on the picture.": "Todavía no hay reglas. Dibuja una línea o una región sobre la imagen.",
+  "Which crossings the line reports: from side A to side B, the other way, or both.":
+    "Qué cruces informa la línea: del lado A al lado B, al revés o ambos.",
+  "What the region reports.": "Lo que informa la región.",
+  Objects: "Objetos",
+  "None checked: every object the camera detects.": "Sin marcar ninguno: todos los objetos que detecta la cámara.",
+  "The sides of the region cross each other; move a corner.": "Los lados de la región se cruzan; mueve una esquina.",
+  "Rules saved; the camera uses them at once": "Reglas guardadas; la cámara las usa en el momento",
+  "Changes apply at once, without restarting the camera.": "Los cambios se aplican en el momento, sin reiniciar la cámara.",
+  "Start the camera to fire events": "Inicia la cámara para disparar eventos",
+  "Start the camera to fire events.": "Inicia la cámara para disparar eventos.",
+  "Save the rules first": "Guarda las reglas primero",
+  "Save the triggers first": "Guarda los disparadores primero",
+  "The rule is disabled": "La regla está deshabilitada",
+  "Fire it now": "Dispararlo ahora",
+  "{event} on {rule} sent from {name}": "{event} en {rule}: enviado desde {name}",
+  "This camera emits no events": "Esta cámara no emite eventos",
+  "Its profile defines no event with a transport.": "Su perfil no define ningún evento con transporte.",
+  "Fire an event now": "Disparar un evento ahora",
+  "A manual trigger: the camera sends the event to its targets at once. What you leave empty, the camera makes up.":
+    "Un disparo manual: la cámara envía el evento a sus destinos en el momento. Lo que dejes vacío lo inventa la cámara.",
+  "Trigger an event on {name}": "Disparar un evento en {name}",
+  "The camera sends it to its targets at once. What you leave empty, the camera makes up.":
+    "La cámara lo envía a sus destinos en el momento. Lo que dejes vacío lo inventa la cámara.",
+  "No enabled rule reports it: draw one in the Rules tab.": "Ninguna regla habilitada lo informa: dibuja una en la pestaña Reglas.",
+  "A report carries what the camera counted so far.": "Un reporte lleva lo que la cámara contó hasta ahora.",
+  "The first enabled one": "La primera habilitada",
+  "{name} (disabled)": "{name} (deshabilitada)",
+  "As the rule reports": "Según la regla",
+  Object: "Objeto",
+  Any: "Cualquiera",
+  Plate: "Patente",
+  "Empty: a made-up one.": "Vacío: una inventada.",
+  "Speed (km/h)": "Velocidad (km/h)",
+  Fire: "Disparar",
+  "Random triggers": "Disparadores aleatorios",
+  "While the camera runs, each enabled trigger emits its event at a random moment within its wait, again and again: steady traffic to test against.":
+    "Mientras la cámara funciona, cada disparador habilitado emite su evento en un momento al azar dentro de su espera, una y otra vez: tráfico constante contra el cual probar.",
+  "Add trigger": "Agregar disparador",
+  "No random triggers yet.": "Todavía no hay disparadores aleatorios.",
+  "Its rule is disabled: the trigger raises nothing.": "Su regla está deshabilitada: el disparador no genera eventos.",
+  "No enabled rule reports these events: the trigger raises nothing until one does.":
+    "Ninguna regla habilitada informa estos eventos: el disparador no genera nada hasta que alguna lo haga.",
+  "None: a report": "Ninguna: es un reporte",
+  "A report carries what the camera counted; the same shortest and longest wait sends one at a fixed interval.":
+    "Un reporte lleva lo que la cámara contó; con la misma espera mínima y máxima se envía uno a intervalo fijo.",
+  "Any enabled rule": "Cualquier regla habilitada",
+  "None: not a rule event": "Ninguna: no es un evento de regla",
+  "Every (seconds)": "Cada (segundos)",
+  "At least {s} s for this event.": "Al menos {s} s para este evento.",
+  "Shortest wait": "Espera más corta",
+  "Longest wait": "Espera más larga",
+  "Event data": "Datos del evento",
+  "Fire once": "Disparar una vez",
+  "{trigger} fired once from {name}": "{trigger}: disparado una vez desde {name}",
+  Plates: "Patentes",
+  "One per line; each event picks one.": "Una por línea; cada evento elige una.",
+  "Plate formats": "Formatos de patente",
+  "9 a digit, A a letter, X a hex digit; the rest as typed. AA999AA makes AB123CD.":
+    "9 es un dígito, A una letra y X un dígito hexadecimal; el resto queda tal cual. AA999AA genera AB123CD.",
+  "Give each event a speed": "Dar una velocidad a cada evento",
+  "Lowest speed": "Velocidad mínima",
+  "Highest speed": "Velocidad máxima",
+  Unit: "Unidad",
+  limit: "límite",
+  "Speed limit": "Límite de velocidad",
+  "Triggers saved; the camera uses them at once": "Disparadores guardados; la cámara los usa en el momento",
+  "Changes apply at once. A trigger's events take its plates, formats and speed; lpr events always carry a plate.":
+    "Los cambios se aplican en el momento. Los eventos de un disparador llevan sus patentes, formatos y velocidad; los eventos lpr siempre llevan una patente.",
+
   // Clone / restore dialogs
-  "Same profile, parameters, accounts, protocols, picture and targets; its own ID, serial and MAC.":
-    "Mismo perfil, parámetros, cuentas, protocolos, imagen y destinos; con su propio ID, serie y MAC.",
+  "Same profile, parameters, accounts, protocols, picture, targets, rules and triggers; its own ID, serial and MAC.":
+    "Mismo perfil, parámetros, cuentas, protocolos, imagen, destinos, reglas y disparadores; con su propio ID, serie y MAC.",
   "Cloning…": "Clonando…",
   "Clone camera": "Clonar cámara",
   "Same netmask and gateway as {name}.": "Misma máscara y puerta de enlace que {name}.",
   "Start it now": "Iniciar ahora",
   "Camera {name} created from {src}": "Cámara {name} creada a partir de {src}",
   "Restore {name}": "Restaurar {name}",
-  "Like the reset button of the real device. The picture is kept.":
-    "Como el botón de reinicio del dispositivo real. La imagen se conserva.",
+  "Like the reset button of the real device. The picture and the triggers are kept.":
+    "Como el botón de reinicio del dispositivo real. La imagen y los disparadores se conservan.",
   "Restore settings": "Restaurar ajustes",
   "Factory reset": "Restablecer de fábrica",
-  "Parameters, accounts and protocols go back to the profile's defaults. The network identity stays.":
-    "Los parámetros, cuentas y protocolos vuelven a los valores por defecto del perfil. La identidad de red se mantiene.",
+  "Parameters, accounts, protocols and analytics rules go back to the profile's defaults and factory rules. The network identity stays.":
+    "Los parámetros, cuentas, protocolos y reglas de analítica vuelven a los valores por defecto y las reglas de fábrica del perfil. La identidad de red se mantiene.",
   "Everything above, plus the MAC derived from the camera ID.":
     "Todo lo anterior, más la MAC derivada del ID de la cámara.",
   "Everything above, plus the profile's factory address {ip} and the default MAC.":

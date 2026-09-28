@@ -227,15 +227,15 @@ func TestParentModes(t *testing.T) {
 func TestNetworkModes(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
-	_, err := svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Bad", ProfileID: "milesight/demo", ProfileVersion: "0.2.0",
+	_, err := svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Bad", ProfileID: "milesight/demo", ProfileVersion: "0.4.0",
 		Network: NetworkInput{Mode: "ipvlan", IPMode: "dhcp"}})
 	wantInvalid(t, err, "network.ip_mode")
-	_, err = svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Bad", ProfileID: "milesight/demo", ProfileVersion: "0.2.0",
+	_, err = svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Bad", ProfileID: "milesight/demo", ProfileVersion: "0.4.0",
 		Network: NetworkInput{Mode: "bridge"}})
 	wantInvalid(t, err, "network.mode")
 
 	force := true
-	v, err := svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Leaser", ProfileID: "milesight/demo", ProfileVersion: "0.2.0",
+	v, err := svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "Leaser", ProfileID: "milesight/demo", ProfileVersion: "0.4.0",
 		Network: NetworkInput{IPMode: "dhcp", Force: &force}})
 	if err != nil || v.Network.IPMode != "dhcp" || v.Network.Mode != "macvlan" || !v.Network.Force {
 		t.Fatalf("created %+v, %v", v.Network, err)

@@ -582,8 +582,110 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Manual trigger; the camera serializes and delivers the event */
+        /**
+         * Manual trigger; the camera serializes and delivers the event
+         * @description The event happens on rule_id, or on the first enabled rule that reports its type; without one, on a default line or region. What the request leaves out (direction, object, plate, speed) the camera generates. 409 when the camera is not running, the rule is disabled or the profile's analytics switch turns the type off.
+         */
         post: operations["triggerEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["listCameraRules"];
+        /** @description Replaces the camera's analytics rules (D39); a rule without id is new. A running camera applies them at once. 409 when a trigger fires on a rule that would go away or stop reporting its events. */
+        put: operations["setCameraRules"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["listCameraTriggers"];
+        /** @description Replaces the camera's stored triggers (D40); a trigger without id is new. A running camera applies them at once: enabled random triggers raise events, disabled ones stop. */
+        put: operations["setCameraTriggers"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/triggers/{trigger}/actions/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                trigger: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Emits one event of a stored trigger now, enabled or not */
+        post: operations["fireTrigger"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What a running camera counted from the events it emitted
+         * @description Crossings of each line by direction and object class, entries, exits and occupancy of each region, events by type, and, with cols and rows, a heat map of where objects were. Counts start with the camera process or at the last reset.
+         */
+        get: operations["getCameraAnalytics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/analytics/actions/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Starts a running camera's counts again from zero */
+        post: operations["resetCameraAnalytics"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1004,6 +1106,25 @@ export interface components {
                 port?: number;
             }[];
             events: string[];
+            /** @description Each event type; without transports cameras cannot emit it. */
+            event_specs: {
+                type: string;
+                vendor_name: string;
+                min_interval_ms: number;
+                transports: string[];
+                /**
+                 * @description The kind of rule the event comes from; empty for none
+                 * @enum {string}
+                 */
+                rule: "line" | "region" | "";
+                /** @description The event carries counts */
+                report: boolean;
+            }[];
+            /** @description The kinds of rule of the profile's analytics and the objects they detect. */
+            vca: {
+                rules: ("line" | "region")[];
+                object_classes: string[];
+            };
             factory_users: components["schemas"]["CameraUser"][];
             factory_ip?: string;
             params: components["schemas"]["Param"][];
@@ -1218,6 +1339,18 @@ export interface components {
                 name: string;
                 event_types: string[];
             }[];
+            rules: components["schemas"]["Rule"][];
+            triggers: components["schemas"]["Trigger"][];
+            /** @description The events the camera can send, as its profile declares them. */
+            event_types: {
+                type: string;
+                /**
+                 * @description The kind of rule the event comes from; empty for none
+                 * @enum {string}
+                 */
+                rule: "line" | "region" | "";
+                report: boolean;
+            }[];
             metrics: components["schemas"]["CameraMetrics"] | null;
             /** Format: date-time */
             created_at: string;
@@ -1360,9 +1493,124 @@ export interface components {
             /** @description Name of the camera the request left from */
             camera?: string;
         };
+        /** @description A position on the picture, from 0 to 1 from its top left corner. */
+        Point: {
+            x: number;
+            y: number;
+        };
+        /** @description A VCA rule (D39). A line has two points; its side A is on the left walking from the first to the second, and direction says which crossings it reports. A region has 3 to 20 points. Events are what the rule reports, among the events its profile raises from its kind of rule. No object_classes means every class of the profile. */
+        Rule: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            type: "line" | "region";
+            points: components["schemas"]["Point"][];
+            /** @enum {string} */
+            direction: "A->B" | "B->A" | "both" | "";
+            events: string[];
+            object_classes: string[];
+            enabled: boolean;
+        };
+        RuleInput: {
+            /** @description An existing rule of the camera; empty for a new one */
+            id?: string;
+            name: string;
+            /** @enum {string} */
+            type: "line" | "region";
+            points: components["schemas"]["Point"][];
+            /**
+             * @description Lines only; both by default
+             * @enum {string}
+             */
+            direction?: "A->B" | "B->A" | "both";
+            /** @description Required for regions; a line without events reports line_crossing */
+            events?: string[];
+            object_classes?: string[];
+            /** @default true */
+            enabled: boolean;
+        };
+        Analytics: {
+            /** Format: date-time */
+            since: string;
+            lines: {
+                rule_id: string;
+                name: string;
+                a_to_b: number;
+                b_to_a: number;
+                classes: {
+                    [key: string]: {
+                        a_to_b: number;
+                        b_to_a: number;
+                    };
+                };
+            }[];
+            regions: {
+                rule_id: string;
+                name: string;
+                entries: number;
+                exits: number;
+                /** @description Entries minus exits */
+                occupancy: number;
+                events: {
+                    [key: string]: number;
+                };
+            }[];
+            events: {
+                [key: string]: number;
+            };
+            /** @description Objects seen in each cell, row by row from the top left corner. */
+            heat?: {
+                cols: number;
+                rows: number;
+                cells: number[];
+            };
+        };
+        SpeedRange: {
+            min: number;
+            max: number;
+            /** @description 0 for none */
+            limit: number;
+            /** @enum {string} */
+            unit: "km/h" | "mph";
+        };
+        /** @description A stored trigger (D40). A random one emits an event of event_type on rule_id (empty: any enabled rule that reports the type) at a random moment between min_seconds and max_seconds after the previous one, while it is enabled and the camera runs. Plates and plate_masks (9 a digit, A a letter, X a hex digit, backslash escapes) give its events a plate, and speed a speed. */
         Trigger: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            type: "random";
+            event_type: string;
+            rule_id: string;
+            min_seconds: number;
+            max_seconds: number;
+            plates: string[];
+            plate_masks: string[];
+            speed: components["schemas"]["SpeedRange"] | null;
+            enabled: boolean;
+        };
+        TriggerInput: {
+            /** @description An existing trigger of the camera; empty for a new one */
+            id?: string;
+            name: string;
+            /**
+             * @default random
+             * @enum {string}
+             */
+            type: "random";
+            event_type: string;
+            rule_id?: string;
+            min_seconds: number;
+            max_seconds: number;
+            plates?: string[];
+            plate_masks?: string[];
+            speed?: components["schemas"]["SpeedRange"] | null;
+            /** @default true */
+            enabled: boolean;
+        };
+        ManualEvent: {
             /** @example line_crossing */
             type: string;
+            rule_id?: string;
             /** @enum {string} */
             direction?: "A->B" | "B->A" | "none";
             object?: {
@@ -1408,6 +1656,10 @@ export interface components {
             data: {
                 [key: string]: unknown;
             };
+            /** @description The camera's rule behind the event */
+            rule_id?: string;
+            /** @description The camera's stored trigger behind the event */
+            trigger_id?: string;
             deliveries: components["schemas"]["Delivery"][];
             /** @enum {string} */
             delivery_status: "ok" | "failed" | "pending" | "none";
@@ -2452,7 +2704,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Trigger"];
+                "application/json": components["schemas"]["ManualEvent"];
             };
         };
         responses: {
@@ -2467,6 +2719,190 @@ export interface operations {
             };
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    listCameraRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Rule"][];
+                    };
+                };
+            };
+        };
+    };
+    setCameraRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    rules: components["schemas"]["RuleInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listCameraTriggers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Triggers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Trigger"][];
+                    };
+                };
+            };
+        };
+    };
+    setCameraTriggers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    triggers: components["schemas"]["TriggerInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Camera */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            422: components["responses"]["Problem"];
+        };
+    };
+    fireTrigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                trigger: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Emitted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getCameraAnalytics: {
+        parameters: {
+            query?: {
+                cols?: number;
+                rows?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Analytics"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    resetCameraAnalytics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts after the reset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Analytics"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listAssets: {

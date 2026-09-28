@@ -136,20 +136,30 @@
       "additionalProperties": { "$ref": "#/$defs/event" }
     },
     "vca": {
+      "description": "Video analytics: the kinds of rule cameras can draw and the objects they detect.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "rules": {
           "type": "array",
+          "uniqueItems": true,
           "items": { "enum": ["line", "region"] }
         },
         "object_classes": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 32 }
         },
         "plate_format": {
           "description": "Plate data format, for example text or text+color.",
           "type": "string"
+        },
+        "factory_rules": {
+          "description": "Rules a new or restored camera has, as the device ships them.",
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/factory_rule" }
         }
       }
     },
@@ -160,6 +170,34 @@
     }
   },
   "$defs": {
+    "factory_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "points"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "type": { "enum": ["line", "region"] },
+        "points": {
+          "description": "Positions from 0 to 1 from the top left corner of the picture: two for a line, 3 to 20 for a region.",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["x", "y"],
+            "properties": {
+              "x": { "type": "number", "minimum": 0, "maximum": 1 },
+              "y": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "direction": { "enum": ["A->B", "B->A", "both"] },
+        "events": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "object_classes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 32 } },
+        "enabled": { "type": "boolean" }
+      }
+    },
     "duration": {
       "type": "string",
       "pattern": "^[0-9]+(\\.[0-9]+)?(ms|s|m)$"
@@ -227,6 +265,14 @@
       "properties": {
         "vendor_name": { "type": "string", "minLength": 1, "maxLength": 64 },
         "min_interval": { "$ref": "#/$defs/duration" },
+        "rule": {
+          "description": "Kind of rule the event comes from. Omitted: line for line_crossing, region for region_entrance, region_exit, loitering and intrusion, none for the rest.",
+          "enum": ["line", "region", "none"]
+        },
+        "report": {
+          "description": "The event carries what the camera counted (for example a people counting report), not an object it saw. Reports come from no rule.",
+          "type": "boolean"
+        },
         "transports": {
           "type": "object",
           "properties": {

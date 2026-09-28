@@ -7,11 +7,20 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { type Translate, useT } from "@/lib/i18n";
 import { formatTime } from "@/lib/utils";
 
-/** Events with their delivery; a row opens to show every attempt and the payload. */
-export function EventTable({ events, showCamera = true }: { events: EventItem[]; showCamera?: boolean }) {
+/** Events with their delivery; a row opens to show every attempt and the
+ * payload. triggerNames names the stored triggers behind random events. */
+export function EventTable({
+  events,
+  showCamera = true,
+  triggerNames = {},
+}: {
+  events: EventItem[];
+  showCamera?: boolean;
+  triggerNames?: Record<string, string>;
+}) {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
-  const columns = showCamera ? 9 : 8;
+  const columns = showCamera ? 11 : 10;
   return (
     <Table>
       <THead>
@@ -20,7 +29,9 @@ export function EventTable({ events, showCamera = true }: { events: EventItem[];
           <TH>{t("Time")}</TH>
           {showCamera && <TH>{t("Camera")}</TH>}
           <TH>{t("Type")}</TH>
+          <TH>{t("Rule")}</TH>
           <TH>{t("Direction")}</TH>
+          <TH>{t("Source")}</TH>
           <TH>{t("Delivery")}</TH>
           <TH className="text-right">{t("Latency")}</TH>
           <TH className="text-right">HTTP</TH>
@@ -46,9 +57,13 @@ export function EventTable({ events, showCamera = true }: { events: EventItem[];
                 <TD>
                   <Mono>{ev.type}</Mono>
                 </TD>
+                <TD className="max-w-40 truncate" title={ruleName(ev)}>
+                  {ruleName(ev) || "—"}
+                </TD>
                 <TD>
                   <Mono>{direction(ev) || "—"}</Mono>
                 </TD>
+                <TD className="max-w-44 truncate">{source(ev, triggerNames, t)}</TD>
                 <TD>
                   <DeliveryBadge status={ev.delivery_status} />
                 </TD>
@@ -80,6 +95,19 @@ export function EventTable({ events, showCamera = true }: { events: EventItem[];
 function direction(ev: EventItem): string {
   const d = ev.data["direction"];
   return typeof d === "string" ? d : "";
+}
+
+function ruleName(ev: EventItem): string {
+  const r = ev.data["rule"] as { name?: unknown } | undefined;
+  return typeof r?.name === "string" ? r.name : "";
+}
+
+/** What produced the event: a manual trigger, or a random one by name. */
+function source(ev: EventItem, names: Record<string, string>, t: Translate): string {
+  const kind = ev.data["trigger"];
+  const label = kind === "random" ? t("Random") : kind === "manual" ? t("Manual") : typeof kind === "string" ? kind : "—";
+  const name = ev.trigger_id ? names[ev.trigger_id] : "";
+  return name ? `${label} · ${name}` : label;
 }
 
 function EventDetails({ event, t }: { event: EventItem; t: Translate }) {

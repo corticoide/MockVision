@@ -370,9 +370,11 @@ const (
 
 // ResetCamera restores a camera to its profile like the reset button of a
 // real device (RN-10): parameters, accounts and protocols go back to the
-// profile's defaults and, with ResetFull, the network to the factory
-// address. The picture is kept. A running camera reboots, as the real one
-// does.
+// profile's defaults, its analytics rules go back to the profile's factory
+// rules and, with ResetFull, the network takes the factory address. The
+// picture and the triggers, which are MockVision's and not the device's,
+// are kept; triggers that fired on a rule fire on any from then on. A
+// running camera reboots, as the real one does.
 func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string) (*CameraView, error) {
 	if scope != ResetSettings && scope != ResetFull {
 		return nil, domain.Invalid("scope", "must be %s or %s", ResetSettings, ResetFull)
@@ -441,6 +443,29 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 				return err
 			}
 		}
+		if err := q.DeleteCameraRules(ctx, id); err != nil {
+			return err
+		}
+		if err := insertRules(ctx, q, id, factoryRules(b.doc)); err != nil {
+			return err
+		}
+		if err := q.MarkFactoryRulesApplied(ctx, id); err != nil {
+			return err
+		}
+		rows, err := q.ListCameraTriggers(ctx, id)
+		if err != nil {
+			return err
+		}
+		triggers := triggersOf(rows)
+		for i := range triggers {
+			triggers[i].RuleID = ""
+		}
+		if err := q.DeleteCameraTriggers(ctx, id); err != nil {
+			return err
+		}
+		if err := insertTriggers(ctx, q, id, triggers); err != nil {
+			return err
+		}
 		return s.touchCamera(ctx, q, id)
 	})
 	if err != nil {
@@ -465,8 +490,8 @@ type CloneCameraInput struct {
 }
 
 // CloneCamera creates a camera with the same profile, parameters, accounts,
-// protocols, picture and targets as another one. It gets its own ID, serial
-// and MAC, and the address given.
+// protocols, picture, targets, rules and triggers as another one. It gets
+// its own ID, serial and MAC, and the address given.
 func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in CloneCameraInput) (*CameraView, error) {
 	b, err := s.loadBundle(ctx, srcID)
 	if err != nil {
@@ -499,6 +524,7 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 		}
 		users = append(users, domain.CameraUser{Username: u.Username, Password: string(pw), Role: u.Role})
 	}
+	rules, triggers := copyVCA(b.rules, b.triggers)
 	now := time.Now().UnixMilli()
 	err = s.insertCamera(ctx, newCamera{
 		row: db.InsertCameraParams{
@@ -506,6 +532,7 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 			DesiredState: string(domain.DesiredStopped), Autostart: b.cam.Autostart, TagsJson: b.cam.TagsJson, CreatedAt: now, UpdatedAt: now,
 		},
 		netw: netw, state: b.state, protos: b.protos, users: users, streams: b.streams, targets: b.targets,
+		rules: rules, triggers: triggers,
 	})
 	if err != nil {
 		if store.IsUnique(err) {

@@ -59,7 +59,7 @@ export function CloneDialog({ camera, open, onClose }: { camera: Camera; open: b
       open={open}
       onClose={onClose}
       title={t("Clone {name}", { name: camera.name })}
-      description={t("Same profile, parameters, accounts, protocols, picture and targets; its own ID, serial and MAC.")}
+      description={t("Same profile, parameters, accounts, protocols, picture, targets, rules and triggers; its own ID, serial and MAC.")}
       footer={
         <>
           <Button onClick={onClose}>{t("Cancel")}</Button>
@@ -113,7 +113,7 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
     {
       id: "settings" as const,
       title: t("Restore settings"),
-      text: t("Parameters, accounts and protocols go back to the profile's defaults. The network identity stays."),
+      text: t("Parameters, accounts, protocols and analytics rules go back to the profile's defaults and factory rules. The network identity stays."),
     },
     {
       id: "full" as const,
@@ -131,7 +131,7 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
       open={open}
       onClose={onClose}
       title={t("Restore {name}", { name: camera.name })}
-      description={t("Like the reset button of the real device. The picture is kept.")}
+      description={t("Like the reset button of the real device. The picture and the triggers are kept.")}
       footer={
         <>
           <Button onClick={onClose}>{t("Cancel")}</Button>

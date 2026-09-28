@@ -54,7 +54,7 @@ func TestCameraReportsAreChecked(t *testing.T) {
 		return engine.Event{ID: id, Type: typ, At: time.Now()}
 	}
 	good := ulid.Make().String()
-	svc.recordEvent(ctx, camA.ID, event(good, "line_crossing"))
+	svc.recordEvent(ctx, camA.ID, event(good, "line_crossing"), "")
 	if _, err := svc.GetEvent(ctx, good); err != nil {
 		t.Fatalf("a valid event must be stored: %v", err)
 	}
@@ -69,9 +69,44 @@ func TestCameraReportsAreChecked(t *testing.T) {
 		"unknown type":   event(ulid.Make().String(), "custom:nope"),
 		"oversized data": {ID: ulid.Make().String(), Type: "line_crossing", At: time.Now(), Custom: map[string]any{"x": string(make([]byte, maxEventBytes))}},
 	} {
-		svc.recordEvent(ctx, camA.ID, e)
+		svc.recordEvent(ctx, camA.ID, e, "")
 		if _, err := svc.GetEvent(ctx, e.ID); err == nil {
 			t.Errorf("%s: the event was stored", name)
+		}
+	}
+
+	// Rules and triggers are kept when they are the camera's own.
+	line := RuleInput{Name: "Gate", Type: "line", Points: []domain.Point{{X: 0.1, Y: 0.5}, {X: 0.9, Y: 0.5}}}
+	random := func(name string) TriggerInput {
+		return TriggerInput{Name: name, EventType: "line_crossing", MinSeconds: 60, MaxSeconds: 60}
+	}
+	a, err := svc.SetCameraRules(ctx, testActor, camA.ID, []RuleInput{line})
+	if err == nil {
+		a, err = svc.SetCameraTriggers(ctx, testActor, camA.ID, []TriggerInput{random("A")})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := svc.SetCameraRules(ctx, testActor, camB.ID, []RuleInput{line})
+	if err == nil {
+		b, err = svc.SetCameraTriggers(ctx, testActor, camB.ID, []TriggerInput{random("B")})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		rule, trigger, wantRule, wantTrigger string
+	}{
+		{a.Rules[0].ID, a.Triggers[0].ID, a.Rules[0].ID, a.Triggers[0].ID},
+		{b.Rules[0].ID, b.Triggers[0].ID, "", ""},
+		{"1", "manual", "", ""},
+	} {
+		e := event(ulid.Make().String(), "line_crossing")
+		e.Rule = &engine.Rule{ID: c.rule, Name: "Gate", Type: "line"}
+		svc.recordEvent(ctx, camA.ID, e, c.trigger)
+		v, err := svc.GetEvent(ctx, e.ID)
+		if err != nil || v.RuleID != c.wantRule || v.TriggerID != c.wantTrigger {
+			t.Errorf("rule %s and trigger %s reported: stored %q and %q (%v)", c.rule, c.trigger, v.RuleID, v.TriggerID, err)
 		}
 	}
 
@@ -116,7 +151,7 @@ func TestCameraReportsAreChecked(t *testing.T) {
 	// Retention goes by when the node received an event, not by the
 	// camera's clock, which its clients can move (audit B15).
 	skewed := ulid.Make().String()
-	svc.recordEvent(ctx, camA.ID, engine.Event{ID: skewed, Type: "line_crossing", At: time.Now().AddDate(-1, 0, 0)})
+	svc.recordEvent(ctx, camA.ID, engine.Event{ID: skewed, Type: "line_crossing", At: time.Now().AddDate(-1, 0, 0)}, "")
 	svc.applyRetention(ctx)
 	if _, err := svc.GetEvent(ctx, skewed); err != nil {
 		t.Fatal("an event just received was deleted because of the camera's clock")

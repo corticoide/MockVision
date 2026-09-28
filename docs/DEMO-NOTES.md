@@ -24,7 +24,7 @@ against the Docker image started with `compose.yaml`.
 | The camera answers ping and `ip neigh` shows a MAC other than the node's | ping and `ip neigh` from the client namespace |
 | `ffprobe rtsp://admin:<pw>@<ip>:554/main` returns H.264 at the configured resolution | ffprobe over TCP and UDP, `h264,640,360` |
 | `curl --digest …/snapshot.cgi` returns a JPEG; device info carries the serial | curl from the client; a wrong password gets 401 |
-| The line-crossing button POSTs to the target; the panel shows status and latency | receiver on the client; `delivery_status: ok` and latency; browser run (see below) |
+| A manual event POSTs to the target; the panel shows status and latency | receiver on the client; `delivery_status: ok` and latency; browser run (see below) |
 | Stopping removes the namespace and the interface | `ip netns` and ping after the stop |
 | Restarting the node or the container brings back cameras with autostart | stop, start, ping |
 | Going over the maximum or the resources rejects the creation with a reason | `max_cameras` set to 1; problem with code `max_cameras` and the reason |
@@ -35,12 +35,21 @@ against the Docker image started with `compose.yaml`.
 | DHCP, with the factory address as fallback (v1) | without a server the camera answers on `192.168.5.190`, and a second one waits until the first stops and then takes it; with the e2e's DHCP server it declines Gate 1's address, leases the next and releases it when deleted |
 | ipvlan, and one mode per network card (v1) | where the kernel has ipvlan, a camera on a second card answers with the card's MAC, and a macvlan camera on that card is refused with `parent_busy` |
 | The node reaches its cameras through the bridge (v1) | ping and snapshot from the node with the bridge on, not with it off |
+| Rules and triggers (v1) | a manual loitering on a region carries the rule's name and its only object class; a crossing the line does not report gets 422; the emulated API turns crossings off (409) and on; a random trigger sends a crossing every second or two, stops when disabled and fires once on request, without restarting the camera; its rule and trigger survive a node restart |
+| Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
 Playwright, on a node in local mode: first-run wizard, profile import with
 its report, target and test request, camera creation, snapshot preview,
-line crossing, event log, assets and settings. No console errors besides the
-expected 401 before login, and no CSP violations.
+manual events, event log, assets and settings. Since feature 7, also the
+rule editor (drawing a line and a region with the mouse, dragging a corner,
+moving it with the keyboard), firing a rule's event, a random trigger and
+the header's trigger dialog, in English and Spanish; and the analytics the
+profile declares: factory rules on a new camera, counts on each rule, the
+heat map and resetting the counts, a report fired by hand and as a trigger,
+and a camera without rules, whose crossings cannot be fired and whose ⚡
+leaves the camera list. No console errors besides the expected 401 before
+login, and no CSP violations.
 
 Not verified: VLC playback (ffprobe is), a Raspberry Pi, a physical switch,
 and the systemd unit on a real host (it passes `systemd-analyze verify`).
@@ -115,6 +124,31 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   part of Docker's defaults. The result is a strict subset of D61. The root
   filesystem is read-only and `no-new-privileges` is set.
 
+### Analytics
+
+- **No detection on the picture.** Rules say where events happen and
+  triggers say when; an event's object (class, color, confidence, box) is
+  made up and placed on its rule. The design keeps real detection out of v1.
+- **Triggers are manual and random**; schedules, scripts and external
+  triggers (MQTT or incoming webhooks) come in v1.1 (D40).
+- **The profile declares every analytic**: kinds of rule, factory rules,
+  events and the kind of rule each comes from, reports. An event that comes
+  from rules needs an enabled one that reports it. Cameras created before
+  profiles had factory rules get them once, at boot, if they have no rules.
+- **Counts live in the camera process**: they start with it (or at a reset)
+  and are lost when it stops, where a real camera keeps its counting
+  history on flash. They accumulate from the camera start; reports carry
+  the totals, not the counts of each interval.
+- The heat map counts where each object's box was centered, on a 128×72
+  grid; maps of other sizes are sums of it.
+- Rule and trigger IDs are ULIDs, as every ID of the node; a profile that
+  must send small numbers can name rules "1", "2"…
+- A trigger bound to a rule keeps it: the rule cannot go away while the
+  trigger uses it. Restoring a camera brings back its factory rules, as a
+  real reset does, and keeps its triggers, which then fire on any rule.
+- The loitering time and the intrusion delay of real cameras are not
+  modeled: a region reports the event when its trigger says.
+
 ### API and data
 
 - No `Idempotency-Key`.
@@ -137,9 +171,11 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 - No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
   runs under a CSP without `unsafe-inline`. The design tokens (colors,
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
-- Camera detail tabs for rules, triggers, faults and logs come with their
-  features of the v1 plan; the detail page has General, Network, Protocols,
-  Media, Users, Configuration and Events.
+- Camera detail tabs for faults and logs come with their features of the
+  v1 plan; the detail page has General, Network, Protocols, Media, Rules,
+  Triggers, Users, Configuration and Events.
+- The rule editor draws on the latest snapshot of the main stream, refreshed
+  every 5 seconds; the camera page loads the first time a camera is opened.
 - The event log shows the latest 100 events; the API pages with a cursor.
 
 ### Distribution

@@ -1,6 +1,7 @@
 // Package tmpl compiles and renders profile templates with Go's text/template
 // and a closed set of safe functions: state, canon, uuid, rand, b64,
-// snapshot, fmtTime, json, xml, default, lower and upper. Templates have no
+// snapshot, fmtTime, json, xml, default, lower, upper, and the analytics
+// counts: analytics, lineCount, occupancy and heatmap. Templates have no
 // access to files, network, environment or processes, each render is bounded
 // in time, size and steps, and request data is inserted as values, never
 // evaluated as a template.
@@ -58,7 +59,17 @@ type Env struct {
 	State    func(key string) (any, bool)
 	Canon    func(key string) (any, bool)
 	Snapshot func() ([]byte, error)
+	// Analytics returns what the camera's analytics counted.
+	Analytics func() any
+	// Heatmap returns the heat map in rows of cols cells.
+	Heatmap func(cols, rows int) [][]int
+	// LineCount and Occupancy read the counts of a rule by name or ID.
+	LineCount func(rule, direction string) int
+	Occupancy func(rule string) int
 }
+
+// MaxHeatmapCells bounds the heat map a template asks for.
+const MaxHeatmapCells = 128 * 128
 
 // Compiler implements engine.Templates for one camera.
 type Compiler struct {
@@ -347,6 +358,40 @@ func funcMap(env Env) template.FuncMap {
 			}
 			return base64.StdEncoding.EncodeToString(jpeg), nil
 		},
+		"analytics": func() any {
+			if env.Analytics == nil {
+				return nil
+			}
+			return env.Analytics()
+		},
+		// lineCount "Gate" "A->B": crossings of a line one way; any other
+		// direction counts both.
+		"lineCount": func(rule string, direction ...string) int {
+			if env.LineCount == nil {
+				return 0
+			}
+			return env.LineCount(rule, strings.Join(direction, ""))
+		},
+		"occupancy": func(rule string) int {
+			if env.Occupancy == nil {
+				return 0
+			}
+			return env.Occupancy(rule)
+		},
+		// heatmap 32 18: objects seen in each cell of a grid over the
+		// picture, as rows of cells. Sizes can come from a request, as
+		// strings.
+		"heatmap": func(cols, rows any) ([][]int, error) {
+			c, errC := positiveInt(cols)
+			r, errR := positiveInt(rows)
+			if errC != nil || errR != nil || c*r > MaxHeatmapCells {
+				return nil, fmt.Errorf("heatmap: columns and rows must be positive, %d cells at most", MaxHeatmapCells)
+			}
+			if env.Heatmap == nil {
+				return [][]int{}, nil
+			}
+			return env.Heatmap(c, r), nil
+		},
 		"fmtTime": fmtTime,
 		"json":    toJSON,
 		"xml":     toXML,
@@ -354,6 +399,31 @@ func funcMap(env Env) template.FuncMap {
 		"lower":   func(v any) string { return strings.ToLower(toString(v)) },
 		"upper":   func(v any) string { return strings.ToUpper(toString(v)) },
 	}
+}
+
+// positiveInt reads a positive integer given as a number or a string.
+func positiveInt(v any) (int, error) {
+	var n int
+	switch x := v.(type) {
+	case int:
+		n = x
+	case int64:
+		n = int(x)
+	case float64:
+		n = int(x)
+		if float64(n) != x {
+			return 0, errors.New("not an integer")
+		}
+	default:
+		var err error
+		if n, err = strconv.Atoi(strings.TrimSpace(toString(v))); err != nil {
+			return 0, err
+		}
+	}
+	if n <= 0 {
+		return 0, errors.New("not positive")
+	}
+	return n, nil
 }
 
 func newUUID() string {

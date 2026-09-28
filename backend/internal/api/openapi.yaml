@@ -27,6 +27,8 @@ tags:
   - name: node
   - name: profiles
   - name: cameras
+  - name: vca
+    description: Rules drawn on a camera's picture and the triggers that raise events on them
   - name: assets
   - name: targets
   - name: events
@@ -593,15 +595,137 @@ paths:
       tags: [events]
       operationId: triggerEvent
       summary: Manual trigger; the camera serializes and delivers the event
+      description: >
+        The event happens on rule_id, or on the first enabled rule that
+        reports its type; without one, on a default line or region. What the
+        request leaves out (direction, object, plate, speed) the camera
+        generates. 409 when the camera is not running, the rule is disabled
+        or the profile's analytics switch turns the type off.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Trigger" }
+            schema: { $ref: "#/components/schemas/ManualEvent" }
       responses:
         "201": { description: Emitted, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/rules:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [vca]
+      operationId: listCameraRules
+      responses:
+        "200":
+          description: Rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Rule" } }
+    put:
+      tags: [vca]
+      operationId: setCameraRules
+      description: >
+        Replaces the camera's analytics rules (D39); a rule without id is new.
+        A running camera applies them at once. 409 when a trigger fires on a
+        rule that would go away or stop reporting its events.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rules]
+              properties:
+                rules: { type: array, maxItems: 16, items: { $ref: "#/components/schemas/RuleInput" } }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/triggers:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [vca]
+      operationId: listCameraTriggers
+      responses:
+        "200":
+          description: Triggers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Trigger" } }
+    put:
+      tags: [vca]
+      operationId: setCameraTriggers
+      description: >
+        Replaces the camera's stored triggers (D40); a trigger without id is
+        new. A running camera applies them at once: enabled random triggers
+        raise events, disabled ones stop.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [triggers]
+              properties:
+                triggers: { type: array, maxItems: 16, items: { $ref: "#/components/schemas/TriggerInput" } }
+      responses:
+        "200": { description: Camera, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/triggers/{trigger}/actions/fire:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: trigger, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [vca]
+      operationId: fireTrigger
+      summary: Emits one event of a stored trigger now, enabled or not
+      responses:
+        "201": { description: Emitted, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /cameras/{id}/analytics:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [vca]
+      operationId: getCameraAnalytics
+      summary: What a running camera counted from the events it emitted
+      description: >
+        Crossings of each line by direction and object class, entries, exits
+        and occupancy of each region, events by type, and, with cols and
+        rows, a heat map of where objects were. Counts start with the camera
+        process or at the last reset.
+      parameters:
+        - { name: cols, in: query, schema: { type: integer, minimum: 1, maximum: 128 } }
+        - { name: rows, in: query, schema: { type: integer, minimum: 1, maximum: 72 } }
+      responses:
+        "200": { description: Counts, content: { application/json: { schema: { $ref: "#/components/schemas/Analytics" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /cameras/{id}/analytics/actions/reset:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [vca]
+      operationId: resetCameraAnalytics
+      summary: Starts a running camera's counts again from zero
+      responses:
+        "200": { description: Counts after the reset, content: { application/json: { schema: { $ref: "#/components/schemas/Analytics" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /assets:
     get:
@@ -1056,7 +1180,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Profile"
         - type: object
-          required: [streams, engines, events, factory_users, params]
+          required: [streams, engines, events, event_specs, vca, factory_users, params]
           properties:
             streams: { type: array, items: { $ref: "#/components/schemas/ProfileStream" } }
             engines:
@@ -1069,6 +1193,26 @@ components:
                   engine: { type: string }
                   port: { type: integer }
             events: { type: array, items: { type: string } }
+            event_specs:
+              description: Each event type; without transports cameras cannot emit it.
+              type: array
+              items:
+                type: object
+                required: [type, vendor_name, min_interval_ms, transports, rule, report]
+                properties:
+                  type: { type: string }
+                  vendor_name: { type: string }
+                  min_interval_ms: { type: integer }
+                  transports: { type: array, items: { type: string } }
+                  rule: { type: string, enum: [line, region, ""], description: The kind of rule the event comes from; empty for none }
+                  report: { type: boolean, description: The event carries counts, not an object }
+            vca:
+              description: The kinds of rule of the profile's analytics and the objects they detect.
+              type: object
+              required: [rules, object_classes]
+              properties:
+                rules: { type: array, items: { type: string, enum: [line, region] } }
+                object_classes: { type: array, items: { type: string } }
             factory_users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
             factory_ip: { type: string }
             params: { type: array, items: { $ref: "#/components/schemas/Param" } }
@@ -1275,7 +1419,7 @@ components:
         force: { type: boolean }
     Camera:
       type: object
-      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, metrics, created_at, updated_at]
+      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, rules, triggers, event_types, metrics, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1308,6 +1452,18 @@ components:
               id: { type: string }
               name: { type: string }
               event_types: { type: array, items: { type: string } }
+        rules: { type: array, items: { $ref: "#/components/schemas/Rule" } }
+        triggers: { type: array, items: { $ref: "#/components/schemas/Trigger" } }
+        event_types:
+          description: The events the camera can send, as its profile declares them.
+          type: array
+          items:
+            type: object
+            required: [type, rule, report]
+            properties:
+              type: { type: string }
+              rule: { type: string, enum: [line, region, ""], description: The kind of rule the event comes from; empty for none }
+              report: { type: boolean }
         metrics: { oneOf: [{ $ref: "#/components/schemas/CameraMetrics" }, { type: "null" }] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1458,11 +1614,138 @@ components:
         error: { type: string }
         from: { type: string, enum: [camera, node] }
         camera: { type: string, description: Name of the camera the request left from }
+    Point:
+      description: A position on the picture, from 0 to 1 from its top left corner.
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: number, minimum: 0, maximum: 1 }
+        y: { type: number, minimum: 0, maximum: 1 }
+    Rule:
+      description: >
+        A VCA rule (D39). A line has two points; its side A is on the left
+        walking from the first to the second, and direction says which
+        crossings it reports. A region has 3 to 20 points. Events are what the
+        rule reports, among the events its profile raises from its kind of
+        rule. No object_classes means every class of the profile.
+      type: object
+      required: [id, name, type, points, direction, events, object_classes, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [line, region] }
+        points: { type: array, items: { $ref: "#/components/schemas/Point" } }
+        direction: { type: string, enum: ["A->B", "B->A", both, ""] }
+        events: { type: array, items: { type: string } }
+        object_classes: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+    RuleInput:
+      type: object
+      required: [name, type, points]
+      properties:
+        id: { type: string, description: An existing rule of the camera; empty for a new one }
+        name: { type: string, maxLength: 32 }
+        type: { type: string, enum: [line, region] }
+        points: { type: array, minItems: 2, maxItems: 20, items: { $ref: "#/components/schemas/Point" } }
+        direction: { type: string, enum: ["A->B", "B->A", both], description: Lines only; both by default }
+        events: { type: array, items: { type: string }, description: Required for regions; a line without events reports line_crossing }
+        object_classes: { type: array, items: { type: string } }
+        enabled: { type: boolean, default: true }
+    Analytics:
+      type: object
+      required: [since, lines, regions, events]
+      properties:
+        since: { type: string, format: date-time }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [rule_id, name, a_to_b, b_to_a, classes]
+            properties:
+              rule_id: { type: string }
+              name: { type: string }
+              a_to_b: { type: integer }
+              b_to_a: { type: integer }
+              classes:
+                type: object
+                additionalProperties:
+                  type: object
+                  required: [a_to_b, b_to_a]
+                  properties:
+                    a_to_b: { type: integer }
+                    b_to_a: { type: integer }
+        regions:
+          type: array
+          items:
+            type: object
+            required: [rule_id, name, entries, exits, occupancy, events]
+            properties:
+              rule_id: { type: string }
+              name: { type: string }
+              entries: { type: integer }
+              exits: { type: integer }
+              occupancy: { type: integer, description: Entries minus exits, never below zero }
+              events: { type: object, additionalProperties: { type: integer } }
+        events: { type: object, additionalProperties: { type: integer } }
+        heat:
+          description: Objects seen in each cell, row by row from the top left corner.
+          type: object
+          required: [cols, rows, cells]
+          properties:
+            cols: { type: integer }
+            rows: { type: integer }
+            cells: { type: array, items: { type: integer } }
+    SpeedRange:
+      type: object
+      required: [min, max, limit, unit]
+      properties:
+        min: { type: number, minimum: 0 }
+        max: { type: number, maximum: 500 }
+        limit: { type: number, description: 0 for none }
+        unit: { type: string, enum: [km/h, mph] }
     Trigger:
+      description: >
+        A stored trigger (D40). A random one emits an event of event_type on
+        rule_id (empty: any enabled rule that reports the type) at a random
+        moment between min_seconds and max_seconds after the previous one,
+        while it is enabled and the camera runs. Plates and plate_masks (9 a
+        digit, A a letter, X a hex digit, backslash escapes) give its events
+        a plate, and speed a speed.
+      type: object
+      required: [id, name, type, event_type, rule_id, min_seconds, max_seconds, plates, plate_masks, speed, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [random] }
+        event_type: { type: string }
+        rule_id: { type: string }
+        min_seconds: { type: integer }
+        max_seconds: { type: integer }
+        plates: { type: array, items: { type: string } }
+        plate_masks: { type: array, items: { type: string } }
+        speed: { oneOf: [{ $ref: "#/components/schemas/SpeedRange" }, { type: "null" }] }
+        enabled: { type: boolean }
+    TriggerInput:
+      type: object
+      required: [name, event_type, min_seconds, max_seconds]
+      properties:
+        id: { type: string, description: An existing trigger of the camera; empty for a new one }
+        name: { type: string, maxLength: 32 }
+        type: { type: string, enum: [random], default: random }
+        event_type: { type: string }
+        rule_id: { type: string }
+        min_seconds: { type: integer, minimum: 1, maximum: 86400 }
+        max_seconds: { type: integer, minimum: 1, maximum: 86400 }
+        plates: { type: array, maxItems: 100, items: { type: string, maxLength: 16 } }
+        plate_masks: { type: array, maxItems: 10, items: { type: string } }
+        speed: { oneOf: [{ $ref: "#/components/schemas/SpeedRange" }, { type: "null" }] }
+        enabled: { type: boolean, default: true }
+    ManualEvent:
       type: object
       required: [type]
       properties:
         type: { type: string, examples: [line_crossing] }
+        rule_id: { type: string }
         direction: { type: string, enum: ["A->B", "B->A", none] }
         object:
           type: object
@@ -1510,6 +1793,8 @@ components:
         type: { type: string }
         at: { type: string, format: date-time }
         data: { type: object, additionalProperties: true }
+        rule_id: { type: string, description: The camera's rule behind the event }
+        trigger_id: { type: string, description: The camera's stored trigger behind the event }
         deliveries: { type: array, items: { $ref: "#/components/schemas/Delivery" } }
         delivery_status: { type: string, enum: [ok, failed, pending, none] }
         latency_ms: { type: [integer, "null"] }

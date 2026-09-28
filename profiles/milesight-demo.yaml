@@ -3,7 +3,10 @@
 # Used by the technical demo to exercise the whole architecture: three RTSP
 # streams (main and sub in H.264 or H.265, third in MJPEG), three HTTP
 # features (snapshot, device information, reading and writing a parameter)
-# and a line-crossing event pushed over HTTP.
+# and video analytics: line and region rules whose events are pushed over
+# HTTP, the counts the camera keeps from them (people counting per line,
+# occupancy per region, a heat map) served over HTTP and pushed as a
+# periodic report.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -15,7 +18,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.2.0
+  version: 0.4.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -43,6 +46,13 @@ state:
     min: 0
     max: 100
     description: Declarative; stored and returned.
+  # Analytics switch: turned off through the emulated API, the camera stops
+  # reporting line crossings, whatever triggers them.
+  Event.LineCrossing.Enable:
+    type: bool
+    default: true
+    bind: events.line_crossing.enabled
+    description: Line-crossing detection.
   # Effective parameters: changing one regenerates its stream.
   Encode.Main.Codec:
     type: enum
@@ -195,6 +205,35 @@ engines:
           from: query
           then: { type: text/plain, body: "OK\n" }
 
+      # 4. Analytics counts, as the camera counted them from its events since
+      #    it started: crossings of each line (A->B in, B->A out) and the
+      #    entries, exits and occupancy of each region.
+      - id: vca-counting
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.counting }
+        action:
+          type: application/json
+          body: |
+            {{ $a := analytics }}{
+              "since": {{ json (fmtTime $a.Since "rfc3339") }},
+              "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+              "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "entries": {{ $r.Entries }}, "exits": {{ $r.Exits }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+            }
+
+      # 5. Heat map: objects seen in each cell of a grid over the picture,
+      #    32x18 unless the request asks for cols and rows.
+      - id: vca-heatmap
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.heatmap }
+        action:
+          type: application/json
+          body: |
+            {{ $data := heatmap (default "32" .Request.Query.cols) (default "18" .Request.Query.rows) }}{"cols": {{ len (index $data 0) }}, "rows": {{ len $data }}, "data": {{ json $data }}}
+
     unknown:
       status: 404
       type: text/html
@@ -204,11 +243,13 @@ engines:
     engine: http-push@^1
 
 events:
+  # Every analytics event travels the same way; the body names the event
+  # with its vendor name (.EventName) and the rule that raised it.
   line_crossing:
     vendor_name: LineCrossing
     min_interval: 1s
     transports:
-      http_push:
+      http_push: &push
         method: POST
         content_type: application/json
         body: |
@@ -222,17 +263,68 @@ events:
               "macAddress": {{ json (upper .Camera.MAC) }},
               "ipAddress": {{ json .Camera.IP }}
             },
-            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}}{{ else }}null{{ end }},
-            "direction": {{ json .Event.Direction }},
-            "object": {{ with .Event.Object }}{{ json .Class }}{{ else }}null{{ end }}
+            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}, "type": {{ json .Type }}}{{ else }}null{{ end }},
+            "direction": {{ with .Event.Direction }}{{ json . }}{{ else }}null{{ end }},
+            "object": {{ with .Event.Object }}{"class": {{ json .Class }}, "color": {{ json .Color }}, "confidence": {{ json .Confidence }}, "box": {{ json .Box }}}{{ else }}null{{ end }}
           }
-    delivery: { timeout: 5s, retries: 3, backoff: 2s }
+    delivery: &delivery { timeout: 5s, retries: 3, backoff: 2s }
+  region_entrance:
+    vendor_name: RegionEntrance
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  region_exit:
+    vendor_name: RegionExiting
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  loitering:
+    vendor_name: Loitering
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  intrusion:
+    vendor_name: Intrusion
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  # A report: what the camera counted, pushed by a trigger with a fixed
+  # interval (the same shortest and longest wait).
+  custom:people_counting:
+    vendor_name: PeopleCounting
+    report: true
+    min_interval: 1s
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: |
+          {{ $a := analytics }}{
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {"serialNumber": {{ json .Camera.Serial }}, "macAddress": {{ json (upper .Camera.MAC) }}},
+            "since": {{ json (fmtTime $a.Since "rfc3339") }},
+            "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+            "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+          }
+    delivery: *delivery
 
 vca:
-  rules: [line]
+  rules: [line, region]
   object_classes: [person, car, truck, bus, motorcycle, bicycle]
+  # As the camera ships: a line across the lower picture and a region in
+  # its middle. Restoring the camera brings them back.
+  factory_rules:
+    - name: Line 1
+      type: line
+      points: [{ x: 0.1, y: 0.6 }, { x: 0.9, y: 0.6 }]
+    - name: Region 1
+      type: region
+      points: [{ x: 0.25, y: 0.35 }, { x: 0.75, y: 0.35 }, { x: 0.75, y: 0.9 }, { x: 0.25, y: 0.9 }]
+      events: [region_entrance, region_exit]
 
 coverage:
   rtsp: main stream only
-  http-api: snapshot, device information and parameters
-  http_push: line_crossing
+  http-api: snapshot, device information, parameters, counting and heat map
+  http_push: line_crossing, region_entrance, region_exit, loitering, intrusion and a people counting report

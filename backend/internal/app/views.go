@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/telemetry"
@@ -141,9 +142,15 @@ type CameraView struct {
 	Streams      []StreamView   `json:"streams"`
 	Users        []UserView     `json:"users"`
 	Targets      []TargetRef    `json:"targets"`
-	Metrics      *MetricsView   `json:"metrics"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	// Rules and Triggers are the camera's analytics (D39, D40).
+	Rules    []domain.Rule    `json:"rules"`
+	Triggers []domain.Trigger `json:"triggers"`
+	// EventTypes are the events the camera can send, as its profile
+	// declares them.
+	EventTypes []CameraEventView `json:"event_types"`
+	Metrics    *MetricsView      `json:"metrics"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // ParamView is a native parameter of a camera.
@@ -204,12 +211,55 @@ type ProfileEngineView struct {
 	Port     int    `json:"port,omitempty"`
 }
 
-// ProfileDetail adds what the camera wizard needs.
+// ProfileEventView is an event type of a profile: its vendor name, the
+// shortest interval between two, and the transports it travels by (none:
+// cameras cannot emit it).
+type ProfileEventView struct {
+	Type          string   `json:"type"`
+	VendorName    string   `json:"vendor_name"`
+	MinIntervalMS int64    `json:"min_interval_ms"`
+	Transports    []string `json:"transports"`
+	// Rule is the kind of rule the event comes from: line, region or ""
+	// for none.
+	Rule string `json:"rule"`
+	// Report marks an event that carries counts, not an object.
+	Report bool `json:"report"`
+}
+
+// CameraEventView is an event a camera can send: its type, the kind of
+// rule it comes from ("" for none) and whether it is a report.
+type CameraEventView struct {
+	Type   string `json:"type"`
+	Rule   string `json:"rule"`
+	Report bool   `json:"report"`
+}
+
+// cameraEvents lists the events a profile lets its cameras send.
+func cameraEvents(doc *profile.Document) []CameraEventView {
+	caps := doc.VCACaps()
+	out := []CameraEventView{}
+	for _, typ := range profile.SortedKeys(caps.Events) {
+		out = append(out, CameraEventView{Type: typ, Rule: string(caps.RuleTypeFor(typ)), Report: caps.Reports[typ]})
+	}
+	return out
+}
+
+// ProfileVCAView is what a profile's analytics have: kinds of rule and the
+// object classes they detect.
+type ProfileVCAView struct {
+	Rules         []string `json:"rules"`
+	ObjectClasses []string `json:"object_classes"`
+}
+
+// ProfileDetail adds what the camera wizard, the rule editor and the
+// triggers need.
 type ProfileDetail struct {
 	ProfileView
 	Streams      []ProfileStreamView `json:"streams"`
 	Engines      []ProfileEngineView `json:"engines"`
 	Events       []string            `json:"events"`
+	EventSpecs   []ProfileEventView  `json:"event_specs"`
+	VCA          ProfileVCAView      `json:"vca"`
 	FactoryUsers []UserView          `json:"factory_users"`
 	FactoryIP    string              `json:"factory_ip,omitempty"`
 	Params       []ParamView         `json:"params"`
@@ -281,7 +331,8 @@ type DeliveryView struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-// EventView is an event with its deliveries.
+// EventView is an event with its deliveries. RuleID and TriggerID name the
+// camera's rule and stored trigger behind it, when there were.
 type EventView struct {
 	ID             string          `json:"id"`
 	CameraID       string          `json:"camera_id"`
@@ -289,6 +340,8 @@ type EventView struct {
 	Type           string          `json:"type"`
 	At             time.Time       `json:"at"`
 	Data           json.RawMessage `json:"data"`
+	RuleID         string          `json:"rule_id,omitempty"`
+	TriggerID      string          `json:"trigger_id,omitempty"`
 	Deliveries     []DeliveryView  `json:"deliveries"`
 	DeliveryStatus string          `json:"delivery_status"`
 	LatencyMS      *int64          `json:"latency_ms"`

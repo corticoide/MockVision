@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/backend/internal/media"
@@ -300,8 +301,11 @@ func TestCameraEndToEnd(t *testing.T) {
 	})
 
 	t.Run("line crossing", func(t *testing.T) {
+		// Crossings happen on a line; the service names it.
+		line := domain.Rule{ID: "r1", Name: "Line 1", Type: domain.RuleLine, Points: []domain.Point{{X: 0.1, Y: 0.6}, {X: 0.9, Y: 0.6}},
+			Direction: domain.CrossBoth, Events: []string{"line_crossing"}, Enabled: true}
 		var res ipc.TriggerResult
-		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing"}, &res); err != nil {
+		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing", Rule: &line}, &res); err != nil {
 			t.Fatal(err)
 		}
 		var ev ipc.EventMsg
@@ -324,7 +328,7 @@ func TestCameraEndToEnd(t *testing.T) {
 		if err := svc.wait(t, ipc.TypeDelivery, 5*time.Second).Decode(&d); err != nil || d.Status != engine.DeliveryOK || d.HTTPStatus != 200 {
 			t.Fatalf("delivery = %+v, %v", d, err)
 		}
-		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing"}, nil); err == nil {
+		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing", Rule: &line}, nil); err == nil {
 			t.Fatal("min_interval must rate limit a second event")
 		}
 	})
