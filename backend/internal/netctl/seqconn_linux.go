@@ -20,6 +20,10 @@ const (
 	msgList   = "camera.list"
 	msgExited = "camera.exited"
 	msgPing   = "ping"
+
+	msgAddress  = "camera.address"
+	msgFirewall = "camera.firewall"
+	msgBridge   = "node.bridge"
 )
 
 // maxHelperMessage bounds a helper protocol message.

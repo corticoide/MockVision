@@ -7,6 +7,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -78,6 +79,14 @@ type Service struct {
 	regens   map[string]*regenState
 	// netnsNames reserves namespace names, name to camera ID.
 	netnsNames map[string]string
+	// claims are the addresses running DHCP cameras hold, to camera ID.
+	claims map[netip.Addr]string
+	// exitsChanged is closed and replaced when an exit notice arrives.
+	exitsChanged chan struct{}
+	// bridge is the state of the node's access to its cameras (D26), and
+	// bridgeSeen the node's addresses when it was last set.
+	bridge     netctl.BridgeState
+	bridgeSeen []string
 
 	// closing is set, under mu, when shutdown begins: no background work
 	// starts after that.
@@ -86,6 +95,12 @@ type Service struct {
 	setupMu   sync.Mutex
 	setupCode string
 	builtinMu sync.Mutex
+	// bridgeMu serializes the changes of the node's bridge.
+	bridgeMu sync.Mutex
+	// resolver resolves the targets' host names for the firewalls.
+	resolver targetResolver
+	// profiles caches the decoded profiles, by id@version.
+	profiles sync.Map
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -95,6 +110,8 @@ type Service struct {
 type retryState struct {
 	attempts int
 	timer    *time.Timer
+	// stopped: the failure needs a change first, so nothing retries.
+	stopped bool
 }
 
 // New builds the service on an open store.
@@ -133,27 +150,29 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		opts:       opts,
-		log:        opts.Log,
-		store:      st,
-		box:        box,
-		lib:        lib,
-		catalog:    engines.Builtin(),
-		rt:         opts.Runtime,
-		pub:        pub,
-		node:       telemetry.NewNodeSampler(),
-		metrics:    telemetry.NewCameras(),
-		login:      newLoginGuard(),
-		hashes:     newHashLimiter(),
-		sessions:   map[string]*session{},
-		retries:    map[string]*retryState{},
-		encodes:    map[string]*refMutex{},
-		opLocks:    map[string]*sync.Mutex{},
-		exits:      map[string]netctl.Exit{},
-		regens:     map[string]*regenState{},
-		netnsNames: map[string]string{},
-		baseCtx:    ctx,
-		cancel:     cancel,
+		opts:         opts,
+		log:          opts.Log,
+		store:        st,
+		box:          box,
+		lib:          lib,
+		catalog:      engines.Builtin(),
+		rt:           opts.Runtime,
+		pub:          pub,
+		node:         telemetry.NewNodeSampler(),
+		metrics:      telemetry.NewCameras(),
+		login:        newLoginGuard(),
+		hashes:       newHashLimiter(),
+		sessions:     map[string]*session{},
+		retries:      map[string]*retryState{},
+		encodes:      map[string]*refMutex{},
+		opLocks:      map[string]*sync.Mutex{},
+		exits:        map[string]netctl.Exit{},
+		regens:       map[string]*regenState{},
+		netnsNames:   map[string]string{},
+		claims:       map[netip.Addr]string{},
+		exitsChanged: make(chan struct{}),
+		baseCtx:      ctx,
+		cancel:       cancel,
 	}
 	s.jobs = s.newRunner()
 	return s, nil
@@ -179,12 +198,18 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	s.goLoop(s.jobs.Run)
+	s.applyBridge(ctx)
+	s.goLoop(s.networkLoop)
 	s.measureInterface(ctx)
 	s.goLoop(func(ctx context.Context) { s.node.Run(ctx, 2*time.Second) })
 	s.goLoop(s.publishNodeMetrics)
 	s.goLoop(s.watchExits)
 	s.goLoop(s.retentionLoop)
-	s.goLoop(func(ctx context.Context) { s.ensureBuiltinAsset(ctx) })
+	s.goLoop(func(ctx context.Context) {
+		if _, err := s.ensureBuiltinAsset(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("cannot create the built-in test pattern", "error", err)
+		}
+	})
 	s.goLoop(s.reconcileLoop)
 	<-ctx.Done()
 	s.shutdown()
@@ -232,7 +257,7 @@ func (s *Service) bootCameras(ctx context.Context) error {
 		if err := s.setDesired(ctx, c.ID, desired); err != nil {
 			return err
 		}
-		if err := s.saveStatus(ctx, c.ID, domain.StateStopped, "", time.Time{}, now); err != nil {
+		if err := s.saveStatus(ctx, c.ID, domain.StateStopped, "", "", time.Time{}, now); err != nil {
 			return err
 		}
 	}

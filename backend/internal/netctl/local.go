@@ -42,7 +42,7 @@ func NewLocalRuntime(exe string, log *slog.Logger) *LocalRuntime {
 }
 
 // Kind implements Runtime.
-func (l *LocalRuntime) Kind() string { return "local" }
+func (l *LocalRuntime) Kind() string { return KindLocal }
 
 // Exits implements Runtime.
 func (l *LocalRuntime) Exits() <-chan Exit { return l.exits }
@@ -143,6 +143,21 @@ func (l *LocalRuntime) Live(context.Context) ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// SetAddress implements Runtime; local cameras answer on 127.0.0.1 and
+// never lease an address.
+func (l *LocalRuntime) SetAddress(context.Context, AddressSpec) error {
+	return errorf(CodeUnsupported, "local mode has no DHCP")
+}
+
+// SetFirewall implements Runtime; local cameras share the node's network
+// and have no firewall of their own.
+func (l *LocalRuntime) SetFirewall(context.Context, string, Firewall) error { return nil }
+
+// SetBridge implements Runtime; the node reaches local cameras anyway.
+func (l *LocalRuntime) SetBridge(context.Context, BridgeSpec) (BridgeState, error) {
+	return BridgeState{}, nil
 }
 
 // Shutdown stops every camera.

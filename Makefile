@@ -8,8 +8,11 @@ LDFLAGS := -s -w -X github.com/corticoide/mockvision/backend/internal/buildinfo.
 BIN := bin/mockvision
 # Dropping privileges changes every thread at once, which needs a pure Go binary.
 GOBUILD := CGO_ENABLED=0 $(GO)
+# Built with the module's Go: go run pkg@version would pick the older one
+# golangci-lint asks for, which cannot load this module.
+GOLANGCI_LINT ?= GOTOOLCHAIN=$(shell $(GO) env GOVERSION) $(GOBUILD) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
-.PHONY: all build frontend backend dev test test-integration e2e e2e-compose generate docker clean
+.PHONY: all build frontend backend dev test lint test-integration e2e e2e-compose generate docker clean
 
 all: build
 
@@ -34,12 +37,16 @@ test: frontend/node_modules
 	$(GOBUILD) test ./...
 	cd frontend && $(NPM) run typecheck
 
+# Static checks beyond vet, as .golangci.yml lists them.
+lint:
+	$(GOLANGCI_LINT) run ./...
+
 # Network namespaces and macvlan: builds the tests, runs them as root.
 test-integration:
 	$(GOBUILD) test -c -tags integration -o bin/netctl.test ./backend/internal/netctl
 	sudo bin/netctl.test -test.v -test.count=1
 
-# Acceptance criteria on an isolated virtual LAN (root, iproute2, ffmpeg, curl, python3).
+# Acceptance criteria on an isolated virtual LAN (root, iproute2, ffmpeg, curl, ping, python3).
 e2e: backend
 	sudo E2E_BIN=$(CURDIR)/$(BIN) backend/e2e/run.sh
 

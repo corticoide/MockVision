@@ -265,6 +265,39 @@ func (q *Queries) ListAssets(ctx context.Context) ([]ListAssetsRow, error) {
 	return items, nil
 }
 
+const listRenditionStates = `-- name: ListRenditionStates :many
+SELECT id, status, error FROM renditions
+`
+
+type ListRenditionStatesRow struct {
+	ID     string
+	Status string
+	Error  string
+}
+
+func (q *Queries) ListRenditionStates(ctx context.Context) ([]ListRenditionStatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRenditionStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRenditionStatesRow{}
+	for rows.Next() {
+		var i ListRenditionStatesRow
+		if err := rows.Scan(&i.ID, &i.Status, &i.Error); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRenditionsByStatus = `-- name: ListRenditionsByStatus :many
 SELECT id, asset_id, codec, width, height, fps, gop, bitrate, sha256, status, error, created_at FROM renditions WHERE status = ?1 ORDER BY created_at
 `

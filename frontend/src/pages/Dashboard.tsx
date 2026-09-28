@@ -8,6 +8,7 @@ import { type Segment, Sparkline, StackedBar } from "@/components/Sparkline";
 import { Card, CardHeader, Empty, PageHeader } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { plural, type Translate, useT } from "@/lib/i18n";
+import { reasonText } from "@/lib/reasons";
 import { Link } from "@/lib/router";
 import { cn, formatBitRate, formatBytes, formatPercent, formatTime, sinceText } from "@/lib/utils";
 
@@ -213,7 +214,7 @@ function CameraProblem({ camera, t }: { camera: Camera; t: Translate }) {
     state === "error" ? <XCircle className="text-error" /> : state === "degraded" ? <AlertTriangle className="text-warn" /> : <RotateCw className="text-warn" />;
   const text =
     state === "error" || state === "degraded"
-      ? camera.status.reason || t(capitalize(state))
+      ? reasonText(camera.status, t) || t(capitalize(state))
       : t("Saved {what} changes apply after a restart", { what: pending.join(t(" and ")) });
   return (
     <>
@@ -224,7 +225,7 @@ function CameraProblem({ camera, t }: { camera: Camera; t: Translate }) {
       <span className="min-w-0 flex-1 truncate text-muted" title={text}>
         {text}
       </span>
-      <StateBadge state={state} reason={camera.status.reason} />
+      <StateBadge state={state} reason={reasonText(camera.status, t)} />
     </>
   );
 }

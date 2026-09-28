@@ -18,6 +18,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/buildinfo"
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -82,6 +83,7 @@ func (s *Service) CreateTarget(ctx context.Context, actor Actor, in TargetInput)
 		return nil, err
 	}
 	s.audit(ctx, actor, "target.create", "target", id, map[string]any{"name": t.Name, "url": t.URL})
+	s.refreshFirewallsLater()
 	return s.GetTarget(ctx, id)
 }
 
@@ -169,6 +171,7 @@ func (s *Service) UpdateTarget(ctx context.Context, actor Actor, id string, in T
 	for _, c := range cams {
 		s.reloadTargets(ctx, c)
 	}
+	s.refreshFirewallsLater()
 	return s.GetTarget(ctx, id)
 }
 
@@ -189,6 +192,7 @@ func (s *Service) DeleteTarget(ctx context.Context, actor Actor, id string) erro
 		return err
 	}
 	s.audit(ctx, actor, "target.delete", "target", id, map[string]string{"name": t.Name})
+	s.refreshFirewallsLater()
 	return nil
 }
 
@@ -265,7 +269,7 @@ func (s *Service) testFromNode(ctx context.Context, name string, t engine.Target
 		req.SetBasicAuth(t.Username, t.Password)
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	if s.rt.Kind() != "local" {
+	if s.rt.Kind() != netctl.KindLocal {
 		// Checked on the address actually dialed, after name resolution,
 		// so a name that resolves to the node is refused too.
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -42,6 +42,16 @@ type CreateCameraInput struct {
 // node's defaults. When editing a camera an empty MAC keeps the current
 // one; DefaultMAC goes back to the one derived from the camera ID.
 type NetworkInput struct {
+	// Mode is macvlan (the default: own MAC) or ipvlan (the node's MAC,
+	// for Wi-Fi and switches that limit MACs) (D27).
+	Mode string `json:"mode"`
+	// IPMode is static (the default) or dhcp: the camera leases its
+	// address, and takes the profile's factory one if no server answers
+	// (D24).
+	IPMode string `json:"ip_mode"`
+	// Force starts the camera even if its IP or MAC answers on the LAN
+	// (D14); nil keeps the current choice.
+	Force      *bool    `json:"force"`
 	Parent     string   `json:"parent"`
 	MAC        string   `json:"mac"`
 	DefaultMAC bool     `json:"default_mac"`
@@ -50,6 +60,18 @@ type NetworkInput struct {
 	Netmask    string   `json:"netmask"`
 	Gateway    string   `json:"gateway"`
 	DNS        []string `json:"dns"`
+}
+
+// withDefaults keeps the current mode, addressing and force where an edit
+// or a copy leaves them out.
+func (in NetworkInput) withDefaults(cur db.CameraNetwork) NetworkInput {
+	in.Mode = cmp.Or(in.Mode, cur.Mode)
+	in.IPMode = cmp.Or(in.IPMode, cur.IpMode)
+	if in.Force == nil {
+		f := store.Bool(cur.Force)
+		in.Force = &f
+	}
+	return in
 }
 
 // UserInput is a camera account to create.
@@ -93,18 +115,16 @@ type cameraBundle struct {
 	status  *db.CameraStatus
 }
 
-var profileCache sync.Map // "id@version" -> *profile.Document
-
 func (s *Service) profileDoc(p db.Profile) (*profile.Document, error) {
 	key := p.ProfileID + "@" + p.Version
-	if d, ok := profileCache.Load(key); ok {
+	if d, ok := s.profiles.Load(key); ok {
 		return d.(*profile.Document), nil
 	}
 	doc, err := profile.DecodeJSON([]byte(p.ResolvedJson))
 	if err != nil {
 		return nil, fmt.Errorf("stored profile %s is invalid: %w", key, err)
 	}
-	profileCache.Store(key, doc)
+	s.profiles.Store(key, doc)
 	return doc, nil
 }
 
@@ -146,6 +166,101 @@ func (s *Service) loadBundle(ctx context.Context, id string) (*cameraBundle, err
 	return b, nil
 }
 
+// loadBundles loads every camera for the list, with one query per table
+// instead of one per camera, and each profile once.
+func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
+	q := s.store.R()
+	cams, err := q.ListCameras(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nets, err := q.ListCameraNetworks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	states, err := q.ListAllCameraState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	protos, err := q.ListAllCameraProtocols(ctx)
+	if err != nil {
+		return nil, err
+	}
+	users, err := q.ListAllCameraUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	streams, err := q.ListAllCameraStreams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	targets, err := q.ListAllCameraTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	statuses, err := q.ListCameraStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*cameraBundle, len(cams))
+	profiles := map[string]*cameraBundle{} // a bundle of each profile, to share it
+	out := make([]*cameraBundle, 0, len(cams))
+	for _, c := range cams {
+		b := &cameraBundle{cam: c}
+		key := c.ProfileID + "@" + c.ProfileVersion
+		if p := profiles[key]; p != nil {
+			b.prof, b.doc, b.model = p.prof, p.doc, p.model
+		} else {
+			if b.prof, err = q.GetProfileByRef(ctx, db.GetProfileByRefParams{ProfileID: c.ProfileID, Version: c.ProfileVersion}); err != nil {
+				return nil, err
+			}
+			if b.doc, err = s.profileDoc(b.prof); err != nil {
+				return nil, err
+			}
+			b.model = profile.NewModel(b.doc)
+			profiles[key] = b
+		}
+		byID[c.ID] = b
+		out = append(out, b)
+	}
+	for _, n := range nets {
+		if b := byID[n.CameraID]; b != nil {
+			b.net = n
+		}
+	}
+	for _, st := range states {
+		if b := byID[st.CameraID]; b != nil {
+			b.state = append(b.state, st)
+		}
+	}
+	for _, p := range protos {
+		if b := byID[p.CameraID]; b != nil {
+			b.protos = append(b.protos, p)
+		}
+	}
+	for _, u := range users {
+		if b := byID[u.CameraID]; b != nil {
+			b.users = append(b.users, u)
+		}
+	}
+	for _, st := range streams {
+		if b := byID[st.CameraID]; b != nil {
+			b.streams = append(b.streams, st)
+		}
+	}
+	for _, t := range targets {
+		if b := byID[t.CameraID]; b != nil {
+			b.targets = append(b.targets, db.ListCameraTargetsRow(t))
+		}
+	}
+	for _, st := range statuses {
+		if b := byID[st.CameraID]; b != nil {
+			b.status = &st
+		}
+	}
+	return out, nil
+}
+
 // values returns the camera's native parameters.
 func (b *cameraBundle) values() map[string]any {
 	out := b.model.Defaults()
@@ -163,7 +278,20 @@ func (b *cameraBundle) values() map[string]any {
 	return out
 }
 
+// dns returns the camera's own DNS servers; none means the lease's or the
+// node's.
+func (b *cameraBundle) dns() []string {
+	var dns []string
+	_ = json.Unmarshal([]byte(b.net.DnsJson), &dns)
+	return dns
+}
+
+// ip is where the camera answers: its static address, or the last one a
+// DHCP camera held.
 func (b *cameraBundle) ip() string {
+	if b.net.IpMode == string(domain.IPDHCP) && b.status != nil {
+		return b.status.Ip
+	}
 	return b.net.Ip
 }
 
@@ -207,11 +335,7 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	}
 	cu := make([]domain.CameraUser, len(users))
 	for i, u := range users {
-		if u.Role == "" {
-			u.Role = "admin"
-			users[i].Role = "admin"
-		}
-		cu[i] = domain.CameraUser{Username: u.Username, Password: u.Password, Role: u.Role}
+		cu[i] = domain.CameraUser{Username: u.Username, Password: u.Password, Role: cmp.Or(u.Role, "admin")}
 	}
 	if err := domain.ValidateCameraUsers(cu); err != nil {
 		return nil, err
@@ -284,62 +408,36 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		autostart = *in.Autostart
 	}
 	tags, _ := json.Marshal(cleanTags)
-	now := time.Now()
-	serial := serialFor(id, doc.Identity.Serial)
-	err = s.store.Tx(ctx, func(q *db.Queries) error {
-		if err := q.InsertCamera(ctx, db.InsertCameraParams{
-			ID: id, Name: in.Name, ProfileID: prof.ProfileID, ProfileVersion: prof.Version, Serial: serial,
-			DesiredState: string(domain.DesiredStopped), Autostart: store.Int(autostart), TagsJson: string(tags),
-			CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli(),
-		}); err != nil {
-			return err
+	now := time.Now().UnixMilli()
+	c := newCamera{
+		row: db.InsertCameraParams{
+			ID: id, Name: in.Name, ProfileID: prof.ProfileID, ProfileVersion: prof.Version, Serial: serialFor(id, doc.Identity.Serial),
+			DesiredState: string(domain.DesiredStopped), Autostart: store.Int(autostart), TagsJson: string(tags), CreatedAt: now, UpdatedAt: now,
+		},
+		netw: netw, users: cu,
+	}
+	for _, key := range profile.SortedKeys(values) {
+		origin := "profile"
+		if _, ok := overrides[key]; ok {
+			origin = "panel"
 		}
-		dns, _ := json.Marshal(nonNil(netw.dns))
-		if err := q.InsertCameraNetwork(ctx, db.InsertCameraNetworkParams{
-			CameraID: id, Mode: string(domain.NetMacvlan), ParentIf: netw.parent, Mac: netw.mac, IpMode: string(domain.IPStatic),
-			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
-		}); err != nil {
-			return err
+		raw, _ := json.Marshal(values[key])
+		c.state = append(c.state, db.CameraState{Key: key, ValueJson: string(raw), Origin: origin})
+	}
+	for _, inst := range profile.SortedKeys(doc.Engines) {
+		port, err := s.instancePort(doc, inst)
+		if err != nil {
+			return nil, err
 		}
-		for _, key := range profile.SortedKeys(values) {
-			origin := "profile"
-			if _, ok := overrides[key]; ok {
-				origin = "panel"
-			}
-			raw, _ := json.Marshal(values[key])
-			if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: key, ValueJson: string(raw), Origin: origin, UpdatedAt: now.UnixMilli()}); err != nil {
-				return err
-			}
-		}
-		for _, inst := range profile.SortedKeys(doc.Engines) {
-			port, err := s.instancePort(doc, inst)
-			if err != nil {
-				return err
-			}
-			if err := q.InsertCameraProtocol(ctx, db.InsertCameraProtocolParams{CameraID: id, EngineKey: inst, Enabled: 1, Port: int64(port), OptionsJson: "{}"}); err != nil {
-				return err
-			}
-		}
-		for _, u := range users {
-			if err := q.InsertCameraUser(ctx, db.InsertCameraUserParams{
-				ID: ulid.Make().String(), CameraID: id, Username: u.Username,
-				PasswordEnc: s.box.Seal([]byte(u.Password), "camera_users:"+id+":"+u.Username), Role: u.Role,
-			}); err != nil {
-				return err
-			}
-		}
-		for i, name := range names {
-			if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: name, AssetID: asset.ID, RenditionID: store.NullString(rends[i].ID)}); err != nil {
-				return err
-			}
-		}
-		for _, t := range dedupe(in.TargetIDs) {
-			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t, EventTypesJson: "[]", OverridesJson: "{}"}); err != nil {
-				return err
-			}
-		}
-		return q.UpsertCameraStatus(ctx, db.UpsertCameraStatusParams{CameraID: id, ActualState: string(domain.StateStopped), UpdatedAt: now.UnixMilli()})
-	})
+		c.protos = append(c.protos, db.CameraProtocol{EngineKey: inst, Enabled: 1, Port: int64(port), OptionsJson: "{}"})
+	}
+	for i, name := range names {
+		c.streams = append(c.streams, db.CameraStream{Stream: name, AssetID: asset.ID, RenditionID: store.NullString(rends[i].ID)})
+	}
+	for _, t := range dedupe(in.TargetIDs) {
+		c.targets = append(c.targets, db.ListCameraTargetsRow{ID: t, EventTypesJson: "[]", OverridesJson: "{}"})
+	}
+	err = s.insertCamera(ctx, c)
 	if err != nil {
 		if store.IsUnique(err) {
 			return nil, domain.Conflict("name", "a camera with this name, IP or MAC already exists")
@@ -364,6 +462,86 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	return view, nil
 }
 
+// newCamera is what is stored for a camera being created or copied.
+type newCamera struct {
+	row     db.InsertCameraParams
+	netw    resolvedNetwork
+	state   []db.CameraState
+	protos  []db.CameraProtocol
+	users   []domain.CameraUser
+	streams []db.CameraStream
+	targets []db.ListCameraTargetsRow
+}
+
+// insertCamera stores a new camera and all it has in one transaction; the
+// camera IDs of the parts come from its row.
+func (s *Service) insertCamera(ctx context.Context, c newCamera) error {
+	id, now := c.row.ID, c.row.CreatedAt
+	return s.store.Tx(ctx, func(q *db.Queries) error {
+		if err := q.InsertCamera(ctx, c.row); err != nil {
+			return err
+		}
+		if err := q.InsertCameraNetwork(ctx, networkRow(id, c.netw)); err != nil {
+			return err
+		}
+		for _, st := range c.state {
+			if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: st.Key, ValueJson: st.ValueJson, Origin: st.Origin, UpdatedAt: now}); err != nil {
+				return err
+			}
+		}
+		for _, p := range c.protos {
+			if err := q.InsertCameraProtocol(ctx, db.InsertCameraProtocolParams{CameraID: id, EngineKey: p.EngineKey, Enabled: p.Enabled, Port: p.Port, OptionsJson: p.OptionsJson}); err != nil {
+				return err
+			}
+		}
+		if err := s.insertUsers(ctx, q, id, c.users); err != nil {
+			return err
+		}
+		for _, st := range c.streams {
+			if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: st.Stream, AssetID: st.AssetID, RenditionID: st.RenditionID}); err != nil {
+				return err
+			}
+		}
+		for _, t := range c.targets {
+			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t.ID, EventTypesJson: t.EventTypesJson, OverridesJson: t.OverridesJson}); err != nil {
+				return err
+			}
+		}
+		return q.UpsertCameraStatus(ctx, db.UpsertCameraStatusParams{CameraID: id, ActualState: string(domain.StateStopped), UpdatedAt: now})
+	})
+}
+
+// insertUsers stores a camera's accounts, their passwords sealed to it.
+func (s *Service) insertUsers(ctx context.Context, q *db.Queries, id string, users []domain.CameraUser) error {
+	for _, u := range users {
+		if err := q.InsertCameraUser(ctx, db.InsertCameraUserParams{
+			ID: ulid.Make().String(), CameraID: id, Username: u.Username,
+			PasswordEnc: s.box.Seal([]byte(u.Password), "camera_users:"+id+":"+u.Username), Role: u.Role,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// networkRow is how a camera's network is stored.
+func networkRow(id string, n resolvedNetwork) db.InsertCameraNetworkParams {
+	dns, _ := json.Marshal(nonNil(n.dns))
+	return db.InsertCameraNetworkParams{
+		CameraID: id, Mode: n.mode, ParentIf: n.parent, Mac: n.mac, IpMode: n.ipMode, Ip: n.ip,
+		Netmask: n.netmask, Gateway: n.gateway, DnsJson: string(dns), Force: store.Int(n.force),
+	}
+}
+
+// networkUpdate is networkRow for an existing camera.
+func networkUpdate(id string, n resolvedNetwork) db.UpdateCameraNetworkParams {
+	r := networkRow(id, n)
+	return db.UpdateCameraNetworkParams{
+		CameraID: r.CameraID, Mode: r.Mode, ParentIf: r.ParentIf, Mac: r.Mac, IpMode: r.IpMode, Ip: r.Ip,
+		Netmask: r.Netmask, Gateway: r.Gateway, DnsJson: r.DnsJson, Force: r.Force,
+	}
+}
+
 func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, overrides map[string]any, canon string, v any, field string) error {
 	key, ok := m.NativeFor(canon)
 	if !ok {
@@ -383,6 +561,8 @@ func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, over
 }
 
 type resolvedNetwork struct {
+	mode, ipMode                      string
+	force                             bool
 	parent, mac, ip, netmask, gateway string
 	prefix                            int
 	dns                               []string
@@ -395,7 +575,21 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 	if in.VendorOUI && doc.Identity.OUI != "" {
 		oui, _ = domain.ParseOUI(doc.Identity.OUI)
 	}
-	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String()}
+	out := resolvedNetwork{mac: domain.DeriveMAC(id, oui).String(), mode: in.Mode, ipMode: in.IPMode, force: in.Force != nil && *in.Force}
+	if out.mode == "" {
+		out.mode = string(domain.NetMacvlan)
+	}
+	if out.ipMode == "" {
+		out.ipMode = string(domain.IPStatic)
+	}
+	switch {
+	case out.mode != string(domain.NetMacvlan) && out.mode != string(domain.NetIPvlan):
+		return out, domain.Invalid("network.mode", "must be macvlan or ipvlan")
+	case out.ipMode != string(domain.IPStatic) && out.ipMode != string(domain.IPDHCP):
+		return out, domain.Invalid("network.ip_mode", "must be static or dhcp")
+	case out.mode == string(domain.NetIPvlan) && out.ipMode == string(domain.IPDHCP):
+		return out, domain.Invalid("network.ip_mode", "ipvlan cameras share the node's MAC and cannot use DHCP; give them a static IP")
+	}
 	dns, err := parseDNS(in.DNS)
 	if err != nil {
 		return out, err
@@ -408,7 +602,7 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 		}
 		out.mac = hw.String()
 	}
-	if s.rt.Kind() == "local" {
+	if s.rt.Kind() == netctl.KindLocal {
 		// Local mode: cameras answer on 127.0.0.1 with ephemeral ports.
 		return out, nil
 	}
@@ -416,19 +610,24 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 	if err != nil {
 		return out, err
 	}
-	out.parent = in.Parent
-	if out.parent == "" {
-		out.parent = s.Settings(ctx).ParentInterface
-	}
-	if out.parent == "" {
-		out.parent = s.opts.ParentInterface
-	}
-	if out.parent == "" {
-		out.parent = info.DefaultInterface
-	}
+	set := s.Settings(ctx)
+	out.parent = cmp.Or(in.Parent, s.defaultParentFor(set))
 	iface, ok := info.Lookup(out.parent)
 	if !ok {
 		return out, domain.Invalid("network.parent", "interface %q does not exist on this node", out.parent)
+	}
+	if iface.Wireless && out.mode == string(domain.NetMacvlan) {
+		return out, domain.Invalid("network.mode", "%s is a Wi-Fi interface: access points refuse the extra MACs of macvlan cameras; use ipvlan", out.parent)
+	}
+	use, err := s.parentsInUse(ctx, set, id)
+	if err != nil {
+		return out, err
+	}
+	if msg := use[out.parent].modeConflict(out.parent, out.mode); msg != "" {
+		return out, domain.Invalid("network.mode", "%s", msg)
+	}
+	if out.ipMode == string(domain.IPDHCP) {
+		return out, nil
 	}
 	if strings.TrimSpace(in.IP) == "" {
 		return out, domain.Invalid("network.ip", "is required")
@@ -437,12 +636,8 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 	if err != nil || !ip.Is4() {
 		return out, domain.Invalid("network.ip", "must be an IPv4 address")
 	}
-	for _, i := range info.Interfaces {
-		for _, a := range i.Addrs {
-			if p, err := netip.ParsePrefix(a); err == nil && p.Addr() == ip {
-				return out, domain.Invalid("network.ip", "%s belongs to the node itself (%s)", ip, i.Name)
-			}
-		}
+	if name, ok := nodeInterfaceWith(info, ip); ok {
+		return out, domain.Invalid("network.ip", "%s belongs to the node itself (%s)", ip, name)
 	}
 	prefix := 24
 	switch {
@@ -464,11 +659,9 @@ func (s *Service) resolveNetwork(ctx context.Context, id string, doc *profile.Do
 			return out, domain.Invalid("network.gateway", "must be an IPv4 address")
 		}
 	case info.DefaultGateway != "":
-		if g, err := netip.ParseAddr(info.DefaultGateway); err == nil && netip.PrefixFrom(ip, prefix).Masked().Contains(g) {
-			gw = g
-		}
+		gw, _ = domain.GatewayIn(ip, prefix, info.DefaultGateway)
 	}
-	nid := domain.NetIdentity{Mode: domain.NetMacvlan, ParentIf: out.parent, MAC: out.mac, IPMode: domain.IPStatic, IP: ip, Prefix: prefix, Gateway: gw}
+	nid := domain.NetIdentity{Mode: domain.NetMode(out.mode), ParentIf: out.parent, MAC: out.mac, IPMode: domain.IPStatic, IP: ip, Prefix: prefix, Gateway: gw}
 	if err := nid.Validate(); err != nil {
 		return out, err
 	}
@@ -594,17 +787,25 @@ func dedupe(in []string) []string {
 
 // ListCameras returns the cameras that pass the filter, by name.
 func (s *Service) ListCameras(ctx context.Context, f CameraFilter) ([]CameraView, error) {
-	cams, err := s.store.R().ListCameras(ctx)
+	bundles, err := s.loadBundles(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]CameraView, 0, len(cams))
-	for _, c := range cams {
-		v, err := s.GetCamera(ctx, c.ID)
-		if err != nil {
-			continue // deleted meanwhile
-		}
-		if f.Match(v) {
+	rows, err := s.store.R().ListRenditionStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rends := make(map[string]db.ListRenditionStatesRow, len(rows))
+	for _, r := range rows {
+		rends[r.ID] = r
+	}
+	lookup := func(id string) (db.ListRenditionStatesRow, bool) {
+		r, ok := rends[id]
+		return r, ok
+	}
+	out := make([]CameraView, 0, len(bundles))
+	for _, b := range bundles {
+		if v := s.cameraView(b, lookup); f.Match(v) {
 			out = append(out, *v)
 		}
 	}
@@ -617,14 +818,17 @@ func (s *Service) GetCamera(ctx context.Context, id string) (*CameraView, error)
 	if err != nil {
 		return nil, err
 	}
-	return s.cameraView(ctx, b), nil
+	return s.cameraView(b, func(id string) (db.ListRenditionStatesRow, bool) {
+		r, err := s.store.R().GetRendition(ctx, id)
+		return db.ListRenditionStatesRow{ID: r.ID, Status: r.Status, Error: r.Error}, err == nil
+	}), nil
 }
 
-func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
+// cameraView builds a camera's view; rendition tells the state of the
+// renditions its streams use.
+func (s *Service) cameraView(b *cameraBundle, rendition func(id string) (db.ListRenditionStatesRow, bool)) *CameraView {
 	var tags []string
 	_ = json.Unmarshal([]byte(b.cam.TagsJson), &tags)
-	var dns []string
-	_ = json.Unmarshal([]byte(b.net.DnsJson), &dns)
 	prefix, _ := domain.MaskToPrefix(b.net.Netmask)
 	v := &CameraView{
 		ID:   b.cam.ID,
@@ -636,7 +840,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		Autostart:    store.Bool(b.cam.Autostart),
 		Tags:         nonNil(tags),
 		Network: NetworkView{Mode: b.net.Mode, Parent: b.net.ParentIf, MAC: b.net.Mac, IPMode: b.net.IpMode, IP: b.net.Ip,
-			Netmask: b.net.Netmask, Prefix: prefix, Gateway: b.net.Gateway, DNS: nonNil(dns)},
+			Netmask: b.net.Netmask, Prefix: prefix, Gateway: b.net.Gateway, DNS: nonNil(b.dns()), Force: store.Bool(b.net.Force)},
 		CreatedAt: store.Time(b.cam.CreatedAt),
 		UpdatedAt: store.Time(b.cam.UpdatedAt),
 		Users:     []UserView{},
@@ -647,7 +851,8 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 	v.Status = StatusView{State: string(domain.StateStopped)}
 	if b.status != nil {
 		v.Status.State = b.status.ActualState
-		v.Status.Reason = b.status.Reason
+		v.Status.ReasonCode, v.Status.Reason = b.status.ReasonCode, b.status.Reason
+		v.Status.IP, v.Status.IPSource = b.status.Ip, b.status.IpSource
 		if t := store.NullTime(b.status.StartedAt); !t.IsZero() {
 			v.Status.StartedAt = &t
 		}
@@ -665,7 +870,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 	if ss != nil {
 		st := ss.snapshot()
 		v.Status.State = string(st.state)
-		v.Status.Reason = st.reason
+		v.Status.ReasonCode, v.Status.Reason = st.reasonCode, st.reason
 		if !st.started.IsZero() {
 			t := st.started
 			v.Status.StartedAt = &t
@@ -676,6 +881,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		}
 		v.Status.Netns = st.netns
 		v.Status.PID = st.pid
+		v.Status.IP, v.Status.IPSource, v.Status.MAC, v.Status.Firewall = st.ip, string(st.ipSource), st.mac, st.firewall
 		if len(st.endpoints) > 0 {
 			endpoints = s.endpointViews(b, st.ip, st.endpoints)
 		}
@@ -714,7 +920,7 @@ func (s *Service) cameraView(ctx context.Context, b *cameraBundle) *CameraView {
 		}
 		if st.RenditionID.Valid {
 			sv.RenditionID = st.RenditionID.String
-			if r, err := s.store.R().GetRendition(ctx, st.RenditionID.String); err == nil {
+			if r, ok := rendition(st.RenditionID.String); ok {
 				sv.RenditionStatus = r.Status
 				sv.RenditionError = r.Error
 			}
@@ -841,7 +1047,7 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 		if nin.MAC == "" && !nin.DefaultMAC && !nin.VendorOUI {
 			nin.MAC = b.net.Mac
 		}
-		n, err := s.resolveNetwork(ctx, id, b.doc, nin)
+		n, err := s.resolveNetwork(ctx, id, b.doc, nin.withDefaults(b.net))
 		if err != nil {
 			return nil, err
 		}
@@ -855,10 +1061,7 @@ func (s *Service) UpdateCamera(ctx context.Context, actor Actor, id string, in U
 			return err
 		}
 		if netw != nil {
-			dns, _ := json.Marshal(nonNil(netw.dns))
-			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
-				CameraID: id, ParentIf: netw.parent, Mac: netw.mac, Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns),
-			}); err != nil {
+			if err := q.UpdateCameraNetwork(ctx, networkUpdate(id, *netw)); err != nil {
 				return err
 			}
 		}
@@ -1005,27 +1208,26 @@ func (s *Service) UpdateCameraConfig(ctx context.Context, actor Actor, id string
 		return nil, err
 	}
 	s.audit(ctx, actor, "camera.config", "camera", id, coerced)
-	if ss := s.session(id); ss != nil && ss.active() {
-		if err := ss.conn().Request(ctx, ipc.TypeStateSet, ipc.StateSet{Values: coerced, Origin: origin}, nil); err != nil {
-			s.log.Warn("could not apply config to the running camera", "camera", id, "error", err)
-		}
-	}
+	s.tellCamera(ctx, id, ipc.TypeStateSet, ipc.StateSet{Values: coerced, Origin: origin})
 	s.afterChanges(id, changes)
 	return s.CameraConfig(ctx, id)
 }
 
 // persistChanges stores parameter changes with their origin.
 func (s *Service) persistChanges(ctx context.Context, id string, changes []engine.Change, origin string) error {
+	return s.store.Tx(ctx, func(q *db.Queries) error { return upsertChanges(ctx, q, id, changes, origin) })
+}
+
+// upsertChanges writes parameter changes within a transaction.
+func upsertChanges(ctx context.Context, q *db.Queries, id string, changes []engine.Change, origin string) error {
 	now := time.Now().UnixMilli()
-	return s.store.Tx(ctx, func(q *db.Queries) error {
-		for _, c := range changes {
-			raw, _ := json.Marshal(c.Value)
-			if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: c.Key, ValueJson: string(raw), Origin: origin, UpdatedAt: now}); err != nil {
-				return err
-			}
+	for _, c := range changes {
+		raw, _ := json.Marshal(c.Value)
+		if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: c.Key, ValueJson: string(raw), Origin: origin, UpdatedAt: now}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // afterChanges applies the effects of bound parameters: media.* changes
@@ -1043,12 +1245,8 @@ func (s *Service) afterChanges(id string, changes []engine.Change) {
 	}
 }
 
-// reloadTargets sends a running camera its new targets.
+// reloadTargets sends a running camera its targets, none included.
 func (s *Service) reloadTargets(ctx context.Context, id string) {
-	ss := s.session(id)
-	if ss == nil || !ss.active() {
-		return
-	}
 	b, err := s.loadBundle(ctx, id)
 	if err != nil {
 		return
@@ -1057,7 +1255,7 @@ func (s *Service) reloadTargets(ctx context.Context, id string) {
 	if err != nil {
 		return
 	}
-	_ = ss.conn().Request(ctx, ipc.TypeReload, ipc.Reload{Targets: targets}, nil)
+	s.tellCamera(ctx, id, ipc.TypeReload, ipc.Reload{Targets: &targets})
 }
 
 // cameraIDs lists the IDs of every camera.
@@ -1069,9 +1267,9 @@ func (s *Service) setDesired(ctx context.Context, id string, d domain.DesiredSta
 	return s.store.W().SetCameraDesired(ctx, db.SetCameraDesiredParams{ID: id, DesiredState: string(d), UpdatedAt: time.Now().UnixMilli()})
 }
 
-func (s *Service) saveStatus(ctx context.Context, id string, st domain.CameraState, reason string, started, now time.Time) error {
+func (s *Service) saveStatus(ctx context.Context, id string, st domain.CameraState, code, reason string, started, now time.Time) error {
 	err := s.store.W().UpsertCameraStatus(ctx, db.UpsertCameraStatusParams{
-		CameraID: id, ActualState: string(st), Reason: reason, StartedAt: store.NullMillis(started),
+		CameraID: id, ActualState: string(st), ReasonCode: code, Reason: reason, StartedAt: store.NullMillis(started),
 		LastHeartbeat: sql.NullInt64{}, UpdatedAt: now.UnixMilli(),
 	})
 	if store.IsForeignKey(err) {

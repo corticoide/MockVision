@@ -73,6 +73,7 @@ type CameraNetwork struct {
 	Netmask  string
 	Gateway  string
 	DnsJson  string
+	Force    int64
 }
 
 type CameraProtocol struct {
@@ -98,6 +99,9 @@ type CameraStatus struct {
 	StartedAt     sql.NullInt64
 	LastHeartbeat sql.NullInt64
 	UpdatedAt     int64
+	Ip            string
+	IpSource      string
+	ReasonCode    string
 }
 
 type CameraStream struct {

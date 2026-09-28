@@ -22,6 +22,9 @@ type Interface struct {
 	// for cameras unless another one is chosen (D23).
 	Default bool   `json:"default"`
 	Gateway string `json:"gateway,omitempty"`
+	// Wireless marks a Wi-Fi interface: it does not accept the extra MACs
+	// of macvlan cameras, so they need ipvlan there (D27).
+	Wireless bool `json:"wireless"`
 }
 
 // NodeInfo describes the node's network.
@@ -47,6 +50,7 @@ func ReadNodeInfo() (NodeInfo, error) {
 			Up:       i.Flags&net.FlagUp != 0,
 			Loopback: i.Flags&net.FlagLoopback != 0,
 			Default:  i.Name == defIf,
+			Wireless: isWireless(i.Name),
 		}
 		if it.Default {
 			it.Gateway = defGW
@@ -118,4 +122,50 @@ func hexIP(s string) string {
 		return ""
 	}
 	return a.String()
+}
+
+// isWireless reports whether the kernel sees an interface as Wi-Fi.
+func isWireless(name string) bool {
+	for _, p := range []string{"wireless", "phy80211"} {
+		if _, err := os.Stat("/sys/class/net/" + name + "/" + p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadNodeDNS lists the node's IPv4 DNS servers a camera can use: those of
+// resolv.conf, or of systemd-resolved when resolv.conf points at its local
+// stub, which a camera's namespace cannot reach.
+func ReadNodeDNS() []string {
+	for _, path := range []string{"/etc/resolv.conf", "/run/systemd/resolve/resolv.conf"} {
+		if servers := readNameservers(path); len(servers) > 0 {
+			return servers
+		}
+	}
+	return nil
+}
+
+func readNameservers(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 2 || fields[0] != "nameserver" {
+			continue
+		}
+		a, err := netip.ParseAddr(fields[1])
+		if err != nil || !a.Is4() || a.IsLoopback() || a.IsUnspecified() {
+			continue
+		}
+		if len(out) < 3 {
+			out = append(out, a.String())
+		}
+	}
+	return out
 }

@@ -9,16 +9,17 @@ Sirve para probar software que consume cámaras sin comprarlas y sin tocar
 equipos en producción. Simula lo que una cámara hace hacia afuera; no la
 reemplaza.
 
-> **Estado: demo técnica.** Un perfil de fabricante, RTSP desde una imagen,
-> tres rutas HTTP y un evento manual de cruce de línea, de punta a punta.
-> [docs/DEMO-NOTES.md](docs/DEMO-NOTES.md) lista lo simplificado.
+> **Estado: v1 en desarrollo.** Por ahora un perfil de fabricante;
+> [docs/DEMO-NOTES.md](docs/DEMO-NOTES.md) lista lo que sigue simplificado.
 > Read in English: [README.md](README.md).
 
 ## Qué hace la demo
 
 - Una cámara creada desde el panel aparece en la LAN con su propia IP y MAC
-  (macvlan). Antes de tomar la IP hace un sondeo ARP, y se anuncia con ARP
-  gratuito.
+  (macvlan), o con la MAC del nodo en Wi-Fi (ipvlan). Toma una IP estática o
+  la pide por DHCP, y si no hay servidor usa su dirección de fábrica, como
+  una real. Antes de usar su IP y su MAC las sondea en la LAN, y se anuncia
+  con ARP gratuito.
 - Streams RTSP en bucle a partir de una imagen: principal, secundario y
   tercero, como los define el perfil, en H.264, H.265 o MJPEG. Cada imagen
   se codifica una sola vez por configuración de stream y el bucle casi no
@@ -36,10 +37,11 @@ reemplaza.
 
 - Linux amd64 o arm64: Debian 12 o 13, Ubuntu 24.04 o posterior, o
   Raspberry Pi OS de 64 bits. El kernel necesita macvlan.
-- **Red cableada.** macvlan le da a cada cámara una MAC extra, y el Wi-Fi no
-  acepta MACs extra. Los switches con port security también pueden
+- **Red cableada**, para cámaras con MAC propia (macvlan): el Wi-Fi no
+  acepta MACs extra, y los switches con port security también pueden
   bloquearlas. En una VM, el hipervisor tiene que permitir el modo promiscuo
-  o el cambio de MAC.
+  o el cambio de MAC. En Wi-Fi las cámaras usan la MAC del nodo (ipvlan,
+  módulo del kernel `ipvlan`) y una IP estática.
 - Docker con Compose v2, o una instalación nativa con FFmpeg y systemd.
   Docker Desktop en Windows o macOS no funciona, porque corre detrás de un
   NAT.
@@ -64,12 +66,12 @@ docker compose exec -u mockvision mockvision cat /data/setup-code
 
 Después:
 
-1. **Profiles → Import profile:** elige `profiles/milesight-demo.yaml`. Se
-   valida y queda listado como *Draft* (borrador).
-2. **Targets → New target:** pon la URL que tiene que recibir los eventos,
-   por ejemplo `http://192.168.1.10:8000/events`.
-3. **Cameras → New camera:** pon una IP libre de tu LAN y elige el destino.
-   La cámara arranca y pasa a *Running*.
+1. **Perfiles → Importar perfil:** elige `profiles/milesight-demo.yaml`. Se
+   valida y queda listado como *Borrador*.
+2. **Destinos → Nuevo destino:** pon la URL que tiene que recibir los
+   eventos, por ejemplo `http://192.168.1.10:8000/events`.
+3. **Cámaras → Nueva cámara:** pon una IP libre de tu LAN y elige el
+   destino. La cámara arranca y pasa a *Activa*.
 
 Desde **otro equipo** de la misma LAN (la IP `192.168.1.50` y la contraseña
 `secret` son ejemplos):
@@ -88,14 +90,16 @@ Las cuentas de cámara tienen un rol: las `admin` y `operator` pueden cambiar
 parámetros y las `viewer` solo leen (un perfil puede fijar los roles de cada
 ruta). El usuario de la cámara es el que se cargó al crearla. Si la contraseña quedó
 vacía, la cámara usa la cuenta de fábrica del perfil (`admin` / `ms1234`).
-Pulsa **Line crossing** en la cámara: el destino recibe el POST, y **Events**
-muestra la entrega, el código HTTP y la latencia.
+Pulsa **Cruce de línea** en la cámara: el destino recibe el POST, y
+**Eventos** muestra la entrega, el código HTTP y la latencia.
 
 > **Prueba desde otro equipo.** Linux no deja que un equipo alcance sus
 > propias interfaces macvlan. Por eso el nodo no puede abrir los streams de
 > sus cámaras, y sus cámaras no pueden entregar eventos a un receptor que
-> corra en el nodo. Pon el cliente y los destinos en otras máquinas. La
-> vista previa del snapshot en el panel funciona igual, porque no usa la red.
+> corra en el nodo. Pon el cliente y los destinos en otras máquinas, o
+> activa **Configuración → Llegar a las cámaras desde este nodo** (ver
+> [Red](#red)). La vista previa del snapshot en el panel funciona igual,
+> porque no usa la red.
 
 ### Automatización con tokens de API
 
@@ -148,6 +152,47 @@ cámara cambia a él sin reiniciarse.
 - Un cliente que se conecta recibe un cuadro clave enseguida, como de un
   codificador real.
 
+### Red
+
+La pestaña **Red** de la cámara, y el diálogo de nueva cámara, eligen cómo
+se une a la LAN. Los cambios se aplican cuando la cámara se reinicia; la
+pestaña muestra la dirección que tiene ahora y de dónde salió.
+
+| Modo | Para | Direccionamiento | A tener en cuenta |
+|---|---|---|---|
+| *macvlan* (por defecto) | redes cableadas | IP estática o DHCP | MAC propia, como un equipo real: el Wi-Fi y los puertos con port security la descartan |
+| *ipvlan* | Wi-Fi, puertos de switch que admiten una sola MAC | IP estática | la MAC del nodo, así que los servidores DHCP no la distinguen |
+
+Una placa de red lleva cámaras macvlan o ipvlan, no ambas, como exige el
+kernel; **Llegar a las cámaras desde este nodo** cuenta como macvlan. El
+panel nombra las cámaras que lo impiden.
+
+- **DHCP.** La cámara se la pide al servidor de la LAN, como una cámara
+  recién sacada de la caja, y renueva su concesión. Si ningún servidor
+  responde en unos 15 segundos toma la dirección de fábrica de su perfil
+  (`192.168.5.190` en el perfil demo) y sigue preguntando. Una renovación
+  con otro router u otros servidores DNS se aplica en el momento; otra
+  dirección, o una concesión perdida, reinicia la cámara.
+- **DNS.** Los servidores de la cámara, si no los de la concesión, si no
+  los del nodo.
+- **Conflictos.** Una IP o una MAC que responde otro equipo detiene el
+  arranque indicando qué equipo es. **Arrancar aunque otro equipo
+  responda** se salta la comprobación, para probar cómo manejan los clientes
+  un conflicto.
+- **Salida.** Una cámara solo se conecta a los destinos de eventos, a sus
+  servidores DNS y a DHCP; los clientes llegan a ella desde cualquier lado,
+  como a una real.
+- **Llegar a las cámaras desde el nodo.** **Configuración → Llegar a las
+  cámaras desde este nodo** agrega una interfaz puente, `mv-bridge`, y una
+  ruta a cada cámara macvlan, así funcionan los reproductores, grabadores y
+  destinos del propio nodo. La interfaz padre necesita una dirección IPv4.
+  Viene apagado porque cambia la red del nodo; las cámaras ipvlan quedan
+  fuera del alcance del nodo de todas formas.
+
+Una cámara que reintentar no arranca, por una placa ocupada o un kernel sin
+ipvlan, deja de intentarlo y dice por qué; el panel muestra cada motivo en
+su idioma.
+
 ### Configuración
 
 `compose.yaml` pasa los dos ajustes que necesita la mayoría de las
@@ -156,7 +201,7 @@ instalaciones. El resto va en su sección `environment`.
 | Variable | Por defecto | Qué es |
 |---|---|---|
 | `MOCKVISION_LISTEN` | `:8080` | Dirección del panel y de la API; `<ip>:<puerto>` para escuchar solo en una IP de gestión |
-| `MOCKVISION_PARENT_IF` | interfaz de la ruta por defecto | Interfaz a la que se conectan las cámaras; se puede cambiar en Settings del panel |
+| `MOCKVISION_PARENT_IF` | interfaz de la ruta por defecto | Interfaz a la que se conectan las cámaras; se puede cambiar en **Configuración** del panel |
 | `MOCKVISION_DATA` | `/data` | Base de datos, clave del nodo, imágenes y streams codificados |
 | `MOCKVISION_FFMPEG` | `ffmpeg` | Binario de FFmpeg |
 | `MOCKVISION_SECURE_COOKIES` | apagado | `1` detrás de un proxy inverso HTTPS |
@@ -167,7 +212,7 @@ instalaciones. El resto va en su sección `environment`.
 | `MOCKVISION_SERVICE_USER`, `MOCKVISION_CAMERA_USER` | `mockvision`, `mockvision-cam` | Usuarios del servicio principal y de las cámaras: nombres que deben existir, o uid numéricos; tienen que ser distintos |
 
 Los límites (máximo de cámaras, umbrales de RAM y CPU, retención de eventos)
-se configuran en **Settings**.
+se configuran en **Configuración**.
 
 ### Sin Docker
 
@@ -183,7 +228,7 @@ cámaras arrancan como ese usuario.
 Un único binario corre como tres tipos de proceso:
 
 ```
-mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan, ARP, arranque de cámaras
+mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/ipvlan, sondeos, firewall, arranque de cámaras
  └─ mockvision serve   uid mockvision, ninguna   panel, API REST, WebSocket, SQLite, reconciliador
      └─ FFmpeg, validador de paquetes   confinados: seccomp y Landlock
  └─ mockvision camera  uid mockvision-cam, ninguna   una por cámara, en sus namespaces de red y de PID
@@ -203,7 +248,21 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan, 
   Landlock limita sus archivos a sus streams y a lo que necesitan DNS y TLS.
   Después sirve los motores de su perfil (`rtsp`, `http-api`, `http-push`) y
   habla con el servicio en líneas JSON; el servicio verifica lo que reporta
-  contra el perfil.
+  contra el perfil. Una cámara con DHCP pide su dirección ella misma, por un
+  socket que le abrió el helper: interpreta lo que mandan los servidores sin
+  privilegios, el servicio verifica la concesión y el helper la aplica.
+- **Sondeos.** Antes de que una cámara tome una IP, el helper la sondea por
+  ARP (RFC 5227); antes de que tome una MAC, la busca en las tablas y las
+  interfaces del nodo, la pregunta por IPv6 y escucha un momento. El kernel
+  rechaza una MAC que tenga otra interfaz del nodo aunque se salte el
+  sondeo.
+- **Firewall.** El namespace de cada cámara tiene una tabla nftables que
+  deja salir un único conjunto de dirección, protocolo y puerto: sus
+  destinos y sus servidores DNS en el puerto 53. Los nombres de los destinos
+  se vuelven a resolver cada minuto con los servidores DNS de la cámara, y
+  una dirección vista en los últimos diez minutos sigue permitida, para los
+  nombres que rotan. También pasan DHCP, las respuestas a sus clientes, el
+  RTP desde sus propios puertos y el loopback.
 - **FFmpeg**, que decodifica las imágenes subidas, y el **validador de
   paquetes** también corren confinados: FFmpeg solo alcanza la imagen que lee
   y la rendition que escribe, y el validador ningún archivo. Ninguno de los
@@ -231,8 +290,8 @@ tiene IP ni MAC en la LAN.
 | Comando | Qué corre |
 |---|---|
 | `make test` | `go vet`, tests unitarios y el chequeo de tipos del panel |
-| `make test-integration` | namespaces de red y macvlan sobre un enlace virtual (root) |
-| `make e2e` | los criterios de aceptación de la demo en una LAN virtual aislada (root, iproute2, ffmpeg, curl, python3) |
+| `make test-integration` | namespaces de red, macvlan, ipvlan, sondeo de MAC, firewall, socket DHCP y puente sobre un enlace virtual (root) |
+| `make e2e` | los criterios de aceptación de la demo en una LAN virtual aislada (root, iproute2, ffmpeg, curl, ping, python3) |
 | `make e2e-compose` | los mismos criterios contra la imagen Docker levantada con `compose.yaml` |
 | `make generate` | consultas de sqlc y tipos de la API del panel desde `openapi.yaml` |
 

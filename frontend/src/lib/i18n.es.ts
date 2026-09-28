@@ -250,8 +250,8 @@ export const es: Record<string, string> = {
   network: "la red",
   protocols: "los protocolos",
   " and ": " y ",
-  "Saved changes to the {what} apply when the camera restarts (RN-09); it keeps running with the previous ones.":
-    "Los cambios guardados en {what} se aplican cuando la cámara se reinicia (RN-09); sigue funcionando con los anteriores.",
+  "Saved changes to the {what} apply when the camera restarts; it keeps running with the previous ones.":
+    "Los cambios guardados en {what} se aplican cuando la cámara se reinicia; sigue funcionando con los anteriores.",
   "Restart now": "Reiniciar ahora",
   "No events from this camera yet": "Esta cámara todavía no tiene eventos",
   'Press "Line crossing" while the camera runs.': "Pulsa «Cruce de línea» mientras la cámara funciona.",
@@ -283,7 +283,6 @@ export const es: Record<string, string> = {
   Retries: "Reintentos",
 
   // Media tab
-  "Stream {name}": "Stream {name}",
   ready: "listo",
   pending: "pendiente",
   missing: "ausente",
@@ -296,8 +295,6 @@ export const es: Record<string, string> = {
   Bitrate: "Bitrate",
   "Stream saved; it is encoded again and the camera switches to it":
     "Stream guardado; se codifica de nuevo y la cámara cambia a él",
-  "Applied without restarting: the picture is encoded once and the camera switches to it (RN-09).":
-    "Se aplica sin reiniciar: la imagen se codifica una vez y la cámara cambia a ella (RN-09).",
   Snapshot: "Instantánea",
   "The camera has no stream.": "La cámara no tiene stream.",
 
@@ -313,11 +310,8 @@ export const es: Record<string, string> = {
   "DNS servers": "Servidores DNS",
   "Up to 3; empty: the node's.": "Hasta 3; vacío: los del nodo.",
   "Parent interface": "Interfaz padre",
-  "Where the camera's macvlan attaches.": "Donde se conecta el macvlan de la cámara.",
   "Network saved; it applies when the camera restarts": "Red guardada; se aplica cuando la cámara se reinicia",
   "Network saved": "Red guardada",
-  "Network changes apply when the camera restarts (RN-09). The new address is probed before it is used.":
-    "Los cambios de red se aplican cuando la cámara se reinicia (RN-09). La nueva dirección se sondea antes de usarla.",
 
   // Protocols tab
   Protocol: "Protocolo",
@@ -328,8 +322,8 @@ export const es: Record<string, string> = {
   "Port of {name}": "Puerto de {name}",
   "Protocols saved; they apply when the camera restarts": "Protocolos guardados; se aplican cuando la cámara se reinicia",
   "Protocols saved": "Protocolos guardados",
-  "The protocols come from the profile (RN-04). Changes apply when the camera restarts.":
-    "Los protocolos vienen del perfil (RN-04). Los cambios se aplican cuando la cámara se reinicia.",
+  "The protocols come from the profile. Changes apply when the camera restarts.":
+    "Los protocolos vienen del perfil. Los cambios se aplican cuando la cámara se reinicia.",
 
   // Users tab
   "unchanged": "sin cambios",
@@ -342,8 +336,8 @@ export const es: Record<string, string> = {
   "Cameras accept weak passwords on purpose: they imitate real devices.":
     "Las cámaras aceptan contraseñas débiles a propósito: imitan dispositivos reales.",
   "Accounts saved; the camera uses them at once": "Cuentas guardadas; la cámara las usa de inmediato",
-  "At least one admin (RN-11). Changes apply at once; clients re-authenticate with the new passwords.":
-    "Al menos un administrador (RN-11). Los cambios se aplican de inmediato; los clientes se reautentican con las nuevas contraseñas.",
+  "At least one admin. Changes apply at once; clients re-authenticate with the new passwords.":
+    "Al menos un administrador. Los cambios se aplican de inmediato; los clientes se reautentican con las nuevas contraseñas.",
 
   // Configuration tab
   Parameter: "Parámetro",
@@ -363,8 +357,8 @@ export const es: Record<string, string> = {
   "Value of {key}": "Valor de {key}",
   On: "Activado",
   Off: "Desactivado",
-  "Applied at once. The last change wins, from the panel or a client of the emulated API (RN-08).":
-    "Se aplica de inmediato. Gana el último cambio, ya sea del panel o de un cliente de la API emulada (RN-08).",
+  "Applied at once. The last change wins, from the panel or a client of the emulated API.":
+    "Se aplica de inmediato. Gana el último cambio, ya sea del panel o de un cliente de la API emulada.",
 
   // Clone / restore dialogs
   "Same profile, parameters, accounts, protocols, picture and targets; its own ID, serial and MAC.":
@@ -406,8 +400,6 @@ export const es: Record<string, string> = {
     "El navegador no permitió copiar; selecciona el texto y cópialo a mano",
 
   // Settings page
-  "Limits of this node and the network the cameras join.":
-    "Límites de este nodo y la red a la que se unen las cámaras.",
   Limits: "Límites",
   "Creating or starting a camera beyond them is rejected with the reason.":
     "Crear o iniciar una cámara más allá de ellos se rechaza indicando el motivo.",
@@ -419,8 +411,6 @@ export const es: Record<string, string> = {
   "Maximum sustained CPU (%)": "CPU sostenida máxima (%)",
   "One-minute average of the node.": "Promedio de un minuto del nodo.",
   "Not used in local mode.": "No se usa en modo local.",
-  "New cameras attach to this interface with macvlan. Empty: the default route's interface.":
-    "Las nuevas cámaras se conectan a esta interfaz con macvlan. Vacío: la interfaz de la ruta por defecto.",
   " (down)": " (caída)",
   "Settings saved": "Configuración guardada",
   Node: "Nodo",
@@ -655,6 +645,69 @@ export const es: Record<string, string> = {
   "Of the main stream.": "Del stream principal.",
   "H.264 plays in every client; H.265 uses less bandwidth.": "H.264 se reproduce en todos los clientes; H.265 usa menos ancho de banda.",
   "It also serves {streams}, with the same picture.": "También sirve {streams}, con la misma imagen.",
-  "Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect (RN-09).":
-    "Se aplica sin reiniciar: el stream se codifica una vez y la cámara cambia a él; sus visores se reconectan (RN-09).",
+  "Applied without restarting: the stream is encoded once and the camera switches to it; its viewers reconnect.":
+    "Se aplica sin reiniciar: el stream se codifica una vez y la cámara cambia a él; sus visores se reconectan.",
+  "Network mode": "Modo de red",
+  "The node's MAC: for Wi-Fi and switch ports that allow one MAC. No DHCP.": "La MAC del nodo: para Wi-Fi y puertos de switch que admiten una sola MAC. Sin DHCP.",
+  "Its own MAC, like a real device: for wired networks.": "MAC propia, como un equipo real: para redes cableadas.",
+  "macvlan — its own MAC (wired)": "macvlan — MAC propia (cableada)",
+  "ipvlan — the node's MAC (Wi-Fi)": "ipvlan — la MAC del nodo (Wi-Fi)",
+  "Addressing": "Direccionamiento",
+  "It asks the LAN's DHCP server; if none answers within about 15 s it takes the factory address, {ip}.": "La pide al servidor DHCP de la LAN; si ninguno responde en unos 15 s toma la dirección de fábrica, {ip}.",
+  "It asks the LAN's DHCP server.": "La pide al servidor DHCP de la LAN.",
+  "Static IP": "IP estática",
+  "DHCP": "DHCP",
+  "The network card cameras attach to. Empty: MOCKVISION_PARENT_IF, else the default route's interface.":
+    "La placa de red a la que se conectan las cámaras. Vacío: MOCKVISION_PARENT_IF, si no la interfaz de la ruta por defecto.",
+  "Reach the cameras from this node": "Llegar a las cámaras desde este nodo",
+  "Adds the mv-bridge interface so players, recorders and targets on this node reach its macvlan cameras. Off by default because it changes the node's network; ipvlan cameras stay out of reach either way.":
+    "Agrega la interfaz mv-bridge para que reproductores, grabadores y destinos de este nodo lleguen a sus cámaras macvlan. Viene apagado porque cambia la red del nodo; las cámaras ipvlan quedan fuera igual.",
+  "Bridge active on {iface}.": "Puente activo en {iface}.",
+  "leased by DHCP": "asignada por DHCP",
+  "factory address: no DHCP server answered": "IP de fábrica: ningún servidor DHCP respondió",
+  "static": "estática",
+  "On the LAN now": "En la LAN ahora",
+  "MAC it answers with": "MAC con la que responde",
+  "the node's": "la del nodo",
+  "Mode": "Modo",
+  "Outbound firewall": "Firewall de salida",
+  "only toward the event targets": "solo hacia los destinos de eventos",
+  "not available on this node": "no disponible en este nodo",
+  "ipvlan cameras share the node's MAC, so they need a static IP.":
+    "Las cámaras ipvlan comparten la MAC del nodo, así que necesitan IP estática.",
+  "A fixed address, probed on the LAN before use.": "Una dirección fija, sondeada en la LAN antes de usarla.",
+  "The node's network card the camera attaches to.": "La placa de red del nodo a la que se conecta la cámara.",
+  "{iface} is a Wi-Fi interface: access points refuse the extra MACs of macvlan cameras. Choose ipvlan.":
+    "{iface} es una interfaz Wi-Fi: los puntos de acceso rechazan las MAC extra de las cámaras macvlan. Elige ipvlan.",
+  "Kept for macvlan; with ipvlan the camera answers with the node's MAC.":
+    "Se guarda para macvlan; con ipvlan la cámara responde con la MAC del nodo.",
+  "Up to 3; empty: the lease's, else the node's.": "Hasta 3; vacío: los de la concesión, si no los del nodo.",
+  "Start even if another device answers on this IP or MAC": "Arrancar aunque otro equipo responda en esta IP o MAC",
+  "Only to test how clients handle a conflict: two devices with one address break each other's traffic.":
+    "Solo para probar cómo manejan los clientes un conflicto: dos equipos con una misma dirección se rompen el tráfico entre sí.",
+  "Network changes apply when the camera restarts. Its IP and MAC are probed on the LAN before use.":
+    "Los cambios de red se aplican cuando la cámara se reinicia. Su IP y su MAC se sondean en la LAN antes de usarlas.",
+
+  // Reasons of a camera's state, looked up by their code (lib/reasons.ts).
+  "Another device on the LAN answers on this camera's IP.": "Otro equipo de la LAN responde en la IP de esta cámara.",
+  "Another device uses this camera's MAC.": "Otro equipo usa la MAC de esta cámara.",
+  "The camera's network card is missing or down.": "La placa de red de la cámara no existe o está caída.",
+  "Its network card cannot take this network mode: one card takes macvlan or ipvlan cameras, not both.": "Su placa de red no admite este modo de red: una placa lleva cámaras macvlan o ipvlan, no ambas.",
+  "This node's kernel lacks the camera's network mode.": "El kernel de este nodo no tiene el modo de red de la cámara.",
+  "The network helper refused the camera's settings.": "El helper de red rechazó la configuración de la cámara.",
+  "Waiting for a DHCP lease.": "Esperando una concesión DHCP.",
+  "No DHCP server answered, and the profile has no factory address.": "Ningún servidor DHCP respondió y el perfil no tiene dirección de fábrica.",
+  "No DHCP server answered, and the factory address is in use.": "Ningún servidor DHCP respondió y la dirección de fábrica está en uso.",
+  "Its stream could not be encoded.": "No se pudo codificar su stream.",
+  "Its configuration is incomplete; edit the camera.": "Su configuración está incompleta; edita la cámara.",
+  "The node could not start it.": "El nodo no pudo arrancarla.",
+  "The camera process ended.": "El proceso de la cámara terminó.",
+  "The camera process did not answer.": "El proceso de la cámara no respondió.",
+  "The camera did not become ready in time.": "La cámara no quedó lista a tiempo.",
+  "The camera refused its configuration.": "La cámara rechazó su configuración.",
+  "The camera could not start its protocols.": "La cámara no pudo iniciar sus protocolos.",
+  "The camera stopped answering.": "La cámara dejó de responder.",
+  "The node has no room to start it.": "El nodo no tiene lugar para arrancarla.",
+  "Restarting with its new DHCP lease.": "Reiniciando con su nueva concesión DHCP.",
+  "Restarting: its DHCP lease expired.": "Reiniciando: venció su concesión DHCP.",
 };

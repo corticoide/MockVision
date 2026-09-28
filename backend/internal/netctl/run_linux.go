@@ -96,7 +96,8 @@ func RunMain(args []string, log *slog.Logger) int {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		if err := helper.Serve(ctx); err != nil && ctx.Err() == nil {
+		// Serve returns when the service closes its end.
+		if err := helper.Serve(ctx); ctx.Err() == nil {
 			log.Debug("helper stopped serving", "error", err)
 		}
 	}()

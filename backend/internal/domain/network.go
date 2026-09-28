@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 )
+
+// MaxDNS is how many DNS servers a camera uses, as a resolv.conf holds.
+const MaxDNS = 3
 
 // NetMode is how a camera attaches to the physical network.
 type NetMode string
@@ -24,6 +28,19 @@ type IPMode string
 const (
 	IPStatic IPMode = "static"
 	IPDHCP   IPMode = "dhcp"
+)
+
+// IPSource says where the address a camera holds came from.
+type IPSource string
+
+const (
+	// SourceStatic is the address configured for the camera.
+	SourceStatic IPSource = "static"
+	// SourceDHCP is an address leased by a DHCP server.
+	SourceDHCP IPSource = "dhcp"
+	// SourceFactory is the profile's factory address, taken when DHCP
+	// found no server (D24).
+	SourceFactory IPSource = "factory"
 )
 
 // NetIdentity is the network identity of a camera: mode, MAC and addressing.
@@ -79,7 +96,14 @@ func (n NetIdentity) Validate() error {
 			}
 		}
 	case IPDHCP:
-		v.Add("network.ip_mode", "dhcp is not supported yet")
+		// An ipvlan camera shares the node's MAC, and DHCP servers tell
+		// clients apart by MAC: they would all get the same lease.
+		if n.Mode == NetIPvlan {
+			v.Add("network.ip_mode", "ipvlan cameras share the node's MAC and cannot use DHCP; give them a static IP")
+		}
+		if n.Gateway.IsValid() && !n.Gateway.Is4() {
+			v.Add("network.gateway", "must be an IPv4 address")
+		}
 	default:
 		v.Add("network.ip_mode", "must be static or dhcp")
 	}
@@ -107,8 +131,8 @@ func MaskToPrefix(mask string) (int, error) {
 		return 0, fmt.Errorf("empty netmask")
 	}
 	if !strings.Contains(mask, ".") {
-		var n int
-		if _, err := fmt.Sscanf(mask, "%d", &n); err != nil || n < 0 || n > 32 {
+		n, err := strconv.Atoi(mask)
+		if err != nil || n < 0 || n > 32 {
 			return 0, fmt.Errorf("invalid prefix length %q", mask)
 		}
 		return n, nil
@@ -122,6 +146,16 @@ func MaskToPrefix(mask string) (int, error) {
 		return 0, fmt.Errorf("netmask %q is not contiguous", mask)
 	}
 	return ones, nil
+}
+
+// GatewayIn returns gw when it is an IPv4 address inside ip/prefix other
+// than ip itself: a router a camera can use.
+func GatewayIn(ip netip.Addr, prefix int, gw string) (netip.Addr, bool) {
+	g, err := netip.ParseAddr(gw)
+	if err != nil || !g.Is4() || g == ip || !netip.PrefixFrom(ip, prefix).Masked().Contains(g) {
+		return netip.Addr{}, false
+	}
+	return g, true
 }
 
 // PrefixToMask converts a prefix length into a dotted netmask.
@@ -176,4 +210,26 @@ func ParseOUI(s string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid OUI %q", s)
 	}
 	return []byte(hw[:3]), nil
+}
+
+// DHCPHostname turns a camera name into the host name it sends DHCP
+// servers: letters, digits and hyphens, up to 63.
+func DHCPHostname(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if b.Len() >= 63 {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case b.Len() > 0 && !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	h := strings.Trim(b.String(), "-")
+	if h == "" {
+		h = "camera"
+	}
+	return h
 }

@@ -31,6 +31,9 @@ func Main(args []string) int {
 	verbose := fs.Bool("v", false, "debug logging")
 	var sockets socketFlags
 	fs.Var(&sockets, "socket", "inherited socket as instance:name:network:port=fd (repeatable)")
+	dhcpFD := fs.Int("dhcp-fd", -1, "descriptor of the DHCP socket; the camera then leases its address")
+	macFlag := fs.String("mac", "", "the camera's MAC, for DHCP")
+	hostname := fs.String("hostname", "", "the host name the camera tells DHCP servers")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -88,9 +91,26 @@ func Main(args []string) int {
 		socks = append(socks, sock)
 	}
 
+	var dhcp *DHCPOptions
+	if *dhcpFD >= 0 {
+		mac, err := net.ParseMAC(*macFlag)
+		if err != nil {
+			log.Error("bad --mac", "error", err)
+			return 2
+		}
+		f := os.NewFile(uintptr(*dhcpFD), "dhcp")
+		pc, err := net.FilePacketConn(f)
+		f.Close()
+		if err != nil {
+			log.Error("dhcp socket", "error", err)
+			return 1
+		}
+		dhcp = &DHCPOptions{Conn: pc, MAC: mac, Hostname: *hostname}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	rt := NewRuntime(Options{CameraID: *id, IPC: conn, Sockets: socks, Local: *local, Confine: true, Log: log})
+	rt := NewRuntime(Options{CameraID: *id, IPC: conn, Sockets: socks, DHCP: dhcp, Local: *local, Confine: true, Log: log})
 	if err := rt.Run(ctx); err != nil {
 		log.Error("camera stopped", "error", err)
 		return 1

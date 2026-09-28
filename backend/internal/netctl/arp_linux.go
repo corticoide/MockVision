@@ -107,7 +107,8 @@ func (e *ConflictError) Error() string {
 	return "IP " + e.IP + " is already in use on the LAN by " + e.MAC
 }
 
-// probeIP asks the LAN whether anyone uses ip before the camera takes it.
+// probeIP asks the LAN whether anyone uses ip before the camera takes it,
+// and notices another device sending with the camera's MAC.
 func probeIP(ns netns.NsHandle, ifindex int, mac net.HardwareAddr, ip netip.Addr) error {
 	fd, err := arpSocket(ns, ifindex)
 	if err != nil {
@@ -126,7 +127,7 @@ func probeIP(ns netns.NsHandle, ifindex int, mac net.HardwareAddr, ip netip.Addr
 			}
 			sent++
 		}
-		n, _, err := unix.Recvfrom(fd, buf, 0)
+		n, from, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
 			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
 				continue
@@ -134,7 +135,15 @@ func probeIP(ns netns.NsHandle, ifindex int, mac net.HardwareAddr, ip netip.Addr
 			return err
 		}
 		p, ok := parseARP(buf[:n])
-		if !ok || bytes.Equal(p.sha, mac) {
+		if !ok {
+			continue
+		}
+		if bytes.Equal(p.sha, mac) {
+			// Our own probes go out; one that comes in is another device
+			// with the same MAC.
+			if ll, ok := from.(*unix.SockaddrLinklayer); ok && ll.Pkttype != unix.PACKET_OUTGOING {
+				return &MACConflictError{MAC: mac.String(), How: "an ARP packet came from it"}
+			}
 			continue
 		}
 		// Someone already uses the address, or probes for it right now.

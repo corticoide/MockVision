@@ -133,7 +133,7 @@ export function ConfigTab({ camera }: { camera: Camera }) {
             setDraft({});
             setErrors({});
           }}
-          note={t("Applied at once. The last change wins, from the panel or a client of the emulated API (RN-08).")}
+          note={t("Applied at once. The last change wins, from the panel or a client of the emulated API.")}
         />
       </div>
     </Card>

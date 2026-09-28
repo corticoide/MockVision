@@ -829,6 +829,17 @@ components:
         addrs: { type: [array, "null"], items: { type: string } }
         default: { type: boolean }
         gateway: { type: string }
+        wireless: { type: boolean, description: "Wi-Fi: macvlan cameras cannot use it; ipvlan ones can (D27)" }
+    Bridge:
+      type: object
+      description: The node's access to its own macvlan cameras (D26).
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        interface: { type: string }
+        parent: { type: string }
+        node_ips: { type: array, items: { type: string }, description: "The node's addresses on the parent the bridge routes from; it is set again when they change" }
+        error: { type: string }
     CameraCounts:
       type: object
       required: [total, running, error, by_state]
@@ -848,7 +859,8 @@ components:
         mem_total: { type: integer }
         default_interface: { type: string }
         default_gateway: { type: string }
-        parent_interface: { type: string }
+        parent_interface: { type: string, description: The interface cameras attach to by default }
+        default_parent: { type: string, description: "What an empty parent interface in the settings means: MOCKVISION_PARENT_IF, else the default route's interface" }
         interfaces: { type: [array, "null"], items: { $ref: "#/components/schemas/Interface" } }
         cameras: { $ref: "#/components/schemas/CameraCounts" }
         panel:
@@ -859,6 +871,8 @@ components:
             listen: { type: string }
             all_interfaces: { type: boolean }
             urls: { type: array, items: { type: string } }
+        bridge: { $ref: "#/components/schemas/Bridge" }
+        dns: { type: array, items: { type: string }, description: The node's DNS servers, used by cameras that have none }
         started_at: { type: string, format: date-time }
     Settings:
       type: object
@@ -871,6 +885,7 @@ components:
         events_retention_days: { type: integer }
         max_jobs: { type: integer, minimum: 1, maximum: 16, description: Jobs that run at once (D72) }
         job_step_timeout_seconds: { type: integer, minimum: 10, maximum: 3600, description: Bound of each step of a job (D72) }
+        node_bridge: { type: boolean, description: "Let the node reach its macvlan cameras through an extra interface (D26); off by default" }
     SettingsPatch:
       type: object
       properties:
@@ -881,6 +896,7 @@ components:
         events_retention_days: { type: integer }
         max_jobs: { type: integer }
         job_step_timeout_seconds: { type: integer }
+        node_bridge: { type: boolean }
     NodeMetrics:
       type: object
       required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
@@ -1174,12 +1190,26 @@ components:
       required: [state, reason, started_at, last_heartbeat, retries, pending_restart]
       properties:
         state: { type: string, enum: [stopped, provisioning, starting, running, degraded, restarting, stopping, error] }
-        reason: { type: string }
+        reason_code:
+          type: string
+          description: >
+            A stable word for the reason, which the panel explains in the
+            user's language: ip_in_use, mac_in_use, no_interface,
+            parent_busy, unsupported, invalid, dhcp_waiting,
+            dhcp_no_factory, dhcp_factory_in_use, stream, config, launch,
+            exited, no_hello, not_ready, config_rejected, camera_failed,
+            no_heartbeat, admission, lease_restart or lease_lost. New codes
+            may come; show reason when the code is unknown.
+        reason: { type: string, description: The reason in English }
         started_at: { type: [string, "null"], format: date-time }
         last_heartbeat: { type: [string, "null"], format: date-time }
         netns: { type: string }
         pid: { type: integer }
         retries: { type: integer }
+        ip: { type: string, description: The address the camera holds, or last held }
+        ip_source: { type: string, enum: [static, dhcp, factory], description: "factory: DHCP found no server and the camera took the profile's address (D24)" }
+        mac: { type: string, description: "The MAC it answers with while running: its own, or the node's with ipvlan" }
+        firewall: { type: boolean, description: Its outbound firewall is in place }
         pending_restart:
           description: Saved changes a running camera applies when it restarts (RN-09).
           type: array
@@ -1231,17 +1261,18 @@ components:
         requests: { type: integer }
     Network:
       type: object
-      required: [mode, parent, mac, ip_mode, ip, netmask, prefix, gateway, dns]
+      required: [mode, parent, mac, ip_mode, ip, netmask, prefix, gateway, dns, force]
       properties:
-        mode: { type: string }
+        mode: { type: string, enum: [macvlan, ipvlan] }
         parent: { type: string }
         mac: { type: string }
-        ip_mode: { type: string }
+        ip_mode: { type: string, enum: [static, dhcp] }
         ip: { type: string }
         netmask: { type: string }
         prefix: { type: integer }
         gateway: { type: string }
         dns: { type: array, items: { type: string } }
+        force: { type: boolean }
     Camera:
       type: object
       required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, metrics, created_at, updated_at]
@@ -1316,8 +1347,20 @@ components:
       description: >
         Empty fields take the node's defaults. When editing, an empty MAC
         keeps the current one and default_mac goes back to the one derived
-        from the camera ID. No DNS servers means the node's.
+        from the camera ID; an empty mode or ip_mode and a missing force keep
+        theirs. No DNS servers means the node's (or the lease's with DHCP).
       properties:
+        mode:
+          type: string
+          enum: [macvlan, ipvlan]
+          description: "macvlan (default): the camera's own MAC. ipvlan: the node's MAC, for Wi-Fi and switches that limit MACs (D27)"
+        ip_mode:
+          type: string
+          enum: [static, dhcp]
+          description: "dhcp: the camera leases its address, and takes the profile's factory one when no server answers (D24). Not with ipvlan"
+        force:
+          type: boolean
+          description: Start even if another device answers on the camera's IP or MAC (D14); off by default
         parent: { type: string }
         mac: { type: string }
         default_mac: { type: boolean }

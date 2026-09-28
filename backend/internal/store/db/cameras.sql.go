@@ -143,7 +143,7 @@ func (q *Queries) GetCamera(ctx context.Context, id string) (Camera, error) {
 }
 
 const getCameraNetwork = `-- name: GetCameraNetwork :one
-SELECT camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json FROM camera_network WHERE camera_id = ?1
+SELECT camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json, force FROM camera_network WHERE camera_id = ?1
 `
 
 func (q *Queries) GetCameraNetwork(ctx context.Context, cameraID string) (CameraNetwork, error) {
@@ -159,12 +159,13 @@ func (q *Queries) GetCameraNetwork(ctx context.Context, cameraID string) (Camera
 		&i.Netmask,
 		&i.Gateway,
 		&i.DnsJson,
+		&i.Force,
 	)
 	return i, err
 }
 
 const getCameraStatus = `-- name: GetCameraStatus :one
-SELECT camera_id, actual_state, reason, started_at, last_heartbeat, updated_at FROM camera_status WHERE camera_id = ?1
+SELECT camera_id, actual_state, reason, started_at, last_heartbeat, updated_at, ip, ip_source, reason_code FROM camera_status WHERE camera_id = ?1
 `
 
 func (q *Queries) GetCameraStatus(ctx context.Context, cameraID string) (CameraStatus, error) {
@@ -177,6 +178,9 @@ func (q *Queries) GetCameraStatus(ctx context.Context, cameraID string) (CameraS
 		&i.StartedAt,
 		&i.LastHeartbeat,
 		&i.UpdatedAt,
+		&i.Ip,
+		&i.IpSource,
+		&i.ReasonCode,
 	)
 	return i, err
 }
@@ -216,8 +220,8 @@ func (q *Queries) InsertCamera(ctx context.Context, arg InsertCameraParams) erro
 }
 
 const insertCameraNetwork = `-- name: InsertCameraNetwork :exec
-INSERT INTO camera_network (camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+INSERT INTO camera_network (camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json, force)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 `
 
 type InsertCameraNetworkParams struct {
@@ -230,6 +234,7 @@ type InsertCameraNetworkParams struct {
 	Netmask  string
 	Gateway  string
 	DnsJson  string
+	Force    int64
 }
 
 func (q *Queries) InsertCameraNetwork(ctx context.Context, arg InsertCameraNetworkParams) error {
@@ -243,6 +248,7 @@ func (q *Queries) InsertCameraNetwork(ctx context.Context, arg InsertCameraNetwo
 		arg.Netmask,
 		arg.Gateway,
 		arg.DnsJson,
+		arg.Force,
 	)
 	return err
 }
@@ -317,8 +323,195 @@ func (q *Queries) InsertCameraUser(ctx context.Context, arg InsertCameraUserPara
 	return err
 }
 
+const listAllCameraProtocols = `-- name: ListAllCameraProtocols :many
+SELECT camera_id, engine_key, enabled, port, options_json FROM camera_protocols ORDER BY camera_id, engine_key
+`
+
+func (q *Queries) ListAllCameraProtocols(ctx context.Context) ([]CameraProtocol, error) {
+	rows, err := q.db.QueryContext(ctx, listAllCameraProtocols)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CameraProtocol{}
+	for rows.Next() {
+		var i CameraProtocol
+		if err := rows.Scan(
+			&i.CameraID,
+			&i.EngineKey,
+			&i.Enabled,
+			&i.Port,
+			&i.OptionsJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllCameraState = `-- name: ListAllCameraState :many
+
+SELECT camera_id, "key", value_json, origin, updated_at FROM camera_state ORDER BY camera_id, key
+`
+
+// Every camera at once, for the camera list: one query per table instead
+// of one per camera.
+func (q *Queries) ListAllCameraState(ctx context.Context) ([]CameraState, error) {
+	rows, err := q.db.QueryContext(ctx, listAllCameraState)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CameraState{}
+	for rows.Next() {
+		var i CameraState
+		if err := rows.Scan(
+			&i.CameraID,
+			&i.Key,
+			&i.ValueJson,
+			&i.Origin,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllCameraStreams = `-- name: ListAllCameraStreams :many
+SELECT camera_id, stream, asset_id, rendition_id FROM camera_streams ORDER BY camera_id, stream
+`
+
+func (q *Queries) ListAllCameraStreams(ctx context.Context) ([]CameraStream, error) {
+	rows, err := q.db.QueryContext(ctx, listAllCameraStreams)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CameraStream{}
+	for rows.Next() {
+		var i CameraStream
+		if err := rows.Scan(
+			&i.CameraID,
+			&i.Stream,
+			&i.AssetID,
+			&i.RenditionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllCameraTargets = `-- name: ListAllCameraTargets :many
+SELECT camera_targets.camera_id, camera_targets.event_types_json, camera_targets.overrides_json,
+       targets.id, targets.name, targets.type, targets.config_json, targets.secret_enc, targets.enabled
+FROM camera_targets
+JOIN targets ON targets.id = camera_targets.target_id
+ORDER BY camera_targets.camera_id, targets.name
+`
+
+type ListAllCameraTargetsRow struct {
+	CameraID       string
+	EventTypesJson string
+	OverridesJson  string
+	ID             string
+	Name           string
+	Type           string
+	ConfigJson     string
+	SecretEnc      []byte
+	Enabled        int64
+}
+
+func (q *Queries) ListAllCameraTargets(ctx context.Context) ([]ListAllCameraTargetsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAllCameraTargets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllCameraTargetsRow{}
+	for rows.Next() {
+		var i ListAllCameraTargetsRow
+		if err := rows.Scan(
+			&i.CameraID,
+			&i.EventTypesJson,
+			&i.OverridesJson,
+			&i.ID,
+			&i.Name,
+			&i.Type,
+			&i.ConfigJson,
+			&i.SecretEnc,
+			&i.Enabled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllCameraUsers = `-- name: ListAllCameraUsers :many
+SELECT id, camera_id, username, password_enc, role FROM camera_users ORDER BY camera_id, username
+`
+
+func (q *Queries) ListAllCameraUsers(ctx context.Context) ([]CameraUser, error) {
+	rows, err := q.db.QueryContext(ctx, listAllCameraUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CameraUser{}
+	for rows.Next() {
+		var i CameraUser
+		if err := rows.Scan(
+			&i.ID,
+			&i.CameraID,
+			&i.Username,
+			&i.PasswordEnc,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCameraNetworks = `-- name: ListCameraNetworks :many
-SELECT camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json FROM camera_network
+SELECT camera_id, mode, parent_if, mac, ip_mode, ip, netmask, gateway, dns_json, force FROM camera_network
 `
 
 func (q *Queries) ListCameraNetworks(ctx context.Context) ([]CameraNetwork, error) {
@@ -340,6 +533,7 @@ func (q *Queries) ListCameraNetworks(ctx context.Context) ([]CameraNetwork, erro
 			&i.Netmask,
 			&i.Gateway,
 			&i.DnsJson,
+			&i.Force,
 		); err != nil {
 			return nil, err
 		}
@@ -421,7 +615,7 @@ func (q *Queries) ListCameraState(ctx context.Context, cameraID string) ([]Camer
 }
 
 const listCameraStatuses = `-- name: ListCameraStatuses :many
-SELECT camera_id, actual_state, reason, started_at, last_heartbeat, updated_at FROM camera_status
+SELECT camera_id, actual_state, reason, started_at, last_heartbeat, updated_at, ip, ip_source, reason_code FROM camera_status
 `
 
 func (q *Queries) ListCameraStatuses(ctx context.Context) ([]CameraStatus, error) {
@@ -440,6 +634,9 @@ func (q *Queries) ListCameraStatuses(ctx context.Context) ([]CameraStatus, error
 			&i.StartedAt,
 			&i.LastHeartbeat,
 			&i.UpdatedAt,
+			&i.Ip,
+			&i.IpSource,
+			&i.ReasonCode,
 		); err != nil {
 			return nil, err
 		}
@@ -611,6 +808,21 @@ func (q *Queries) ListCameras(ctx context.Context) ([]Camera, error) {
 	return items, nil
 }
 
+const setCameraAddress = `-- name: SetCameraAddress :exec
+UPDATE camera_status SET ip = ?1, ip_source = ?2 WHERE camera_id = ?3
+`
+
+type SetCameraAddressParams struct {
+	Ip       string
+	IpSource string
+	CameraID string
+}
+
+func (q *Queries) SetCameraAddress(ctx context.Context, arg SetCameraAddressParams) error {
+	_, err := q.db.ExecContext(ctx, setCameraAddress, arg.Ip, arg.IpSource, arg.CameraID)
+	return err
+}
+
 const setCameraDesired = `-- name: SetCameraDesired :exec
 UPDATE cameras SET desired_state = ?1, updated_at = ?2 WHERE id = ?3
 `
@@ -664,28 +876,35 @@ func (q *Queries) UpdateCameraMeta(ctx context.Context, arg UpdateCameraMetaPara
 }
 
 const updateCameraNetwork = `-- name: UpdateCameraNetwork :exec
-UPDATE camera_network SET parent_if = ?1, mac = ?2, ip = ?3, netmask = ?4, gateway = ?5, dns_json = ?6
-WHERE camera_id = ?7
+UPDATE camera_network SET mode = ?1, parent_if = ?2, mac = ?3, ip_mode = ?4, ip = ?5, netmask = ?6,
+  gateway = ?7, dns_json = ?8, force = ?9
+WHERE camera_id = ?10
 `
 
 type UpdateCameraNetworkParams struct {
+	Mode     string
 	ParentIf string
 	Mac      string
+	IpMode   string
 	Ip       string
 	Netmask  string
 	Gateway  string
 	DnsJson  string
+	Force    int64
 	CameraID string
 }
 
 func (q *Queries) UpdateCameraNetwork(ctx context.Context, arg UpdateCameraNetworkParams) error {
 	_, err := q.db.ExecContext(ctx, updateCameraNetwork,
+		arg.Mode,
 		arg.ParentIf,
 		arg.Mac,
+		arg.IpMode,
 		arg.Ip,
 		arg.Netmask,
 		arg.Gateway,
 		arg.DnsJson,
+		arg.Force,
 		arg.CameraID,
 	)
 	return err
@@ -739,16 +958,17 @@ func (q *Queries) UpsertCameraState(ctx context.Context, arg UpsertCameraStatePa
 }
 
 const upsertCameraStatus = `-- name: UpsertCameraStatus :exec
-INSERT INTO camera_status (camera_id, actual_state, reason, started_at, last_heartbeat, updated_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+INSERT INTO camera_status (camera_id, actual_state, reason_code, reason, started_at, last_heartbeat, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT (camera_id) DO UPDATE SET
-  actual_state = excluded.actual_state, reason = excluded.reason, started_at = excluded.started_at,
-  last_heartbeat = excluded.last_heartbeat, updated_at = excluded.updated_at
+  actual_state = excluded.actual_state, reason_code = excluded.reason_code, reason = excluded.reason,
+  started_at = excluded.started_at, last_heartbeat = excluded.last_heartbeat, updated_at = excluded.updated_at
 `
 
 type UpsertCameraStatusParams struct {
 	CameraID      string
 	ActualState   string
+	ReasonCode    string
 	Reason        string
 	StartedAt     sql.NullInt64
 	LastHeartbeat sql.NullInt64
@@ -759,6 +979,7 @@ func (q *Queries) UpsertCameraStatus(ctx context.Context, arg UpsertCameraStatus
 	_, err := q.db.ExecContext(ctx, upsertCameraStatus,
 		arg.CameraID,
 		arg.ActualState,
+		arg.ReasonCode,
 		arg.Reason,
 		arg.StartedAt,
 		arg.LastHeartbeat,

@@ -96,7 +96,7 @@ func TestNetIdentityValidate(t *testing.T) {
 		func(n *NetIdentity) { n.Gateway = netip.MustParseAddr("10.0.0.1") },
 		func(n *NetIdentity) { n.Gateway = n.IP },
 		func(n *NetIdentity) { n.Prefix = 31 },
-		func(n *NetIdentity) { n.IPMode = IPDHCP },
+		func(n *NetIdentity) { n.Mode, n.IPMode = NetIPvlan, IPDHCP },
 	}
 	for i, mutate := range bad {
 		n := base
@@ -104,6 +104,18 @@ func TestNetIdentityValidate(t *testing.T) {
 		var verr *ValidationError
 		if err := n.Validate(); !errors.As(err, &verr) {
 			t.Errorf("case %d: expected a validation error, got %v", i, err)
+		}
+	}
+	// DHCP needs no address; ipvlan works with a static one.
+	good := []func(n *NetIdentity){
+		func(n *NetIdentity) { n.IPMode, n.IP, n.Prefix, n.Gateway = IPDHCP, netip.Addr{}, 0, netip.Addr{} },
+		func(n *NetIdentity) { n.Mode = NetIPvlan },
+	}
+	for i, mutate := range good {
+		n := base
+		mutate(&n)
+		if err := n.Validate(); err != nil {
+			t.Errorf("good case %d: %v", i, err)
 		}
 	}
 }
@@ -141,7 +153,7 @@ func TestMasks(t *testing.T) {
 			t.Errorf("MaskToPrefix(%q) = %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "255.0.255.0", "33", "abc"} {
+	for _, bad := range []string{"", "255.0.255.0", "33", "abc", "24abc", "-1"} {
 		if _, err := MaskToPrefix(bad); err == nil {
 			t.Errorf("MaskToPrefix(%q) should fail", bad)
 		}
@@ -151,6 +163,18 @@ func TestMasks(t *testing.T) {
 	}
 	if got := LastAddr(netip.MustParsePrefix("10.1.2.0/23")); got.String() != "10.1.3.255" {
 		t.Errorf("LastAddr = %s", got)
+	}
+}
+
+func TestGatewayIn(t *testing.T) {
+	ip := netip.MustParseAddr("10.1.0.50")
+	if gw, ok := GatewayIn(ip, 24, "10.1.0.1"); !ok || gw.String() != "10.1.0.1" {
+		t.Fatalf("router in the subnet: %v %v", gw, ok)
+	}
+	for _, bad := range []string{"", "10.2.0.1", "10.1.0.50", "fe80::1", "router"} {
+		if gw, ok := GatewayIn(ip, 24, bad); ok {
+			t.Errorf("GatewayIn(%q) = %v, want none", bad, gw)
+		}
 	}
 }
 
@@ -276,5 +300,13 @@ func TestNormalizeTags(t *testing.T) {
 	}
 	if _, err := NormalizeTags(many); err == nil {
 		t.Error("too many tags accepted")
+	}
+}
+
+func TestDHCPHostname(t *testing.T) {
+	for in, want := range map[string]string{"Gate 1": "Gate-1", "Cámara ñ #3": "C-mara-3", "---": "camera", "a  b": "a-b"} {
+		if got := DHCPHostname(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
 	}
 }

@@ -8,10 +8,12 @@
 # line-crossing event (M4), admission (M7), the privileges of the service
 # and camera processes, editing a running camera (accounts, stream and
 # address), sub and third streams in H.264, H.265 and MJPEG, API tokens
-# with bulk actions and the audit log, background jobs, clean stop, and
-# cameras coming back after a restart.
+# with bulk actions and the audit log, background jobs, the outbound
+# firewall, the MAC probe, DHCP with the factory address as fallback, the
+# node bridge, ipvlan where the kernel has it, clean stop, and cameras
+# coming back after a restart.
 #
-# Run as root on Linux with iproute2, ffmpeg, curl and python3:
+# Run as root on Linux with iproute2, ffmpeg, curl, ping and python3:
 #   sudo backend/e2e/run.sh
 #
 # E2E_BIN=path uses an already built binary instead of building one.
@@ -75,13 +77,24 @@ cleanup() {
 trap cleanup EXIT
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 2; }
-for tool in ip ffprobe curl python3; do
-	command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 2; }
-done
 case "$MODE" in
-binary | compose) ;;
+binary) tools="ip ffprobe ffmpeg curl ping python3" ;;
+compose) tools="ip ffprobe curl ping python3 docker" ;;
 *) echo "E2E_MODE must be binary or compose" >&2; exit 2 ;;
 esac
+for tool in $tools; do
+	command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 2; }
+done
+
+wait_status() { # camera, Python expression over the camera d, value, seconds
+	local i got
+	for ((i = 0; i < $4 * 2; i++)); do
+		got=$(api GET "/cameras/$1" | json "$2")
+		[ "$got" = "$3" ] && return 0
+		sleep 0.5
+	done
+	fail "camera $1: $2 is $got, want $3"
+}
 
 wait_state() { # camera, state, seconds
 	local i state
@@ -145,11 +158,13 @@ else
 fi
 
 step "isolated virtual LAN with a client device"
-ip link add "$LAN" type veth peer name "${LAN}p"
+# Every interface gets its MAC here: udev replaces a MAC the kernel made up
+# (MACAddressPolicy=persistent) moments after the interface appears.
+ip link add "$LAN" address 02:e2:e0:00:00:01 type veth peer name "${LAN}p" address 02:e2:e0:00:00:02
 ip link set "$LAN" up
 ip link set "${LAN}p" up
 ip netns add "$CLIENT_NS"
-ip link add mve2ecl link "$LAN" type macvlan mode bridge
+ip link add mve2ecl link "$LAN" address 02:e2:e0:00:00:03 type macvlan mode bridge
 ip link set mve2ecl netns "$CLIENT_NS"
 client ip link set lo up
 client ip link set mve2ecl name eth0
@@ -387,6 +402,157 @@ for _ in $(seq 1 120); do
 done
 [ "$st" = completed ] || fail "renditions.prepare ended $st: $(api GET "/jobs/$JID")"
 ok "import and renditions ran as jobs; preparation: $(api GET "/jobs/$JID" | json 'd["result"]')"
+
+step "outbound firewall: a camera connects only to the event targets (D25)"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["firewall"]')" = True ] || fail "the camera has no outbound firewall"
+if netns_named "$NETNS"; then
+	client python3 "$ROOT/backend/e2e/receiver.py" 9001 "$WORK/other.log" </dev/null >/dev/null 2>&1 &
+	# A TCP connection from inside the camera's namespace.
+	reaches() { node_exec ip netns exec "$NETNS" timeout 3 bash -c "exec 3<>/dev/tcp/$CLIENT_IP/$1" 2>/dev/null; }
+	reaches_within() { # port, seconds: 0 when it becomes reachable
+		for ((i = 0; i < $2; i++)); do reaches "$1" && return 0; done
+		return 1
+	}
+	reaches 9000 || fail "the camera cannot connect to its event target"
+	reaches 9001 && fail "the camera connected to a port of the client that no target uses"
+	OTHER=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"other\",\"url\":\"http://$CLIENT_IP:9001/x\"}" | json 'd["id"]')
+	reaches_within 9001 10 || fail "a new target did not open the firewall of the running camera"
+	api DELETE "/targets/$OTHER" -o /dev/null
+	for _ in $(seq 1 10); do reaches 9001 || break; done
+	reaches 9001 && fail "a deleted target is still open"
+	ok "from its namespace the camera reaches $CLIENT_IP:9000 (a target) and not :9001, until a target uses it; no restart"
+else
+	ok "firewall in place (anonymous namespace: the connections are not tried from inside)"
+fi
+
+step "MAC probe: a camera does not start with a MAC another device has (RN-06)"
+CLIENT_MAC=$(client cat /sys/class/net/eth0/address)
+BAD=$(api POST /cameras -H 'Content-Type: application/json' -d "{
+	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.2.0\",
+	\"network\": {\"ip\": \"10.77.0.13\", \"mac\": \"$CLIENT_MAC\"}, \"start\": true}" | json 'd["id"]')
+for _ in $(seq 1 60); do
+	[ "$(api GET "/cameras/$BAD" | json 'd["status"]["state"]')" = error ] && break
+	sleep 0.5
+done
+reason=$(api GET "/cameras/$BAD" | json 'd["status"]["reason"]')
+echo "$reason" | grep -q "MAC $CLIENT_MAC is already in use" || fail "a camera started with the client's MAC: $reason"
+client ping -c 1 -W 2 "$CAM_IP" >/dev/null || fail "the client lost its network"
+api DELETE "/cameras/$BAD" -o /dev/null
+ok "refused: $reason"
+
+step "DHCP: a new camera takes its factory address without a server, then leases one (D23, D24)"
+LID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
+	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.2.0",
+	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
+wait_state "$LID" running 90
+LMAC=$(api GET "/cameras/$LID" | json 'd["network"]["mac"]')
+got=$(api GET "/cameras/$LID" | json '(d["status"]["ip"], d["status"]["ip_source"])')
+[ "$got" = "('192.168.5.190', 'factory')" ] || fail "without a DHCP server: $got"
+client ip addr add 192.168.5.2/24 dev eth0
+client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach the factory address"
+[ "$(client ip neigh show 192.168.5.190 | awk '{print $5}')" = "$LMAC" ] || fail "the factory address answers with another MAC"
+ok "no server answered: the camera took the profile's factory address 192.168.5.190, as a real one"
+# A second one finds the address taken, and takes it once the first stops.
+L2ID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
+	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.2.0",
+	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
+wait_status "$L2ID" 'd["status"].get("reason_code")' dhcp_factory_in_use 90
+ok "a second camera did not take 192.168.5.190 while Lobby holds it"
+api POST "/cameras/$LID/actions/stop" >/dev/null
+wait_state "$LID" stopped 20
+wait_status "$L2ID" '(d["status"]["state"], d["status"].get("ip"))' "('running', '192.168.5.190')" 120
+L2MAC=$(api GET "/cameras/$L2ID" | json 'd["network"]["mac"]')
+client ip neigh flush dev eth0
+client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach the second camera"
+[ "$(client ip neigh show 192.168.5.190 | awk '{print $5}')" = "$L2MAC" ] || fail "192.168.5.190 answers with another MAC than Lobby 2's"
+client ip addr del 192.168.5.2/24 dev eth0
+api DELETE "/cameras/$L2ID" -o /dev/null
+ok "stopped, Lobby left it: Lobby 2 answers on 192.168.5.190 with its MAC $L2MAC"
+# The pool starts with Gate 1's address: the service refuses it and the
+# camera declines it, as RFC 2131 asks.
+DHCP_IP=10.77.0.100
+client python3 "$ROOT/backend/e2e/dhcpd.py" eth0 "$CLIENT_IP" "$CAM_IP,$DHCP_IP" "$WORK/dhcp.log" </dev/null >/dev/null 2>&1 &
+sleep 0.5
+api POST "/cameras/$LID/actions/start" >/dev/null
+wait_state "$LID" running 90
+got=$(api GET "/cameras/$LID" | json '(d["status"]["ip"], d["status"]["ip_source"])')
+[ "$got" = "('$DHCP_IP', 'dhcp')" ] || fail "with a DHCP server: $got; server log: $(cat "$WORK/dhcp.log" 2>/dev/null)"
+grep -q "^DECLINE $LMAC $CAM_IP$" "$WORK/dhcp.log" || fail "the address of Gate 1 was not declined: $(cat "$WORK/dhcp.log")"
+grep -q "^ACK $LMAC $DHCP_IP$" "$WORK/dhcp.log" || fail "no lease of $DHCP_IP in the server's log"
+client ping -c 2 -W 2 "$DHCP_IP" >/dev/null || fail "the client cannot reach the leased address"
+[ "$(client ip neigh show "$DHCP_IP" | awk '{print $5}')" = "$LMAC" ] || fail "the leased address answers with another MAC"
+client ping -c 1 -W 2 "$CAM_IP" >/dev/null || fail "Gate 1 lost its address to the lease"
+ok "leased $DHCP_IP with MAC $LMAC after declining $CAM_IP, which Gate 1 holds"
+api DELETE "/cameras/$LID" -o /dev/null
+sleep 0.5
+grep -q "^RELEASE $LMAC $DHCP_IP$" "$WORK/dhcp.log" || fail "the deleted camera did not release its lease"
+ok "deleting the camera released its lease"
+
+step "node bridge: the node itself reaches its macvlan cameras (D26)"
+ip addr add 10.77.0.1/24 dev "$LAN"
+ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the node reached a macvlan camera without the bridge"
+api PATCH /settings -H 'Content-Type: application/json' -d '{"node_bridge":true}' >/dev/null
+bridge=$(api GET /node | json 'd["bridge"]')
+[ "$(api GET /node | json 'd["bridge"].get("interface")')" = mv-bridge ] || fail "bridge: $bridge"
+ping -c 2 -W 2 "$CAM_IP" >/dev/null || fail "the node cannot ping the camera through the bridge"
+code=$(curl -s -o /dev/null -w '%{http_code}' --digest -u admin:e2e-new-pw "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 200 ] || fail "the node got $code from the camera through the bridge"
+ok "with the bridge the node pings $CAM_IP and reads its snapshot"
+api PATCH /settings -H 'Content-Type: application/json' -d '{"node_bridge":false}' >/dev/null
+ip link show mv-bridge >/dev/null 2>&1 && fail "the bridge is still there"
+ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the node still reaches the camera without the bridge"
+ip addr del 10.77.0.1/24 dev "$LAN"
+ok "turned off, the bridge is gone"
+
+step "ipvlan: a camera with its card's MAC, and one mode per card (D27)"
+# A second card, whose other end is a device of the client.
+WLAN=mve2e1
+ip link add "$WLAN" address 02:e2:e1:00:00:01 type veth peer name "${WLAN}p" address 02:e2:e1:00:00:02
+ip link set "${WLAN}p" netns "$CLIENT_NS"
+client ip link set "${WLAN}p" name eth1
+client ip addr add 10.78.0.2/24 dev eth1
+client ip link set eth1 up
+ip link set "$WLAN" up
+if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
+	ip link del mve2eiv
+	WMAC=$(cat "/sys/class/net/$WLAN/address")
+	IID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
+		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.2.0\",
+		\"network\": {\"mode\": \"ipvlan\", \"parent\": \"$WLAN\", \"ip\": \"10.78.0.10\", \"netmask\": \"255.255.255.0\"},
+		\"stream\": {\"resolution\": \"640x360\"}, \"start\": true}" | json 'd["id"]')
+	wait_state "$IID" running 60
+	client ping -c 2 -W 2 10.78.0.10 >/dev/null || fail "the client cannot reach the ipvlan camera"
+	[ "$(client ip neigh show 10.78.0.10 | awk '{print $5}')" = "$WMAC" ] || fail "the ipvlan camera does not answer with its card's MAC $WMAC"
+	[ "$(api GET "/cameras/$IID" | json 'd["status"].get("mac")')" = "$WMAC" ] || fail "the status does not show the card's MAC"
+	ok "10.78.0.10 answers with the MAC of $WLAN, $WMAC"
+	code=$(api POST /cameras -H 'Content-Type: application/json' -o "$WORK/mix.json" -w '%{http_code}' -d "{
+		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.2.0\",
+		\"network\": {\"parent\": \"$WLAN\", \"ip\": \"10.78.0.11\", \"netmask\": \"255.255.255.0\"}}")
+	[ "$code" = 422 ] && grep -q "Wi-Fi 1" "$WORK/mix.json" || fail "a macvlan camera beside an ipvlan one: $code $(cat "$WORK/mix.json")"
+	ok "a macvlan camera on $WLAN is refused and the answer names Wi-Fi 1"
+	# A macvlan interface MockVision did not make: the kernel refuses the
+	# ipvlan one, and retrying cannot help.
+	api POST "/cameras/$IID/actions/stop" >/dev/null
+	wait_state "$IID" stopped 20
+	for _ in $(seq 1 20); do
+		ip link add mve2emv link "$WLAN" address 02:e2:e1:00:00:03 type macvlan mode bridge 2>/dev/null && break
+		sleep 0.25 # the stopped camera's ipvlan port may linger a moment
+	done
+	ip link show mve2emv >/dev/null 2>&1 || fail "cannot add a macvlan to $WLAN"
+	api POST "/cameras/$IID/actions/start" >/dev/null
+	wait_status "$IID" 'd["status"].get("reason_code")' parent_busy 30
+	sleep 3
+	got=$(api GET "/cameras/$IID" | json '(d["status"]["state"], d["status"]["retries"])')
+	[ "$got" = "('error', 0)" ] || fail "a camera on a busy card was retried: $got"
+	ip link del mve2emv
+	api POST "/cameras/$IID/actions/start" >/dev/null
+	wait_state "$IID" running 60
+	api DELETE "/cameras/$IID" -o /dev/null
+	ok "with a foreign macvlan on $WLAN it stops in error (parent_busy) without retrying, and starts once it is gone"
+else
+	ok "skipped: the kernel has no ipvlan"
+fi
+ip link del "$WLAN"
 
 step "v1 editing: a new address applies at the restart (RN-09)"
 pending=$(api PATCH "/cameras/$CID" -H 'Content-Type: application/json' \

@@ -1,6 +1,7 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type CreateCamera, errorMessage } from "@/api/client";
 import { useAssets, useCreateCamera, useNode, useProfile, useProfiles, useTargets } from "@/api/queries";
+import { NetworkModeFields } from "@/components/NetworkModeFields";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/card";
@@ -8,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
 import { codecLabel, streamLabel } from "@/lib/media";
+import { defaultParent, isWireless } from "@/lib/network";
 import { navigate } from "@/lib/router";
 
 export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -31,6 +33,8 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
 
   const [name, setName] = useState("");
   const [ip, setIp] = useState("");
+  const [mode, setMode] = useState("");
+  const [ipMode, setIpMode] = useState("static");
   const [netmask, setNetmask] = useState("255.255.255.0");
   const [gateway, setGateway] = useState("");
   const [resolution, setResolution] = useState("");
@@ -46,13 +50,18 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
   useEffect(() => {
     if (!profileKey && available.length > 0) setProfileKey(`${available[0].profile_id}@${available[0].version}`);
   }, [available, profileKey]);
+  // A profile, once chosen and loaded, brings its stream defaults and its
+  // factory account; what is typed afterwards stays.
+  const applied = useRef("");
   useEffect(() => {
+    if (!profile || `${profile.profile_id}@${profile.version}` !== profileKey || applied.current === profileKey) return;
+    applied.current = profileKey;
     if (stream) {
       setResolution(stream.default.resolution);
       setCodec(stream.default.codec);
     }
-    if (profile && !username) setUsername(profile.factory_users[0]?.username ?? "admin");
-  }, [stream, profile, username]);
+    setUsername(profile.factory_users[0]?.username ?? "admin");
+  }, [profile, stream, profileKey]);
   useEffect(() => {
     if (open) {
       setFieldErrors({});
@@ -62,6 +71,9 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
   }, [open]);
 
   const local = node?.runtime === "local";
+  // On Wi-Fi only ipvlan works: suggest it when the default parent is one.
+  const netMode = mode || (isWireless(node, defaultParent(node)) ? "ipvlan" : "macvlan");
+  const dhcp = ipMode === "dhcp" && netMode !== "ipvlan";
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -70,7 +82,11 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
       name: name.trim(),
       profile_id: ref.id,
       profile_version: ref.version,
-      network: local ? undefined : { ip: ip.trim(), netmask: netmask.trim() || undefined, gateway: gateway.trim() || undefined },
+      network: local
+        ? undefined
+        : dhcp
+          ? { mode: "macvlan", ip_mode: "dhcp" }
+          : { mode: netMode as "macvlan" | "ipvlan", ip: ip.trim(), netmask: netmask.trim() || undefined, gateway: gateway.trim() || undefined },
       // Only what differs from the profile: a profile may not let either change.
       stream: {
         resolution: resolution && resolution !== stream?.default.resolution ? resolution : undefined,
@@ -142,16 +158,29 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
           ) : (
             <>
-              <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>
-                <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" required className="font-mono" />
-              </Field>
-              <Field label={t("Netmask")} error={fieldErrors["network.netmask"]}>
-                <Input value={netmask} onChange={(e) => setNetmask(e.target.value)} className="font-mono" />
-              </Field>
-              <Field label={t("Gateway")} error={fieldErrors["network.gateway"]} hint={t("Empty: the node's gateway when it is in the subnet.")}>
-                <Input value={gateway} onChange={(e) => setGateway(e.target.value)} className="font-mono" />
-              </Field>
-              <div />
+              <NetworkModeFields
+                value={{ mode: netMode, ipMode }}
+                onChange={(next) => {
+                  setMode(next.mode);
+                  setIpMode(next.ipMode);
+                }}
+                factoryIP={profile?.factory_ip}
+                errors={fieldErrors}
+              />
+              {!dhcp && (
+                <>
+                  <Field label={t("IP address")} error={fieldErrors["network.ip"]} hint={profile?.factory_ip ? t("Factory IP: {ip}", { ip: profile.factory_ip }) : undefined}>
+                    <Input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" required className="font-mono" />
+                  </Field>
+                  <Field label={t("Netmask")} error={fieldErrors["network.netmask"]}>
+                    <Input value={netmask} onChange={(e) => setNetmask(e.target.value)} className="font-mono" />
+                  </Field>
+                  <Field label={t("Gateway")} error={fieldErrors["network.gateway"]} hint={t("Empty: the node's gateway when it is in the subnet.")}>
+                    <Input value={gateway} onChange={(e) => setGateway(e.target.value)} className="font-mono" />
+                  </Field>
+                  <div />
+                </>
+              )}
             </>
           )}
 

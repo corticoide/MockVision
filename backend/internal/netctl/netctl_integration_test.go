@@ -36,10 +36,12 @@ func requireRoot(t *testing.T) netns.NsHandle {
 
 // testParent creates an isolated parent NIC (one end of a veth pair);
 // macvlan interfaces in bridge mode on it reach each other like devices on
-// a switch.
+// a switch. Both ends get their MAC from the test: udev replaces a MAC the
+// kernel made up (MACAddressPolicy=persistent) moments after the interface
+// appears, and a MAC change flushes the interface's neighbors.
 func testParent(t *testing.T, name string) {
 	t.Helper()
-	v := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: name}, PeerName: name + "p"}
+	v := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: name, HardwareAddr: randomMAC()}, PeerName: name + "p", PeerHardwareAddr: randomMAC()}
 	if err := netlink.LinkAdd(v); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
@@ -78,7 +80,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = nsA.delete() })
 	start := time.Now()
-	if err := setupInterface(host, nsA, specA, nil); err != nil {
+	if _, err := setupInterface(host, nsA, specA, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("namespace %s ready in %s (named=%v)", nsA.name, time.Since(start).Round(time.Millisecond), nsA.named)
@@ -89,7 +91,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = setupInterface(host, nsDup, specDup, nil)
+	_, err = setupInterface(host, nsDup, specDup, nil)
 	_ = nsDup.delete()
 	var ne *Error
 	if !errors.As(err, &ne) || ne.Code != CodeIPInUse {
@@ -102,7 +104,7 @@ func TestMacvlanNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = nsB.delete() })
-	if err := setupInterface(host, nsB, specB, nil); err != nil {
+	if _, err := setupInterface(host, nsB, specB, nil); err != nil {
 		t.Fatal(err)
 	}
 

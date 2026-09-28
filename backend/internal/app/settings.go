@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 )
@@ -23,6 +24,10 @@ type Settings struct {
 	MaxJobs int `json:"max_jobs"`
 	// JobStepTimeoutSeconds bounds each step of a job (D72).
 	JobStepTimeoutSeconds int `json:"job_step_timeout_seconds"`
+	// NodeBridge lets the node itself reach its macvlan cameras through
+	// an extra interface on the parent (D26); off by default, since it
+	// changes the node's network.
+	NodeBridge bool `json:"node_bridge"`
 }
 
 // SettingsPatch changes some settings.
@@ -34,6 +39,7 @@ type SettingsPatch struct {
 	EventsRetentionDays *int     `json:"events_retention_days,omitempty"`
 	MaxJobs             *int     `json:"max_jobs,omitempty"`
 	JobStepTimeoutSecs  *int     `json:"job_step_timeout_seconds,omitempty"`
+	NodeBridge          *bool    `json:"node_bridge,omitempty"`
 }
 
 const settingsKey = "node"
@@ -78,7 +84,7 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 		set.MaxCPUPercent = *p.MaxCPUPercent
 	}
 	if p.ParentInterface != nil {
-		if *p.ParentInterface != "" && s.rt.Kind() == "netns" {
+		if *p.ParentInterface != "" && s.rt.Kind() == netctl.KindNetns {
 			info, _ := nodeInfo()
 			if _, ok := info.Lookup(*p.ParentInterface); !ok {
 				v.Add("parent_interface", "interface %s does not exist on this node", *p.ParentInterface)
@@ -104,6 +110,17 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 		}
 		set.JobStepTimeoutSeconds = *p.JobStepTimeoutSecs
 	}
+	if p.NodeBridge != nil {
+		set.NodeBridge = *p.NodeBridge
+	}
+	// A new default network card or a bridge must not put cameras where
+	// the kernel or an access point cannot take them.
+	if s.rt.Kind() == netctl.KindNetns && v.Err() == nil &&
+		(set.ParentInterface != before.ParentInterface || (set.NodeBridge && !before.NodeBridge)) {
+		if err := s.checkNetworkSettings(ctx, set, v); err != nil {
+			return before, err
+		}
+	}
 	if err := v.Err(); err != nil {
 		return before, err
 	}
@@ -114,6 +131,9 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 	s.audit(ctx, actor, "settings.update", "settings", settingsKey, map[string]any{"before": before, "after": set})
 	if set.ParentInterface != before.ParentInterface {
 		s.measureInterface(ctx)
+	}
+	if set.NodeBridge != before.NodeBridge || (set.NodeBridge && set.ParentInterface != before.ParentInterface) {
+		s.applyBridge(ctx)
 	}
 	return set, nil
 }
@@ -168,7 +188,7 @@ func (s *Service) admitStart(ctx context.Context) error {
 	return domain.AdmitStart(s.Settings(ctx).limits(), usage, s.cameraCost())
 }
 
-// errorIs is a small helper for store lookups.
+// notFound reports whether a store lookup found nothing.
 func notFound(err error) bool {
 	return errors.Is(store.NotFound(err), domain.ErrNotFound)
 }

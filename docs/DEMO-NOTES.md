@@ -30,6 +30,11 @@ against the Docker image started with `compose.yaml`.
 | Going over the maximum or the resources rejects the creation with a reason | `max_cameras` set to 1; problem with code `max_cameras` and the reason |
 | Reopening the browser shows the right state | a second browser page with the same session sees the camera running |
 | No camera process keeps capabilities | `/proc/<pid>/status` of the camera and of the main service: every capability set empty, uid not 0, `no_new_privs` |
+| A camera connects only to the event targets (v1) | a TCP connection from the camera's namespace reaches the target's port and not another port of the client, until a target uses it |
+| A MAC in use stops the start (v1) | a camera with the MAC of the client's interface, which lives on the node, ends in error with the conflict: the kernel refuses it. The probe on the LAN is covered by the netctl integration test `TestMACProbe` |
+| DHCP, with the factory address as fallback (v1) | without a server the camera answers on `192.168.5.190`, and a second one waits until the first stops and then takes it; with the e2e's DHCP server it declines Gate 1's address, leases the next and releases it when deleted |
+| ipvlan, and one mode per network card (v1) | where the kernel has ipvlan, a camera on a second card answers with the card's MAC, and a macvlan camera on that card is refused with `parent_busy` |
+| The node reaches its cameras through the bridge (v1) | ping and snapshot from the node with the bridge on, not with it off |
 
 The panel was also driven through the whole path in Chromium with
 Playwright, on a node in local mode: first-run wizard, profile import with
@@ -56,16 +61,18 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 
 ### Network
 
-- **macvlan only.** No ipvlan L2 mode (D27) and no DHCP (D24): cameras take
-  a static IP.
-- **No firewall per namespace.** The helper does not install nftables rules
-  in the cameras' namespaces.
-- **ARP probe for the IP only.** RFC 5227 probe before taking the address; a
-  MAC already used on the LAN is not detected.
-- **DNS is inherited from the node** (its resolv.conf) and is not editable
-  per camera; the gateway is.
-- **No bridge for access from the node** (D26). The node cannot reach its
-  own macvlan cameras, so clients and targets have to be on other devices.
+- **The MAC probe is a heuristic.** IPv4 has no way to ask who has a MAC:
+  the helper looks in the node's neighbor tables and interfaces, sends an
+  IPv6 neighbor solicitation and an all-nodes echo to that MAC, and listens
+  for its frames for a moment. A silent device, or one without IPv6, goes
+  unnoticed until it talks.
+- **ipvlan is checked only where the kernel has it**: the development VM
+  has no ipvlan module, so its integration test and its e2e step skip
+  there.
+- **One mode per network card.** The kernel does not mix macvlan and ipvlan
+  on one card, and the node bridge is macvlan; the panel refuses the mix
+  and names the cameras in the way.
+- IPv6 is off in the cameras' namespaces: cameras are IPv4 devices.
 - Under Docker's AppArmor profile the helper cannot mount, so cameras use
   anonymous namespaces and `ip netns` does not list them. Everything else
   works the same.
@@ -81,9 +88,6 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   itself, since it has no manifest.
 - **The official catalog is not bundled** (D81): profiles are imported by
   hand, as the acceptance criteria ask.
-- **H.264 only**, one stream per camera (`main`), in the demo itself. Since
-  v1 feature 5 cameras serve main, sub and third streams in H.264, H.265 or
-  MJPEG.
 - The RTSP Digest realm is `ipcam`, fixed by the RTSP library; the profile's
   realm applies to the HTTP API.
 
@@ -113,8 +117,7 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 
 ### API and data
 
-- No API tokens and no `Idempotency-Key`; the API uses the panel's session.
-- Audit rows are written, but there is no `GET /audit`.
+- No `Idempotency-Key`.
 - No faults and no *degraded* state: the state exists in the model but
   nothing sets it.
 - WebSocket topics: `node`, `cameras`, `camera:<id>`, `events` and
@@ -126,13 +129,11 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   series that are not kept.
 - Gaps (requests the profile does not cover) are logged and published on the
   camera's topic, but not stored; request counters are not persisted.
-- **No jobs system.** Renditions are encoded in the service, once per asset
-  and encoding parameters (codec, resolution, frame rate, GOP, bitrate),
-  with concurrent requests deduplicated.
 
 ### Panel
 
-- English only; no i18n.
+- English and Spanish: the panel starts in the browser's language and
+  remembers the one picked.
 - No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
   runs under a CSP without `unsafe-inline`. The design tokens (colors,
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.

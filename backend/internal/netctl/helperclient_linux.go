@@ -43,7 +43,7 @@ func NewHelperRuntime(f *os.File, log *slog.Logger) (*HelperRuntime, error) {
 }
 
 // Kind implements Runtime.
-func (r *HelperRuntime) Kind() string { return "netns" }
+func (r *HelperRuntime) Kind() string { return KindNetns }
 
 // Exits implements Runtime.
 func (r *HelperRuntime) Exits() <-chan Exit { return r.exits }
@@ -143,7 +143,30 @@ func (r *HelperRuntime) Launch(ctx context.Context, spec LaunchSpec) (*Launched,
 		_ = r.Destroy(context.Background(), spec.Camera.ID)
 		return nil, err
 	}
-	return &Launched{Conn: conn, PID: res.PID, Netns: res.Netns, IP: spec.Camera.IP}, nil
+	return &Launched{Conn: conn, PID: res.PID, Netns: res.Netns, IP: spec.Camera.IP, MAC: res.MAC, Firewall: res.Firewall}, nil
+}
+
+// SetAddress implements Runtime.
+func (r *HelperRuntime) SetAddress(ctx context.Context, a AddressSpec) error {
+	if err := a.Validate(); err != nil {
+		return errorf(CodeInvalid, "%v", err)
+	}
+	return r.request(ctx, msgAddress, a, nil, nil)
+}
+
+// SetFirewall implements Runtime.
+func (r *HelperRuntime) SetFirewall(ctx context.Context, cameraID string, f Firewall) error {
+	if err := f.Validate(); err != nil {
+		return errorf(CodeInvalid, "%v", err)
+	}
+	return r.request(ctx, msgFirewall, firewallRequest{ID: cameraID, Firewall: f}, nil, nil)
+}
+
+// SetBridge implements Runtime.
+func (r *HelperRuntime) SetBridge(ctx context.Context, b BridgeSpec) (BridgeState, error) {
+	var st BridgeState
+	err := r.request(ctx, msgBridge, b, nil, &st)
+	return st, err
 }
 
 // Destroy implements Runtime.
