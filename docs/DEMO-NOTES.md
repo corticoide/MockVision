@@ -97,8 +97,14 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   itself, since it has no manifest.
 - **The official catalog is not bundled** (D81): profiles are imported by
   hand, as the acceptance criteria ask.
-- The RTSP Digest realm is `ipcam`, fixed by the RTSP library; the profile's
-  realm applies to the HTTP API.
+- **Values are not translated.** A bound parameter holds the canonical value
+  as it is (`h264`, `1920x1080`). A vendor that names them otherwise, such
+  as Dahua's `H.264` or its width and height apart, keeps those parameters
+  declarative: they answer and store the vendor's value but do not reach
+  the stream.
+- **Engine errors are fixed.** A `state.get` of an unknown parameter or a
+  `state.set` the parameter refuses answers `Error: <reason>` with a 400,
+  whatever the vendor answers.
 
 ### Isolation
 

@@ -1,10 +1,13 @@
 package rtsp
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,20 +18,36 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/pion/rtp"
 
+	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
-// fakeHost is the smallest camera the engine runs in: one stream and no
-// accounts, as the test profile asks for none.
-type fakeHost struct{ src *engine.VideoSource }
+// fakeHost is the smallest camera the engine runs in: one stream and the
+// accounts the test asks for.
+type fakeHost struct {
+	src   *engine.VideoSource
+	users fakeAccounts
+}
 
-func (h fakeHost) Accounts() engine.Accounts   { return nil }
+func (h fakeHost) Accounts() engine.Accounts   { return h.users }
 func (h fakeHost) State() engine.State         { return nil }
 func (h fakeHost) Events() engine.Events       { return nil }
-func (h fakeHost) Media() engine.Media         { return fakeMedia(h) }
-func (h fakeHost) Templates() engine.Templates { return nil }
+func (h fakeHost) Media() engine.Media         { return fakeMedia{h.src} }
+func (h fakeHost) Templates() engine.Templates { return tmpl.NewCompiler(tmpl.Env{}) }
 func (h fakeHost) Files() engine.Files         { return nil }
 func (h fakeHost) Telemetry() engine.Telemetry { return fakeTelemetry{} }
+
+type fakeAccounts []engine.User
+
+func (a fakeAccounts) List() []engine.User { return a }
+func (a fakeAccounts) Lookup(name string) (engine.User, bool) {
+	for _, u := range a {
+		if u.Username == name {
+			return u, true
+		}
+	}
+	return engine.User{}, false
+}
 
 type fakeMedia struct{ src *engine.VideoSource }
 
@@ -68,6 +87,12 @@ func gop(fps, frames int) *engine.VideoSource {
 
 func startEngine(t *testing.T, src *engine.VideoSource) string {
 	t.Helper()
+	return startEngineWith(t, fakeHost{src: src}, engine.Identity{},
+		`{"engine": "rtsp@^1", "auth": {"scheme": "none"}, "paths": {"sub": "/sub"}}`)
+}
+
+func startEngineWith(t *testing.T, h fakeHost, id engine.Identity, config string) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -75,9 +100,10 @@ func startEngine(t *testing.T, src *engine.VideoSource) string {
 	e := New()
 	err = e.Start(context.Background(), engine.StartInput{
 		Instance:  "rtsp",
-		Config:    []byte(`{"engine": "rtsp@^1", "auth": {"scheme": "none"}, "paths": {"sub": "/sub"}}`),
+		Identity:  id,
+		Config:    []byte(config),
 		Listeners: map[string]net.Listener{"rtsp": ln},
-		Host:      fakeHost{src},
+		Host:      h,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +115,12 @@ func startEngine(t *testing.T, src *engine.VideoSource) string {
 // play watches a stream over TCP until it has n frames.
 func play(t *testing.T, addr string, n int) [][][]byte {
 	t.Helper()
-	u, err := base.ParseURL("rtsp://" + addr + "/sub")
+	return playURL(t, "rtsp://"+addr+"/sub", n)
+}
+
+func playURL(t *testing.T, url string, n int) [][][]byte {
+	t.Helper()
+	u, err := base.ParseURL(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,4 +199,35 @@ func TestViewersStartAtAKeyframe(t *testing.T) {
 			t.Fatalf("play %d: the stream must go on with predicted frames", i)
 		}
 	}
+}
+
+// The camera challenges with its own realm and names its server, as a
+// Dahua does with "Login to <serial>" and "Rtsp Server/3.0"; clients sign
+// with that realm, and a wrong password gets a new challenge.
+func TestChallengeNamesTheCamera(t *testing.T) {
+	h := fakeHost{src: gop(25, 10), users: fakeAccounts{{Username: "admin", Password: "secret", Role: "admin"}}}
+	addr := startEngineWith(t, h, engine.Identity{Serial: "4F0ABCDPAG12345"}, `{"engine": "rtsp@^1",
+		"auth": {"scheme": "digest", "realm": "Login to {{ .Camera.Serial }}"}, "server": "Rtsp Server/3.0",
+		"paths": {"sub": "/sub"}}`)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	for cseq, auth := range []string{"", `Authorization: Digest username="admin", realm="Login to 4F0ABCDPAG12345", nonce="x", uri="rtsp://` + addr + `/sub", response="0"` + "\r\n"} {
+		fmt.Fprintf(conn, "DESCRIBE rtsp://%s/sub RTSP/1.0\r\nCSeq: %d\r\n%s\r\n", addr, cseq+1, auth)
+		var res base.Response
+		if err := res.Unmarshal(br); err != nil {
+			t.Fatal(err)
+		}
+		challenge := strings.Join(res.Header["WWW-Authenticate"], " ")
+		if res.StatusCode != base.StatusUnauthorized || !strings.HasPrefix(challenge, `Digest realm="Login to 4F0ABCDPAG12345", nonce="`) {
+			t.Fatalf("request %d: %d, challenge %q", cseq+1, res.StatusCode, challenge)
+		}
+		if got := res.Header["Server"]; len(got) != 1 || got[0] != "Rtsp Server/3.0" {
+			t.Fatalf("request %d: server %q", cseq+1, got)
+		}
+	}
+	playURL(t, "rtsp://admin:secret@"+addr+"/sub", 1)
 }
