@@ -333,7 +333,8 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 	for _, typ := range d.Events {
 		spec := doc.Events[typ]
 		d.EventSpecs = append(d.EventSpecs, ProfileEventView{Type: typ, VendorName: spec.VendorName,
-			MinIntervalMS: spec.MinInterval.D().Milliseconds(), Transports: profile.SortedKeys(spec.Transports)})
+			MinIntervalMS: spec.MinInterval.D().Milliseconds(), Transports: profile.SortedKeys(spec.Transports),
+			Rule: string(spec.RuleType(typ)), Report: spec.Report})
 	}
 	if doc.VCA != nil {
 		d.VCA.Rules = append(d.VCA.Rules, doc.VCA.Rules...)

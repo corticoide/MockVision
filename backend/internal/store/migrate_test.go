@@ -115,6 +115,11 @@ func TestMigrationClearsStandInRuleAndTrigger(t *testing.T) {
 	if rule.Valid || trigger.Valid {
 		t.Errorf("rule_id %v and trigger_id %v, want both NULL", rule, trigger)
 	}
+	// An existing camera still has to get its profile's factory rules.
+	var applied int
+	if err := conn.QueryRowContext(ctx, `SELECT factory_rules_applied FROM cameras WHERE id = 'c'`).Scan(&applied); err != nil || applied != 0 {
+		t.Errorf("factory_rules_applied = %d (%v), want 0", applied, err)
+	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO rules (id, camera_id, position, name, type, geometry_json) VALUES ('r', 'c', 0, 'Gate', 'line', '[]')`); err != nil {
 		t.Fatal(err)
 	}

@@ -23,3 +23,9 @@ VALUES (@id, @camera_id, @position, @name, @type, @params_json, @enabled);
 
 -- name: DeleteCameraTriggers :exec
 DELETE FROM triggers WHERE camera_id = @camera_id;
+
+-- name: ListCamerasWithoutFactoryRules :many
+SELECT id FROM cameras WHERE factory_rules_applied = 0 ORDER BY id;
+
+-- name: MarkFactoryRulesApplied :exec
+UPDATE cameras SET factory_rules_applied = 1 WHERE id = @id;

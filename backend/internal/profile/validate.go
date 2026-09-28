@@ -480,31 +480,49 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 	v.lintVCA(doc)
 }
 
-// lintVCA checks that the rules of the analytics and their events agree:
-// each kind of rule reports some event, and the events that come from a
-// kind of rule have it (without one a camera stands in a default line or
-// region).
+// lintVCA checks that the analytics and their events agree: each kind of
+// rule raises some event, the events that come from a kind of rule have it,
+// reports come from no rule, and the factory rules are valid rules of the
+// profile.
 func (v *validator) lintVCA(doc *Document) {
 	var kinds []string
 	if doc.VCA != nil {
 		kinds = doc.VCA.Rules
 	}
+	caps := doc.VCACaps()
 	for _, kind := range kinds {
-		reported := false
-		for typ := range doc.Events {
-			reported = reported || string(domain.RuleTypeFor(typ)) == kind
-		}
-		if !reported {
-			events := "line_crossing"
+		if len(caps.RuleEvents(domain.RuleType(kind))) == 0 {
+			canonical := "line_crossing"
 			if kind == string(domain.RuleRegion) {
-				events = "region_entrance, region_exit, loitering or intrusion"
+				canonical = "region_entrance, region_exit, loitering or intrusion"
 			}
-			v.warnf("/vca/rules", "%s rules report no event: define %s", kind, events)
+			v.warnf("/vca/rules", "%s rules raise no event: define %s, or an event with rule: %s", kind, canonical, kind)
 		}
 	}
 	for _, typ := range SortedKeys(doc.Events) {
-		if kind := domain.RuleTypeFor(typ); kind != "" && !contains(kinds, string(kind)) {
-			v.warnf("/events/"+escapePointer(typ), "%s events come from %s rules; add %s to vca.rules so cameras can draw them", typ, kind, kind)
+		spec, ptr := doc.Events[typ], "/events/"+escapePointer(typ)
+		if spec.Report && (spec.Rule == "line" || spec.Rule == "region") {
+			v.errorf(StepLint, ptr+"/rule", "%s is a report and comes from no rule", typ)
+			continue
+		}
+		if kind := spec.RuleType(typ); kind != "" && !contains(kinds, string(kind)) {
+			v.warnf(ptr, "%s events come from %s rules, which vca.rules lacks: cameras cannot raise them; add %s to vca.rules", typ, kind, kind)
+		}
+	}
+	if doc.VCA == nil || len(doc.VCA.FactoryRules) == 0 {
+		return
+	}
+	var verr *domain.ValidationError
+	if err := domain.ValidateRules(doc.FactoryRules(), caps); errors.As(err, &verr) {
+		for _, f := range verr.Fields {
+			// rules[2].points -> /vca/factory_rules/2/points
+			ptr := "/vca/factory_rules"
+			if rest, ok := strings.CutPrefix(f.Field, "rules["); ok {
+				if i, tail, ok := strings.Cut(rest, "]"); ok {
+					ptr += "/" + i + strings.ReplaceAll(tail, ".", "/")
+				}
+			}
+			v.errorf(StepLint, ptr, "%s", f.Message)
 		}
 	}
 }

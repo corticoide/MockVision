@@ -107,6 +107,7 @@ func NewRuntime(opts Options) *Runtime {
 	}
 	rt.events = newEventBus(rt)
 	rt.vca = newVCA(rt)
+	rt.events.observe = rt.vca.observe
 	rt.tel = newTelemetry(rt)
 	return rt
 }
@@ -249,6 +250,12 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, ipc.Errorf("trigger", "%v", err)
 		}
 		return ipc.TriggerResult{Event: ev}, nil
+	case ipc.TypeAnalytics:
+		var q ipc.AnalyticsQuery
+		if err := msg.Decode(&q); err != nil {
+			return nil, err
+		}
+		return r.vca.analytics(q), nil
 	case ipc.TypeStateSet:
 		var ss ipc.StateSet
 		if err := msg.Decode(&ss); err != nil {
@@ -314,10 +321,28 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 			r.log.Warn("cannot report state change", "error", err)
 		}
 	})
+	r.vca.setCaps(doc.VCACaps())
 	r.templates = tmpl.NewCompiler(tmpl.Env{
 		State:    r.state.Get,
 		Canon:    r.state.Canon,
 		Snapshot: func() ([]byte, error) { return r.media.Snapshot("main") },
+		Analytics: func() any {
+			return r.vca.analytics(ipc.AnalyticsQuery{})
+		},
+		Heatmap: func(cols, rows int) [][]int {
+			h := r.vca.analytics(ipc.AnalyticsQuery{Cols: cols, Rows: rows}).Heat
+			out := make([][]int, h.Rows)
+			for i := range out {
+				out[i] = h.Cells[i*h.Cols : (i+1)*h.Cols]
+			}
+			return out
+		},
+		LineCount: func(rule, direction string) int {
+			return r.vca.stats.lineCount(r.vca.currentRules(), rule, direction)
+		},
+		Occupancy: func(rule string) int {
+			return r.vca.stats.occupancy(r.vca.currentRules(), rule)
+		},
 	})
 	if r.opts.Confine {
 		if err := r.confine(cfg.Streams); err != nil {

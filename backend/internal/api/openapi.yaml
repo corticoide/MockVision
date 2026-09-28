@@ -694,6 +694,39 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /cameras/{id}/analytics:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [vca]
+      operationId: getCameraAnalytics
+      summary: What a running camera counted from the events it emitted
+      description: >
+        Crossings of each line by direction and object class, entries, exits
+        and occupancy of each region, events by type, and, with cols and
+        rows, a heat map of where objects were. Counts start with the camera
+        process or at the last reset.
+      parameters:
+        - { name: cols, in: query, schema: { type: integer, minimum: 1, maximum: 128 } }
+        - { name: rows, in: query, schema: { type: integer, minimum: 1, maximum: 72 } }
+      responses:
+        "200": { description: Counts, content: { application/json: { schema: { $ref: "#/components/schemas/Analytics" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /cameras/{id}/analytics/actions/reset:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [vca]
+      operationId: resetCameraAnalytics
+      summary: Starts a running camera's counts again from zero
+      responses:
+        "200": { description: Counts after the reset, content: { application/json: { schema: { $ref: "#/components/schemas/Analytics" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /assets:
     get:
       tags: [assets]
@@ -1165,12 +1198,14 @@ components:
               type: array
               items:
                 type: object
-                required: [type, vendor_name, min_interval_ms, transports]
+                required: [type, vendor_name, min_interval_ms, transports, rule, report]
                 properties:
                   type: { type: string }
                   vendor_name: { type: string }
                   min_interval_ms: { type: integer }
                   transports: { type: array, items: { type: string } }
+                  rule: { type: string, enum: [line, region, ""], description: The kind of rule the event comes from; empty for none }
+                  report: { type: boolean, description: The event carries counts, not an object }
             vca:
               description: The kinds of rule of the profile's analytics and the objects they detect.
               type: object
@@ -1384,7 +1419,7 @@ components:
         force: { type: boolean }
     Camera:
       type: object
-      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, rules, triggers, metrics, created_at, updated_at]
+      required: [id, name, profile, serial, desired_state, autostart, tags, network, status, endpoints, protocols, streams, users, targets, rules, triggers, event_types, metrics, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1419,6 +1454,16 @@ components:
               event_types: { type: array, items: { type: string } }
         rules: { type: array, items: { $ref: "#/components/schemas/Rule" } }
         triggers: { type: array, items: { $ref: "#/components/schemas/Trigger" } }
+        event_types:
+          description: The events the camera can send, as its profile declares them.
+          type: array
+          items:
+            type: object
+            required: [type, rule, report]
+            properties:
+              type: { type: string }
+              rule: { type: string, enum: [line, region, ""], description: The kind of rule the event comes from; empty for none }
+              report: { type: boolean }
         metrics: { oneOf: [{ $ref: "#/components/schemas/CameraMetrics" }, { type: "null" }] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1580,8 +1625,9 @@ components:
       description: >
         A VCA rule (D39). A line has two points; its side A is on the left
         walking from the first to the second, and direction says which
-        crossings it reports. A region has 3 to 20 points and events says what
-        it reports. No object_classes means every class of the profile.
+        crossings it reports. A region has 3 to 20 points. Events are what the
+        rule reports, among the events its profile raises from its kind of
+        rule. No object_classes means every class of the profile.
       type: object
       required: [id, name, type, points, direction, events, object_classes, enabled]
       properties:
@@ -1590,7 +1636,7 @@ components:
         type: { type: string, enum: [line, region] }
         points: { type: array, items: { $ref: "#/components/schemas/Point" } }
         direction: { type: string, enum: ["A->B", "B->A", both, ""] }
-        events: { type: array, items: { type: string, enum: [region_entrance, region_exit, loitering, intrusion] } }
+        events: { type: array, items: { type: string } }
         object_classes: { type: array, items: { type: string } }
         enabled: { type: boolean }
     RuleInput:
@@ -1602,9 +1648,53 @@ components:
         type: { type: string, enum: [line, region] }
         points: { type: array, minItems: 2, maxItems: 20, items: { $ref: "#/components/schemas/Point" } }
         direction: { type: string, enum: ["A->B", "B->A", both], description: Lines only; both by default }
-        events: { type: array, items: { type: string, enum: [region_entrance, region_exit, loitering, intrusion] } }
+        events: { type: array, items: { type: string }, description: Required for regions; a line without events reports line_crossing }
         object_classes: { type: array, items: { type: string } }
         enabled: { type: boolean, default: true }
+    Analytics:
+      type: object
+      required: [since, lines, regions, events]
+      properties:
+        since: { type: string, format: date-time }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [rule_id, name, a_to_b, b_to_a, classes]
+            properties:
+              rule_id: { type: string }
+              name: { type: string }
+              a_to_b: { type: integer }
+              b_to_a: { type: integer }
+              classes:
+                type: object
+                additionalProperties:
+                  type: object
+                  required: [a_to_b, b_to_a]
+                  properties:
+                    a_to_b: { type: integer }
+                    b_to_a: { type: integer }
+        regions:
+          type: array
+          items:
+            type: object
+            required: [rule_id, name, entries, exits, occupancy, events]
+            properties:
+              rule_id: { type: string }
+              name: { type: string }
+              entries: { type: integer }
+              exits: { type: integer }
+              occupancy: { type: integer, description: Entries minus exits, never below zero }
+              events: { type: object, additionalProperties: { type: integer } }
+        events: { type: object, additionalProperties: { type: integer } }
+        heat:
+          description: Objects seen in each cell, row by row from the top left corner.
+          type: object
+          required: [cols, rows, cells]
+          properties:
+            cols: { type: integer }
+            rows: { type: integer }
+            cells: { type: array, items: { type: integer } }
     SpeedRange:
       type: object
       required: [min, max, limit, unit]

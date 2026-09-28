@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -38,6 +39,8 @@ const (
 	TypeStateSet   = "state.set"
 	TypeStop       = "stop"
 	TypeTargetTest = "target.test"
+	// TypeAnalytics asks for what the camera's analytics counted.
+	TypeAnalytics = "analytics"
 	// The service refuses a leased address someone else uses; the camera
 	// declines it and asks again.
 	TypeDHCPDecline = "dhcp.decline"
@@ -213,8 +216,8 @@ type Trigger struct {
 	Type      string `json:"type,omitempty"`
 	TriggerID string `json:"trigger_id,omitempty"`
 	Direction string `json:"direction,omitempty"`
-	// Rule is where the event happens; without one, the events that come
-	// from rules happen on a default line or region.
+	// Rule is where the event happens: required for the events that come
+	// from rules.
 	Rule   *domain.Rule   `json:"rule,omitempty"`
 	Object *engine.Object `json:"object,omitempty"`
 	Plate  *engine.Plate  `json:"plate,omitempty"`
@@ -225,6 +228,60 @@ type Trigger struct {
 // TriggerResult is the reply to Trigger.
 type TriggerResult struct {
 	Event engine.Event `json:"event"`
+}
+
+// AnalyticsQuery asks for the camera's counts and its heat map at a size
+// (0 columns for none); Reset starts them again from zero.
+type AnalyticsQuery struct {
+	Cols  int  `json:"cols"`
+	Rows  int  `json:"rows"`
+	Reset bool `json:"reset,omitempty"`
+}
+
+// Analytics is what a camera's analytics counted from the events it
+// emitted since Since: crossings of each line, entries, exits and
+// occupancy of each region, events of each type, and where objects were.
+type Analytics struct {
+	Since   time.Time      `json:"since"`
+	Lines   []LineCount    `json:"lines"`
+	Regions []RegionCount  `json:"regions"`
+	Events  map[string]int `json:"events"`
+	Heat    *Heat          `json:"heat,omitempty"`
+}
+
+// LineCount is the crossings of a line, by direction and object class.
+type LineCount struct {
+	RuleID  string                   `json:"rule_id"`
+	Name    string                   `json:"name"`
+	AToB    int                      `json:"a_to_b"`
+	BToA    int                      `json:"b_to_a"`
+	Classes map[string]DirectionPair `json:"classes"`
+}
+
+// DirectionPair counts crossings each way.
+type DirectionPair struct {
+	AToB int `json:"a_to_b"`
+	BToA int `json:"b_to_a"`
+}
+
+// RegionCount is what happened in a region: objects that entered and left,
+// those inside now (entries minus exits, never below zero) and its events
+// by type.
+type RegionCount struct {
+	RuleID    string         `json:"rule_id"`
+	Name      string         `json:"name"`
+	Entries   int            `json:"entries"`
+	Exits     int            `json:"exits"`
+	Occupancy int            `json:"occupancy"`
+	Events    map[string]int `json:"events"`
+}
+
+// Heat counts, for each cell of a grid over the picture, the objects seen
+// there; cells run row by row from the top left corner.
+type Heat struct {
+	Cols  int   `json:"cols"`
+	Rows  int   `json:"rows"`
+	Cells []int `json:"cells"`
 }
 
 // StateSet changes parameters from the panel or the API.

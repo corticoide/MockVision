@@ -351,6 +351,9 @@ func TestRulesAndTriggersEndpoints(t *testing.T) {
 		{"PUT", "/cameras/nope/triggers", `{"triggers":[]}`, http.StatusNotFound},
 		{"POST", "/cameras/nope/triggers/t1/actions/fire", "", http.StatusNotFound},
 		{"POST", "/cameras/nope/events", `{"type":"line_crossing","rule_id":"r1"}`, http.StatusNotFound},
+		{"GET", "/cameras/nope/analytics?cols=8&rows=4", "", http.StatusNotFound},
+		{"GET", "/cameras/nope/analytics?cols=eight", "", http.StatusBadRequest},
+		{"POST", "/cameras/nope/analytics/actions/reset", "", http.StatusNotFound},
 	} {
 		if r := n.panel(c.method, c.path, c.body); r.StatusCode != c.want {
 			t.Errorf("%s %s: %d, want %d", c.method, c.path, r.StatusCode, c.want)
@@ -364,5 +367,11 @@ func TestRulesAndTriggersEndpoints(t *testing.T) {
 		if r := n.do("PUT", path, `{"rules":[],"triggers":[]}`, read); r.StatusCode != http.StatusForbidden {
 			t.Errorf("a read token changing %s: %d", path, r.StatusCode)
 		}
+	}
+	if r := n.do("GET", "/cameras/nope/analytics", "", read); r.StatusCode != http.StatusNotFound {
+		t.Errorf("a read token reading counts: %d", r.StatusCode)
+	}
+	if r := n.do("POST", "/cameras/nope/analytics/actions/reset", "", read); r.StatusCode != http.StatusForbidden {
+		t.Errorf("a read token resetting counts: %d", r.StatusCode)
 	}
 }

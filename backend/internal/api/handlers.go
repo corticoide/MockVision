@@ -792,6 +792,42 @@ func (s *Server) handleFireTrigger(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, ev)
 }
 
+func (s *Server) handleCameraAnalytics(w http.ResponseWriter, r *http.Request) {
+	size := func(name string) (int, bool) {
+		v := r.URL.Query().Get(name)
+		if v == "" {
+			return 0, true
+		}
+		n, err := strconv.Atoi(v)
+		return n, err == nil
+	}
+	cols, okC := size("cols")
+	rows, okR := size("rows")
+	if !okC || !okR {
+		s.writeError(w, r, badReq("cols and rows must be integers"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	a, err := s.svc.CameraAnalytics(ctx, r.PathValue("id"), cols, rows)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Server) handleResetAnalytics(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	a, err := s.svc.ResetCameraAnalytics(ctx, actor(r), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
 // --- Assets ---
 
 func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {

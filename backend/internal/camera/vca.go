@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,7 +26,11 @@ type vcaRuntime struct {
 	// second is how long a trigger second lasts; tests shorten it.
 	second time.Duration
 
+	// stats counts what the events the camera emits show.
+	stats *analytics
+
 	mu       sync.Mutex
+	caps     domain.VCACaps
 	rules    []domain.Rule
 	triggers map[string]domain.Trigger
 	loops    map[string]*triggerLoop
@@ -40,7 +45,30 @@ type triggerLoop struct {
 }
 
 func newVCA(rt *Runtime) *vcaRuntime {
-	return &vcaRuntime{rt: rt, second: time.Second, triggers: map[string]domain.Trigger{}, loops: map[string]*triggerLoop{}}
+	return &vcaRuntime{rt: rt, second: time.Second, stats: newAnalytics(), triggers: map[string]domain.Trigger{}, loops: map[string]*triggerLoop{}}
+}
+
+// setCaps sets what the camera's profile lets its analytics do.
+func (v *vcaRuntime) setCaps(caps domain.VCACaps) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.caps = caps
+}
+
+// currentRules returns the camera's rules.
+func (v *vcaRuntime) currentRules() []domain.Rule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return slices.Clone(v.rules)
+}
+
+// analytics returns what the camera counted, with the heat map at cols by
+// rows cells (none for 0), after starting again from zero if asked.
+func (v *vcaRuntime) analytics(q ipc.AnalyticsQuery) ipc.Analytics {
+	if q.Reset {
+		v.stats.reset()
+	}
+	return v.stats.snapshot(v.currentRules(), q.Cols, q.Rows)
 }
 
 // set replaces the rules and triggers. A random trigger that did not change
@@ -144,10 +172,11 @@ func (v *vcaRuntime) fire(ctx context.Context, id string, kind domain.TriggerTyp
 }
 
 // ruleFor picks the rule an event of a stored trigger happens on: its own,
-// which must be enabled, or any enabled rule that reports the type, or a
-// default one when the camera has none. The lock must be held.
+// which must be enabled, or any enabled rule that reports the type. An
+// event that comes from rules needs one: a real camera raises it from a
+// line or region someone configured. The lock must be held.
 func (v *vcaRuntime) ruleFor(t domain.Trigger) (*domain.Rule, error) {
-	if domain.RuleTypeFor(t.EventType) == "" {
+	if v.caps.RuleTypeFor(t.EventType) == "" {
 		return nil, nil
 	}
 	if t.RuleID != "" {
@@ -172,24 +201,22 @@ func (v *vcaRuntime) ruleFor(t domain.Trigger) (*domain.Rule, error) {
 		}
 	}
 	if len(candidates) == 0 {
-		d, _ := domain.DefaultRule(t.EventType)
-		return &d, nil
+		return nil, fmt.Errorf("no enabled rule reports %s events", t.EventType)
 	}
 	r := candidates[rand.IntN(len(candidates))]
 	return &r, nil
 }
 
-// manual emits the event the panel or the API asked for. The service picked
-// its rule; without one, the events that come from rules happen on a
-// default line or region.
+// manual emits the event the panel or the API asked for, on the rule the
+// service picked; the events that come from rules need one.
 func (v *vcaRuntime) manual(ctx context.Context, tr *ipc.Trigger) (engine.Event, error) {
-	rule := tr.Rule
-	if rule == nil {
-		if d, ok := domain.DefaultRule(tr.Type); ok {
-			rule = &d
-		}
+	v.mu.Lock()
+	kind := v.caps.RuleTypeFor(tr.Type)
+	v.mu.Unlock()
+	if kind != "" && (tr.Rule == nil || tr.Rule.Type != kind) {
+		return engine.Event{}, fmt.Errorf("%s events come from a %s rule", tr.Type, kind)
 	}
-	return v.emit(ctx, fireSpec{typ: tr.Type, kind: domain.TriggerManual, rule: rule, direction: tr.Direction,
+	return v.emit(ctx, fireSpec{typ: tr.Type, kind: domain.TriggerManual, rule: tr.Rule, direction: tr.Direction,
 		object: tr.Object, plate: tr.Plate, speed: tr.Speed, custom: tr.Custom})
 }
 
@@ -220,7 +247,14 @@ func (v *vcaRuntime) emit(ctx context.Context, s fireSpec) (engine.Event, error)
 			return engine.Event{}, fmt.Errorf("%s detection is turned off on the camera", s.typ)
 		}
 	}
+	v.mu.Lock()
+	report := v.caps.Reports[s.typ]
+	v.mu.Unlock()
 	e := engine.Event{Type: s.typ, Trigger: string(s.kind), Direction: s.direction, Custom: s.custom}
+	if report {
+		// A report carries what the camera counted, which its template reads.
+		return v.rt.events.emit(ctx, e, s.triggerID)
+	}
 	if r := s.rule; r != nil {
 		e.Rule = &engine.Rule{ID: r.ID, Name: r.Name, Type: string(r.Type)}
 		if r.Type == domain.RuleLine && e.Direction == "" {
@@ -237,6 +271,17 @@ func (v *vcaRuntime) emit(ctx context.Context, s fireSpec) (engine.Event, error)
 		e.Speed = speed(s.speed, s.speeds)
 	}
 	return v.rt.events.emit(ctx, e, s.triggerID)
+}
+
+// observe counts an event the camera is about to send; reports carry
+// counts and add none.
+func (v *vcaRuntime) observe(e engine.Event) {
+	v.mu.Lock()
+	report := v.caps.Reports[e.Type]
+	v.mu.Unlock()
+	if !report {
+		v.stats.record(e)
+	}
 }
 
 // crossing is the direction of a line crossing: the rule's, when it reports

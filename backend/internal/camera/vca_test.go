@@ -31,8 +31,9 @@ func vcaProfile(t *testing.T) json.RawMessage {
 		},
 		"media":   map[string]any{"streams": map[string]any{}},
 		"engines": map[string]any{"push": map[string]any{"engine": "http-push@^1"}},
-		"events":  map[string]any{"line_crossing": push, "region_entrance": push, "lpr": push},
-		"vca":     map[string]any{"rules": []string{"line", "region"}, "object_classes": []string{"person", "car"}},
+		"events": map[string]any{"line_crossing": push, "region_entrance": push, "region_exit": push, "lpr": push,
+			"custom:counting": map[string]any{"report": true, "transports": push["transports"]}},
+		"vca": map[string]any{"rules": []string{"line", "region"}, "object_classes": []string{"person", "car"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +194,7 @@ func TestRandomTriggers(t *testing.T) {
 		}
 	})
 
-	t.Run("any rule, a default one, plates", func(t *testing.T) {
+	t.Run("any rule, no rule, plates", func(t *testing.T) {
 		g := gate
 		g.Enabled = false
 		anyRegion := domain.Trigger{ID: "t-region", Name: "Lot", Type: domain.TriggerRandom, EventType: "region_entrance", MinSeconds: 1, MaxSeconds: 1}
@@ -220,9 +221,10 @@ func TestRandomTriggers(t *testing.T) {
 			cx < 0.198 || cx > 0.602 || cy < 0.198 || cy > 0.602 {
 			t.Fatalf("region event %+v, object %+v", e, o)
 		}
-		// No enabled line: a default one.
-		if e := fire("t-line"); e.Rule == nil || e.Rule.ID != "1" || e.Rule.Name != "Line 1" || e.Direction == "" {
-			t.Fatalf("line event without a line: %+v", e)
+		// No enabled line: no crossing, as on a real camera.
+		err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{TriggerID: "t-line"}, nil)
+		if err == nil || !strings.Contains(err.Error(), "no enabled rule reports line_crossing events") {
+			t.Fatalf("a crossing without a line: %v", err)
 		}
 		e = fire("t-lpr")
 		if e.Rule != nil || e.Plate == nil || !regexp.MustCompile(`^[A-Z]{2}[0-9]{3}[A-Z]{2}$`).MatchString(e.Plate.Text) ||
@@ -254,9 +256,15 @@ func TestRandomTriggers(t *testing.T) {
 		if err := svc.conn.Request(ctx, ipc.TypeStateSet, ipc.StateSet{Values: map[string]any{"Event.Line.Enable": false}}, nil); err != nil {
 			t.Fatal(err)
 		}
-		err = svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing"}, nil)
+		g := gate
+		err = svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing", Rule: &g}, nil)
 		if err == nil || !strings.Contains(err.Error(), "line_crossing detection is turned off") {
 			t.Fatalf("a crossing with detection off: %v", err)
+		}
+		// Crossings need their line.
+		err = svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing"}, nil)
+		if err == nil || !strings.Contains(err.Error(), "line_crossing events come from a line rule") {
+			t.Fatalf("a crossing without a line: %v", err)
 		}
 	})
 
@@ -324,5 +332,75 @@ func TestEventData(t *testing.T) {
 	}
 	if o := rt.vca.object(&engine.Object{Class: "person", Confidence: 0.5}, "line_crossing", line, domain.CrossAB); o.Confidence != 0.5 || o.Color != "" || o.Box == nil {
 		t.Fatalf("given object %+v", o)
+	}
+}
+
+func TestAnalytics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	gate := domain.Rule{ID: "r-gate", Name: "Gate", Type: domain.RuleLine, Points: []domain.Point{{X: 0.1, Y: 0.5}, {X: 0.9, Y: 0.5}},
+		Direction: domain.CrossBoth, Events: []string{"line_crossing"}, Enabled: true}
+	lot := domain.Rule{ID: "r-lot", Name: "Lot", Type: domain.RuleRegion, Points: square, Events: []string{"region_entrance", "region_exit"}, Enabled: true}
+	rt, svc, _ := startVCACamera(t, ctx, ipc.VCA{Rules: []domain.Rule{gate, lot}})
+
+	fire := func(tr ipc.Trigger) engine.Event {
+		t.Helper()
+		var res ipc.TriggerResult
+		if err := svc.conn.Request(ctx, ipc.TypeTrigger, tr, &res); err != nil {
+			t.Fatal(err)
+		}
+		return res.Event
+	}
+	// The profile has no minimum interval: events can follow each other.
+	for _, d := range []string{"A->B", "A->B", "B->A"} {
+		fire(ipc.Trigger{Type: "line_crossing", Rule: &gate, Direction: d, Object: &engine.Object{Class: "person"}})
+	}
+	for _, typ := range []string{"region_entrance", "region_entrance", "region_exit", "region_exit", "region_exit"} {
+		fire(ipc.Trigger{Type: typ, Rule: &lot})
+	}
+	// A report carries counts and adds none.
+	if e := fire(ipc.Trigger{Type: "custom:counting"}); e.Object != nil || e.Rule != nil {
+		t.Fatalf("a report carries an object or a rule: %+v", e)
+	}
+
+	var a ipc.Analytics
+	if err := svc.conn.Request(ctx, ipc.TypeAnalytics, ipc.AnalyticsQuery{Cols: 4, Rows: 2}, &a); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Lines) != 1 || a.Lines[0].Name != "Gate" || a.Lines[0].AToB != 2 || a.Lines[0].BToA != 1 ||
+		a.Lines[0].Classes["person"] != (ipc.DirectionPair{AToB: 2, BToA: 1}) {
+		t.Fatalf("lines %+v", a.Lines)
+	}
+	// Two in, three out: nobody inside, never fewer.
+	if len(a.Regions) != 1 || a.Regions[0].Entries != 2 || a.Regions[0].Exits != 3 || a.Regions[0].Occupancy != 0 {
+		t.Fatalf("regions %+v", a.Regions)
+	}
+	if a.Events["line_crossing"] != 3 || a.Events["region_exit"] != 3 || a.Events["custom:counting"] != 0 {
+		t.Fatalf("events %v", a.Events)
+	}
+	sum := 0
+	for _, n := range a.Heat.Cells {
+		sum += n
+	}
+	if a.Heat.Cols != 4 || a.Heat.Rows != 2 || len(a.Heat.Cells) != 8 || sum != 8 {
+		t.Fatalf("heat %+v: every object is in one cell", a.Heat)
+	}
+
+	// Templates read the same counts.
+	tpl, err := rt.templates.Compile("t", `{{ lineCount "Gate" "A->B" }} {{ lineCount "r-gate" }} {{ occupancy "Lot" }} {{ len (heatmap "8" 3) }} {{ (index (analytics).Lines 0).BToA }}`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tpl.Render(ctx, engine.TemplateData{})
+	if err != nil || string(out) != "2 3 0 3 1" {
+		t.Fatalf("template: %q, %v", out, err)
+	}
+
+	a = ipc.Analytics{}
+	if err := svc.conn.Request(ctx, ipc.TypeAnalytics, ipc.AnalyticsQuery{Reset: true}, &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.Lines[0].AToB != 0 || len(a.Lines[0].Classes) != 0 || a.Regions[0].Exits != 0 || len(a.Events) != 0 || a.Heat != nil {
+		t.Fatalf("after a reset: %+v", a)
 	}
 }

@@ -12,19 +12,20 @@ import (
 
 // Video analytics (VCA): the rules drawn on a camera's picture say where
 // events happen, and its triggers make them happen (D39, D40). The profile
-// says which kinds of rule and which object classes the device has, and
-// which events it can deliver; the camera decides where its rules are and
-// what fires them.
+// says which kinds of rule and which object classes the device has, which
+// events it can deliver and which kind of rule each comes from; the camera
+// decides where its rules are and what fires them. Nothing here assumes an
+// analytic a profile does not declare.
 
 // RuleType is the geometry of a VCA rule.
 type RuleType string
 
 const (
-	// RuleLine is a virtual line: objects crossing it raise line_crossing
-	// events.
+	// RuleLine is a virtual line: objects crossing it raise its events,
+	// line_crossing and whatever line events the profile declares.
 	RuleLine RuleType = "line"
 	// RuleRegion is a polygon: objects entering, leaving, loitering in or
-	// intruding into it raise region events.
+	// intruding into it raise its events.
 	RuleRegion RuleType = "region"
 )
 
@@ -37,7 +38,7 @@ const (
 	CrossBoth = "both"
 )
 
-// RegionEvents are the events a region rule can report: an object enters,
+// RegionEvents are the canonical events of regions: an object enters,
 // leaves, stays (loitering) or intrudes.
 var RegionEvents = []EventType{EventRegionEntrance, EventRegionExit, EventLoitering, EventIntrusion}
 
@@ -80,8 +81,9 @@ type Rule struct {
 	// Direction is which crossings a line reports: A->B, B->A or both.
 	// Regions have none.
 	Direction string `json:"direction"`
-	// Events are what a region reports: region_entrance, region_exit,
-	// loitering and intrusion. A line always reports line_crossing.
+	// Events are what the rule reports: events the profile raises from its
+	// kind of rule, such as line_crossing for lines and region_entrance,
+	// region_exit, loitering or intrusion for regions.
 	Events []string `json:"events"`
 	// ObjectClasses are the objects the rule detects; empty means every
 	// class of the profile.
@@ -89,12 +91,31 @@ type Rule struct {
 	Enabled       bool     `json:"enabled"`
 }
 
-// EventTypes lists the events the rule reports.
+// EventTypes lists the events the rule reports. Lines stored before they
+// listed their events report line_crossing.
 func (r Rule) EventTypes() []string {
-	if r.Type == RuleLine {
+	if r.Type == RuleLine && len(r.Events) == 0 {
 		return []string{string(EventLineCrossing)}
 	}
 	return r.Events
+}
+
+// Normalized fills what a rule may leave out: a line reports both ways and,
+// listing no event, line_crossing; empty lists are not nil.
+func (r Rule) Normalized() Rule {
+	if r.Type == RuleLine {
+		if r.Direction == "" {
+			r.Direction = CrossBoth
+		}
+		r.Events = r.EventTypes()
+	}
+	if r.Events == nil {
+		r.Events = []string{}
+	}
+	if r.ObjectClasses == nil {
+		r.ObjectClasses = []string{}
+	}
+	return r
 }
 
 // Reports tells whether the rule reports events of a type.
@@ -102,9 +123,10 @@ func (r Rule) Reports(eventType string) bool {
 	return slices.Contains(r.EventTypes(), eventType)
 }
 
-// RuleTypeFor returns the kind of rule an event type comes from, and ""
-// for the events no rule raises, such as lpr or tamper.
-func RuleTypeFor(eventType string) RuleType {
+// CanonicalRuleType is the kind of rule a canonical event comes from when
+// its profile does not say: lines for line_crossing, regions for the region
+// events, none for the rest, such as lpr or tamper, and for custom events.
+func CanonicalRuleType(eventType string) RuleType {
 	switch EventType(eventType) {
 	case EventLineCrossing:
 		return RuleLine
@@ -112,21 +134,6 @@ func RuleTypeFor(eventType string) RuleType {
 		return RuleRegion
 	}
 	return ""
-}
-
-// DefaultRule stands in for a rule when a camera has none that reports an
-// event type: a real camera always names the line or region behind such an
-// event.
-func DefaultRule(eventType string) (Rule, bool) {
-	switch RuleTypeFor(eventType) {
-	case RuleLine:
-		return Rule{ID: "1", Name: "Line 1", Type: RuleLine, Points: []Point{{0.1, 0.6}, {0.9, 0.6}},
-			Direction: CrossBoth, Events: []string{}, ObjectClasses: []string{}, Enabled: true}, true
-	case RuleRegion:
-		return Rule{ID: "1", Name: "Region 1", Type: RuleRegion, Points: []Point{{0.25, 0.35}, {0.75, 0.35}, {0.75, 0.9}, {0.25, 0.9}},
-			Events: []string{eventType}, ObjectClasses: []string{}, Enabled: true}, true
-	}
-	return Rule{}, false
 }
 
 // TriggerType is what makes events happen (D40): manual and random in v1;
@@ -176,18 +183,44 @@ type SpeedRange struct {
 var SpeedUnits = []string{"km/h", "mph"}
 
 // VCACaps is what a camera's profile allows: the kinds of rule and the
-// object classes of its analytics, and the events it can deliver with the
-// shortest interval between two of a type.
+// object classes of its analytics, the events it can deliver with the
+// shortest interval between two of a type, the kind of rule each event
+// comes from and which events are reports.
 type VCACaps struct {
 	RuleTypes []RuleType
 	// ObjectClasses the analytics recognize; empty accepts any class.
 	ObjectClasses []string
 	Events        map[string]time.Duration
+	// EventRules maps an event type to the kind of rule it comes from;
+	// events missing here come from no rule.
+	EventRules map[string]RuleType
+	// Reports are events that carry what the camera counted, not an object
+	// it saw: they come from no rule and feed no count.
+	Reports map[string]bool
 }
 
-func (c VCACaps) delivers(eventType string) bool {
+// Delivers tells whether the camera can send events of a type.
+func (c VCACaps) Delivers(eventType string) bool {
 	_, ok := c.Events[eventType]
 	return ok
+}
+
+// RuleTypeFor returns the kind of rule an event type comes from, or "" for
+// the events no rule raises.
+func (c VCACaps) RuleTypeFor(eventType string) RuleType {
+	return c.EventRules[eventType]
+}
+
+// RuleEvents lists the deliverable events of a kind of rule, sorted.
+func (c VCACaps) RuleEvents(kind RuleType) []string {
+	var out []string
+	for typ := range c.Events {
+		if c.EventRules[typ] == kind {
+			out = append(out, typ)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ValidateRules checks a camera's rules against its profile.
@@ -221,18 +254,10 @@ func ValidateRules(rules []Rule, caps VCACaps) error {
 			if r.Direction != CrossAB && r.Direction != CrossBA && r.Direction != CrossBoth {
 				v.Add(f+".direction", "must be A->B, B->A or both")
 			}
-			if len(r.Events) > 0 {
-				v.Add(f+".events", "a line reports line_crossing events only")
-			}
-			if !caps.delivers(string(EventLineCrossing)) {
-				v.Add(f+".type", "the camera's profile does not deliver line_crossing events")
-			}
-		} else {
-			if r.Direction != "" {
-				v.Add(f+".direction", "only lines have a direction")
-			}
-			validateRegionEvents(v, f+".events", r.Events, caps)
+		} else if r.Direction != "" {
+			v.Add(f+".direction", "only lines have a direction")
 		}
+		validateRuleEvents(v, f+".events", r.Type, r.EventTypes(), caps)
 		validateClasses(v, f+".object_classes", r.ObjectClasses, caps)
 	}
 	return v.Err()
@@ -270,10 +295,13 @@ func ValidateTriggers(triggers []Trigger, rules []Rule, caps VCACaps) error {
 		case !delivered:
 			v.Add(f+".event_type", "the camera's profile does not deliver %s events", t.EventType)
 		}
+		if caps.Reports[t.EventType] && (len(t.Plates)+len(t.PlateMasks) > 0 || t.Speed != nil) {
+			v.Add(f+".event_type", "%s is a report: it carries counts, not plates or speeds", t.EventType)
+		}
 		if t.RuleID != "" {
 			r, ok := byID[t.RuleID]
 			switch {
-			case RuleTypeFor(t.EventType) == "":
+			case caps.RuleTypeFor(t.EventType) == "":
 				v.Add(f+".rule_id", "%s events do not come from a rule", t.EventType)
 			case !ok:
 				v.Add(f+".rule_id", "is not a rule of the camera")
@@ -365,20 +393,27 @@ func validateGeometry(v *ValidationError, field string, typ RuleType, pts []Poin
 	}
 }
 
-func validateRegionEvents(v *ValidationError, field string, events []string, caps VCACaps) {
+// validateRuleEvents checks the events of a rule: at least one, each
+// delivered by the profile and coming from the rule's kind.
+func validateRuleEvents(v *ValidationError, field string, kind RuleType, events []string, caps VCACaps) {
+	choices := caps.RuleEvents(kind)
 	if len(events) == 0 {
-		v.Add(field, "choose at least one of region_entrance, region_exit, loitering or intrusion")
+		if len(choices) == 0 {
+			v.Add(field, "the camera's profile raises no event from %s rules", kind)
+		} else {
+			v.Add(field, "choose at least one of %s", strings.Join(choices, ", "))
+		}
 		return
 	}
 	seen := map[string]bool{}
 	for _, e := range events {
 		switch {
-		case !slices.Contains(RegionEvents, EventType(e)):
-			v.Add(field, "%q is not a region event; use region_entrance, region_exit, loitering or intrusion", e)
 		case seen[e]:
 			v.Add(field, "%s is duplicated", e)
-		case !caps.delivers(e):
+		case !caps.Delivers(e):
 			v.Add(field, "the camera's profile does not deliver %s events", e)
+		case caps.RuleTypeFor(e) != kind:
+			v.Add(field, "%s events do not come from %s rules", e, kind)
 		}
 		seen[e] = true
 	}

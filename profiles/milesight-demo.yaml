@@ -4,7 +4,9 @@
 # streams (main and sub in H.264 or H.265, third in MJPEG), three HTTP
 # features (snapshot, device information, reading and writing a parameter)
 # and video analytics: line and region rules whose events are pushed over
-# HTTP.
+# HTTP, the counts the camera keeps from them (people counting per line,
+# occupancy per region, a heat map) served over HTTP and pushed as a
+# periodic report.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -16,7 +18,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.3.0
+  version: 0.4.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -203,6 +205,35 @@ engines:
           from: query
           then: { type: text/plain, body: "OK\n" }
 
+      # 4. Analytics counts, as the camera counted them from its events since
+      #    it started: crossings of each line (A->B in, B->A out) and the
+      #    entries, exits and occupancy of each region.
+      - id: vca-counting
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.counting }
+        action:
+          type: application/json
+          body: |
+            {{ $a := analytics }}{
+              "since": {{ json (fmtTime $a.Since "rfc3339") }},
+              "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+              "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "entries": {{ $r.Entries }}, "exits": {{ $r.Exits }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+            }
+
+      # 5. Heat map: objects seen in each cell of a grid over the picture,
+      #    32x18 unless the request asks for cols and rows.
+      - id: vca-heatmap
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.heatmap }
+        action:
+          type: application/json
+          body: |
+            {{ $data := heatmap (default "32" .Request.Query.cols) (default "18" .Request.Query.rows) }}{"cols": {{ len (index $data 0) }}, "rows": {{ len $data }}, "data": {{ json $data }}}
+
     unknown:
       status: 404
       type: text/html
@@ -257,12 +288,43 @@ events:
     min_interval: 1s
     transports: { http_push: *push }
     delivery: *delivery
+  # A report: what the camera counted, pushed by a trigger with a fixed
+  # interval (the same shortest and longest wait).
+  custom:people_counting:
+    vendor_name: PeopleCounting
+    report: true
+    min_interval: 1s
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: |
+          {{ $a := analytics }}{
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {"serialNumber": {{ json .Camera.Serial }}, "macAddress": {{ json (upper .Camera.MAC) }}},
+            "since": {{ json (fmtTime $a.Since "rfc3339") }},
+            "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+            "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+          }
+    delivery: *delivery
 
 vca:
   rules: [line, region]
   object_classes: [person, car, truck, bus, motorcycle, bicycle]
+  # As the camera ships: a line across the lower picture and a region in
+  # its middle. Restoring the camera brings them back.
+  factory_rules:
+    - name: Line 1
+      type: line
+      points: [{ x: 0.1, y: 0.6 }, { x: 0.9, y: 0.6 }]
+    - name: Region 1
+      type: region
+      points: [{ x: 0.25, y: 0.35 }, { x: 0.75, y: 0.35 }, { x: 0.75, y: 0.9 }, { x: 0.25, y: 0.9 }]
+      events: [region_entrance, region_exit]
 
 coverage:
   rtsp: main stream only
-  http-api: snapshot, device information and parameters
-  http_push: line_crossing, region_entrance, region_exit, loitering and intrusion
+  http-api: snapshot, device information, parameters, counting and heat map
+  http_push: line_crossing, region_entrance, region_exit, loitering, intrusion and a people counting report

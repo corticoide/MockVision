@@ -269,6 +269,8 @@ func (s *Server) Handler() http.Handler {
 	auth("GET /api/v1/cameras/{id}/triggers", s.handleListTriggers)
 	auth("PUT /api/v1/cameras/{id}/triggers", s.handleSetTriggers)
 	auth("POST /api/v1/cameras/{id}/triggers/{trigger}/actions/fire", s.handleFireTrigger)
+	auth("GET /api/v1/cameras/{id}/analytics", s.handleCameraAnalytics)
+	auth("POST /api/v1/cameras/{id}/analytics/actions/reset", s.handleResetAnalytics)
 
 	auth("GET /api/v1/assets", s.handleListAssets)
 	auth("POST /api/v1/assets", s.handleUploadAsset)

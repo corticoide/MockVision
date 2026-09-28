@@ -51,16 +51,17 @@ type AuditLog struct {
 }
 
 type Camera struct {
-	ID             string
-	Name           string
-	ProfileID      string
-	ProfileVersion string
-	Serial         string
-	DesiredState   string
-	Autostart      int64
-	TagsJson       string
-	CreatedAt      int64
-	UpdatedAt      int64
+	ID                  string
+	Name                string
+	ProfileID           string
+	ProfileVersion      string
+	Serial              string
+	DesiredState        string
+	Autostart           int64
+	TagsJson            string
+	CreatedAt           int64
+	UpdatedAt           int64
+	FactoryRulesApplied int64
 }
 
 type CameraNetwork struct {

@@ -79,7 +79,7 @@ func checkManualEvent(b *cameraBundle, in ManualEventInput, rule *domain.Rule) e
 	case in.Direction == "" || in.Direction == string(domain.DirectionNone):
 	case !domain.ValidDirection(domain.Direction(in.Direction)):
 		return domain.Invalid("direction", "must be A->B, B->A or none")
-	case domain.RuleTypeFor(in.Type) == domain.RuleRegion:
+	case vcaCaps(b.doc).RuleTypeFor(in.Type) == domain.RuleRegion:
 		return domain.Invalid("direction", "region events have no direction")
 	case rule != nil && rule.Type == domain.RuleLine && rule.Direction != domain.CrossBoth && rule.Direction != in.Direction:
 		return domain.Invalid("direction", "rule %s reports %s crossings only", rule.Name, rule.Direction)

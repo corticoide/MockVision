@@ -14,7 +14,13 @@ var demoCaps = VCACaps{
 	ObjectClasses: []string{"person", "car", "truck"},
 	Events: map[string]time.Duration{
 		"line_crossing": time.Second, "region_entrance": 0, "region_exit": 0, "loitering": 0, "lpr": 2 * time.Second,
+		"custom:tripwire": 0, "custom:counting": 0,
 	},
+	EventRules: map[string]RuleType{
+		"line_crossing": RuleLine, "region_entrance": RuleRegion, "region_exit": RuleRegion, "loitering": RuleRegion, "intrusion": RuleRegion,
+		"custom:tripwire": RuleLine,
+	},
+	Reports: map[string]bool{"custom:counting": true},
 }
 
 func line(name string) Rule {
@@ -85,15 +91,17 @@ func TestValidateRules(t *testing.T) {
 		{"direction", withLine(func(r *Rule) { r.Direction = "left" }), nil, "rules[0].direction", "A->B, B->A or both"},
 		{"region with a direction", withRegion(func(r *Rule) { r.Direction = CrossAB }), nil, "rules[0].direction", "only lines"},
 		{"region without events", region("R"), nil, "rules[0].events", "at least one"},
-		{"not a region event", region("R", "lpr"), nil, "rules[0].events", "not a region event"},
+		{"not a region event", region("R", "lpr"), nil, "rules[0].events", "lpr events do not come from region rules"},
+		{"report on a region", region("R", "custom:counting"), nil, "rules[0].events", "do not come from region rules"},
 		{"undelivered region event", region("R", "intrusion"), nil, "rules[0].events", "does not deliver intrusion"},
-		{"line events", withLine(func(r *Rule) { r.Events = []string{"loitering"} }), nil, "rules[0].events", "line_crossing events only"},
+		{"line events", withLine(func(r *Rule) { r.Events = []string{"loitering"} }), nil, "rules[0].events", "loitering events do not come from line rules"},
+		{"duplicated event", withLine(func(r *Rule) { r.Events = []string{"custom:tripwire", "custom:tripwire"} }), nil, "rules[0].events", "duplicated"},
 		{"unknown class", withLine(func(r *Rule) { r.ObjectClasses = []string{"boat"} }), nil, "rules[0].object_classes", `does not detect "boat"`},
 		{"duplicated class", withLine(func(r *Rule) { r.ObjectClasses = []string{"car", "car"} }), nil, "rules[0].object_classes", "duplicated"},
 		{"name with spaces", line(" L"), nil, "rules[0].name", "spaces"},
 		{"long name", line(strings.Repeat("n", 33)), nil, "rules[0].name", "at most 32"},
 		{"profile without lines", line("L"), &VCACaps{RuleTypes: []RuleType{RuleRegion}, Events: demoCaps.Events}, "rules[0].type", "has no line rules"},
-		{"profile without crossings", line("L"), &VCACaps{RuleTypes: []RuleType{RuleLine}, Events: map[string]time.Duration{"lpr": 0}}, "rules[0].type", "does not deliver line_crossing"},
+		{"profile without crossings", line("L"), &VCACaps{RuleTypes: []RuleType{RuleLine}, Events: map[string]time.Duration{"lpr": 0}}, "rules[0].events", "does not deliver line_crossing"},
 	}
 	for _, c := range cases {
 		caps := demoCaps
@@ -106,10 +114,17 @@ func TestValidateRules(t *testing.T) {
 		}
 	}
 
+	// A line reports the line events its profile declares.
+	custom := line("L")
+	custom.Events = []string{"custom:tripwire", "line_crossing"}
+	if err := ValidateRules([]Rule{custom}, demoCaps); err != nil {
+		t.Errorf("a line with a custom line event was refused: %v", err)
+	}
+
 	// Classes are free when the profile lists none.
 	free := line("L")
 	free.ObjectClasses = []string{"boat"}
-	if err := ValidateRules([]Rule{free}, VCACaps{RuleTypes: []RuleType{RuleLine}, Events: demoCaps.Events}); err != nil {
+	if err := ValidateRules([]Rule{free}, VCACaps{RuleTypes: []RuleType{RuleLine}, Events: demoCaps.Events, EventRules: demoCaps.EventRules}); err != nil {
 		t.Errorf("a class the profile does not list was refused: %v", err)
 	}
 
@@ -136,6 +151,7 @@ func TestValidateTriggers(t *testing.T) {
 	ok := []Trigger{
 		random("Traffic", "line_crossing", "L-Gate"),
 		random("Anywhere", "region_entrance", ""),
+		random("Counting", "custom:counting", ""),
 		func() Trigger {
 			t := random("Plates", "lpr", "")
 			t.Plates, t.PlateMasks = []string{"AB123CD"}, []string{`AA999AA`, `\A99`}
@@ -159,6 +175,8 @@ func TestValidateTriggers(t *testing.T) {
 		msg     string
 	}{
 		{"manual is not stored", func() Trigger { t := random("T", "line_crossing", ""); t.Type = TriggerManual; return t }(), "triggers[0].type", "must be random"},
+		{"report with plates", func() Trigger { t := random("T", "custom:counting", ""); t.Plates = []string{"AB123CD"}; return t }(), "triggers[0].event_type", "is a report"},
+		{"report on a rule", random("T", "custom:counting", "L-Gate"), "triggers[0].rule_id", "do not come from a rule"},
 		{"unknown event", random("T", "explosion", ""), "triggers[0].event_type", "not a canonical"},
 		{"undelivered event", random("T", "tamper", ""), "triggers[0].event_type", "does not deliver tamper"},
 		{"missing rule", random("T", "line_crossing", "nope"), "triggers[0].rule_id", "not a rule of the camera"},
@@ -194,18 +212,23 @@ func TestRuleEvents(t *testing.T) {
 		t.Errorf("region events: %v", r.EventTypes())
 	}
 	for typ, want := range map[string]RuleType{"line_crossing": RuleLine, "loitering": RuleRegion, "lpr": "", "custom:x": ""} {
-		if got := RuleTypeFor(typ); got != want {
+		if got := CanonicalRuleType(typ); got != want {
+			t.Errorf("CanonicalRuleType(%s) = %q, want %q", typ, got, want)
+		}
+	}
+	// The profile decides: a custom event can come from lines, a report
+	// from none.
+	for typ, want := range map[string]RuleType{"custom:tripwire": RuleLine, "custom:counting": "", "lpr": ""} {
+		if got := demoCaps.RuleTypeFor(typ); got != want {
 			t.Errorf("RuleTypeFor(%s) = %q, want %q", typ, got, want)
 		}
 	}
-	for _, typ := range []string{"line_crossing", "region_exit"} {
-		d, ok := DefaultRule(typ)
-		if !ok || !d.Reports(typ) || ValidateRules([]Rule{d}, demoCaps) != nil {
-			t.Errorf("default rule for %s: %+v", typ, d)
-		}
+	if got := demoCaps.RuleEvents(RuleLine); strings.Join(got, ",") != "custom:tripwire,line_crossing" {
+		t.Errorf("line events: %v", got)
 	}
-	if _, ok := DefaultRule("lpr"); ok {
-		t.Error("lpr events have no default rule")
+	n := Rule{Type: RuleLine}.Normalized()
+	if n.Direction != CrossBoth || strings.Join(n.Events, ",") != "line_crossing" || n.ObjectClasses == nil {
+		t.Errorf("normalized line: %+v", n)
 	}
 }
 

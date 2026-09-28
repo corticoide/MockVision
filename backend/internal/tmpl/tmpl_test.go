@@ -156,3 +156,40 @@ func TestTimedOutRenderStops(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestAnalyticsFunctions(t *testing.T) {
+	// Without a camera the counts are empty, so profiles check at import.
+	if err := Check("a", `{{ lineCount "Gate" "A->B" }}{{ occupancy "Lot" }}{{ json (heatmap 4 2) }}{{ analytics }}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := render(t, NewCompiler(Env{}), `{{ lineCount "Gate" }} {{ occupancy "Lot" }} {{ json (heatmap 4 2) }}`, engine.TemplateData{}); got != "0 0 []" {
+		t.Fatalf("empty counts: %q", got)
+	}
+	var asked [2]int
+	c := NewCompiler(Env{
+		LineCount: func(rule, dir string) int {
+			if rule == "Gate" && dir == "B->A" {
+				return 7
+			}
+			return 0
+		},
+		Heatmap: func(cols, rows int) [][]int {
+			asked = [2]int{cols, rows}
+			return [][]int{{1, 2}, {3, 4}}
+		},
+	})
+	req := &engine.RequestData{Query: map[string]string{"cols": "2", "rows": " 2"}}
+	got := render(t, c, `{{ lineCount "Gate" "B->A" }} {{ json (heatmap .Request.Query.cols .Request.Query.rows) }}`, engine.TemplateData{Request: req})
+	if got != "7 [[1,2],[3,4]]" || asked != [2]int{2, 2} {
+		t.Fatalf("got %q, asked %v", got, asked)
+	}
+	for _, bad := range []string{`{{ heatmap 0 2 }}`, `{{ heatmap "x" 2 }}`, `{{ heatmap 1.5 2 }}`, `{{ heatmap 1000 1000 }}`} {
+		tpl, err := c.Compile("bad", bad, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tpl.Render(context.Background(), engine.TemplateData{}); err == nil || !strings.Contains(err.Error(), "heatmap") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}

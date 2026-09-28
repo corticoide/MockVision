@@ -243,6 +243,9 @@ func (s *Service) bootCameras(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.applyFactoryRules(ctx); err != nil {
+		return err
+	}
 	now := time.Now()
 	for _, c := range cams {
 		if b, err := s.loadBundle(ctx, c.ID); err == nil {

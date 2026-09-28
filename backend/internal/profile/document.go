@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/corticoide/mockvision/backend/internal/domain"
 )
 
 // SchemaVersion is the profile schema this MockVision understands.
@@ -124,6 +126,29 @@ type EventSpec struct {
 	MinInterval Duration                   `json:"min_interval,omitempty"`
 	Transports  map[string]json.RawMessage `json:"transports,omitempty"`
 	Delivery    DeliverySpec               `json:"delivery,omitempty"`
+	// Rule is the kind of rule the event comes from: line, region or none.
+	// Empty takes the canonical one: line for line_crossing, region for the
+	// region events, none for the rest.
+	Rule string `json:"rule,omitempty"`
+	// Report marks an event that carries what the camera counted, such as a
+	// people counting report, rather than an object it saw.
+	Report bool `json:"report,omitempty"`
+}
+
+// RuleType is the kind of rule events of type typ come from, "" for none.
+func (s EventSpec) RuleType(typ string) domain.RuleType {
+	switch s.Rule {
+	case "line":
+		return domain.RuleLine
+	case "region":
+		return domain.RuleRegion
+	case "none":
+		return ""
+	}
+	if s.Report {
+		return ""
+	}
+	return domain.CanonicalRuleType(typ)
 }
 
 // DeliverySpec is the device's own delivery behavior (D42).
@@ -138,6 +163,58 @@ type VCA struct {
 	Rules         []string `json:"rules,omitempty"`
 	ObjectClasses []string `json:"object_classes,omitempty"`
 	PlateFormat   string   `json:"plate_format,omitempty"`
+	// FactoryRules are the rules a new or restored camera has, as the
+	// device ships them.
+	FactoryRules []FactoryRule `json:"factory_rules,omitempty"`
+}
+
+// FactoryRule is a rule a device ships with.
+type FactoryRule struct {
+	Name          string         `json:"name"`
+	Type          string         `json:"type"`
+	Points        []domain.Point `json:"points"`
+	Direction     string         `json:"direction,omitempty"`
+	Events        []string       `json:"events,omitempty"`
+	ObjectClasses []string       `json:"object_classes,omitempty"`
+	Enabled       *bool          `json:"enabled,omitempty"`
+}
+
+// VCACaps is what the profile lets a camera's analytics do.
+func (d *Document) VCACaps() domain.VCACaps {
+	caps := domain.VCACaps{Events: map[string]time.Duration{}, EventRules: map[string]domain.RuleType{}, Reports: map[string]bool{}}
+	if d.VCA != nil {
+		for _, r := range d.VCA.Rules {
+			caps.RuleTypes = append(caps.RuleTypes, domain.RuleType(r))
+		}
+		caps.ObjectClasses = d.VCA.ObjectClasses
+	}
+	for typ, spec := range d.Events {
+		if len(spec.Transports) > 0 {
+			caps.Events[typ] = spec.MinInterval.D()
+		}
+		if kind := spec.RuleType(typ); kind != "" {
+			caps.EventRules[typ] = kind
+		}
+		if spec.Report {
+			caps.Reports[typ] = true
+		}
+	}
+	return caps
+}
+
+// FactoryRules returns the profile's factory rules, without IDs and with
+// what they leave out filled in.
+func (d *Document) FactoryRules() []domain.Rule {
+	if d.VCA == nil {
+		return nil
+	}
+	out := make([]domain.Rule, 0, len(d.VCA.FactoryRules))
+	for _, f := range d.VCA.FactoryRules {
+		r := domain.Rule{Name: f.Name, Type: domain.RuleType(f.Type), Points: f.Points, Direction: f.Direction,
+			Events: append([]string{}, f.Events...), ObjectClasses: append([]string{}, f.ObjectClasses...), Enabled: f.Enabled == nil || *f.Enabled}
+		out = append(out, r.Normalized())
+	}
+	return out
 }
 
 // HTTPPush is the http_push transport of an event.

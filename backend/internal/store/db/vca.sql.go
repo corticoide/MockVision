@@ -226,3 +226,39 @@ func (q *Queries) ListCameraTriggers(ctx context.Context, cameraID string) ([]Tr
 	}
 	return items, nil
 }
+
+const listCamerasWithoutFactoryRules = `-- name: ListCamerasWithoutFactoryRules :many
+SELECT id FROM cameras WHERE factory_rules_applied = 0 ORDER BY id
+`
+
+func (q *Queries) ListCamerasWithoutFactoryRules(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listCamerasWithoutFactoryRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markFactoryRulesApplied = `-- name: MarkFactoryRulesApplied :exec
+UPDATE cameras SET factory_rules_applied = 1 WHERE id = ?1
+`
+
+func (q *Queries) MarkFactoryRulesApplied(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, markFactoryRulesApplied, id)
+	return err
+}

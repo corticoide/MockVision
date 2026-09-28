@@ -51,13 +51,13 @@ func demoProfile(t *testing.T, version string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return []byte(strings.Replace(string(data), "version: 0.3.0", "version: "+version, 1))
+	return []byte(strings.Replace(string(data), "version: 0.4.0", "version: "+version, 1))
 }
 
 func TestImportRunsAsAJob(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
-	data := demoProfile(t, "0.4.0")
+	data := demoProfile(t, "0.5.0")
 
 	a, err := svc.SubmitImport(ctx, testActor, "demo.yaml", data)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestImportRunsAsAJob(t *testing.T) {
 	}
 	j := waitJob(t, svc, a.ID)
 	res, err := ImportOutcome(j)
-	if err != nil || !res.Created || res.Profile.Version != "0.4.0" || j.Title != "Import demo.yaml" || j.CreatedBy != "test" {
+	if err != nil || !res.Created || res.Profile.Version != "0.5.0" || j.Title != "Import demo.yaml" || j.CreatedBy != "test" {
 		t.Fatalf("import: %+v %+v %v", j, res, err)
 	}
 	detail, err := svc.GetJob(ctx, a.ID)
@@ -113,7 +113,7 @@ func TestImportRunsAsAJob(t *testing.T) {
 func TestImportResumesAfterValidation(t *testing.T) {
 	svc, _ := newBareService(t)
 	ctx := context.Background()
-	data := demoProfile(t, "0.3.0")
+	data := demoProfile(t, "0.4.0")
 	j, err := svc.SubmitImport(ctx, testActor, "demo.yaml", data)
 	if err != nil {
 		t.Fatal(err)

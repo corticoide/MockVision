@@ -370,11 +370,11 @@ const (
 
 // ResetCamera restores a camera to its profile like the reset button of a
 // real device (RN-10): parameters, accounts and protocols go back to the
-// profile's defaults, its analytics rules are erased and, with ResetFull,
-// the network takes the factory address. The picture and the triggers,
-// which are MockVision's and not the device's, are kept; triggers that
-// fired on a rule fire on any from then on. A running camera reboots, as
-// the real one does.
+// profile's defaults, its analytics rules go back to the profile's factory
+// rules and, with ResetFull, the network takes the factory address. The
+// picture and the triggers, which are MockVision's and not the device's,
+// are kept; triggers that fired on a rule fire on any from then on. A
+// running camera reboots, as the real one does.
 func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string) (*CameraView, error) {
 	if scope != ResetSettings && scope != ResetFull {
 		return nil, domain.Invalid("scope", "must be %s or %s", ResetSettings, ResetFull)
@@ -444,6 +444,12 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 			}
 		}
 		if err := q.DeleteCameraRules(ctx, id); err != nil {
+			return err
+		}
+		if err := insertRules(ctx, q, id, factoryRules(b.doc)); err != nil {
+			return err
+		}
+		if err := q.MarkFactoryRulesApplied(ctx, id); err != nil {
 			return err
 		}
 		rows, err := q.ListCameraTriggers(ctx, id)

@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -49,8 +48,9 @@ func ruleOf(row db.Rule) domain.Rule {
 	}
 	var p ruleParams
 	_ = json.Unmarshal([]byte(row.ParamsJson), &p)
-	r.Direction, r.Events, r.ObjectClasses = p.Direction, nonNil(p.Events), nonNil(p.ObjectClasses)
-	return r
+	r.Direction, r.Events, r.ObjectClasses = p.Direction, p.Events, p.ObjectClasses
+	// Lines stored before they listed their events report line_crossing.
+	return r.Normalized()
 }
 
 func triggerOf(row db.Trigger) domain.Trigger {
@@ -104,22 +104,52 @@ func insertTriggers(ctx context.Context, q *db.Queries, cameraID string, trigger
 	return nil
 }
 
+// factoryRules returns a profile's factory rules with new IDs.
+func factoryRules(doc *profile.Document) []domain.Rule {
+	rules := doc.FactoryRules()
+	for i := range rules {
+		rules[i].ID = ulid.Make().String()
+	}
+	return rules
+}
+
+// applyFactoryRules gives the cameras created before profiles declared
+// factory rules, and that have no rules, their profile's; each camera gets
+// them once, so rules someone removed later stay removed.
+func (s *Service) applyFactoryRules(ctx context.Context) error {
+	ids, err := s.store.R().ListCamerasWithoutFactoryRules(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		b, err := s.loadBundle(ctx, id)
+		if err != nil {
+			continue
+		}
+		err = s.store.Tx(ctx, func(q *db.Queries) error {
+			rows, err := q.ListCameraRules(ctx, id)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 {
+				if err := insertRules(ctx, q, id, factoryRules(b.doc)); err != nil {
+					return err
+				}
+			}
+			return q.MarkFactoryRulesApplied(ctx, id)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // vcaCaps is what a profile allows a camera's analytics: its kinds of
-// rule, its object classes, and the events it can deliver.
+// rule, its object classes, the events it can deliver and the kind of rule
+// each comes from.
 func vcaCaps(doc *profile.Document) domain.VCACaps {
-	caps := domain.VCACaps{Events: map[string]time.Duration{}}
-	if doc.VCA != nil {
-		for _, r := range doc.VCA.Rules {
-			caps.RuleTypes = append(caps.RuleTypes, domain.RuleType(r))
-		}
-		caps.ObjectClasses = doc.VCA.ObjectClasses
-	}
-	for typ, spec := range doc.Events {
-		if len(spec.Transports) > 0 {
-			caps.Events[typ] = spec.MinInterval.D()
-		}
-	}
-	return caps
+	return doc.VCACaps()
 }
 
 // vcaConfig is what a camera runs its analytics with.
@@ -153,8 +183,8 @@ type RuleInput struct {
 	Points []domain.Point `json:"points"`
 	// Direction of a line: A->B, B->A or both (the default).
 	Direction string `json:"direction"`
-	// Events of a region: region_entrance, region_exit, loitering and
-	// intrusion.
+	// Events the rule reports, among those its profile raises from its kind
+	// of rule; a line without any reports line_crossing.
 	Events        []string `json:"events"`
 	ObjectClasses []string `json:"object_classes"`
 	// Enabled defaults to true.
@@ -177,11 +207,8 @@ func (s *Service) SetCameraRules(ctx context.Context, actor Actor, id string, in
 		} else if !slices.ContainsFunc(b.rules, func(x domain.Rule) bool { return x.ID == r.ID }) {
 			v.Add("rules["+strconv.Itoa(i)+"].id", "is not a rule of the camera")
 		}
-		if r.Type == string(domain.RuleLine) && r.Direction == "" {
-			r.Direction = domain.CrossBoth
-		}
 		rules[i] = domain.Rule{ID: r.ID, Name: strings.TrimSpace(r.Name), Type: domain.RuleType(r.Type), Points: r.Points, Direction: r.Direction,
-			Events: nonNil(r.Events), ObjectClasses: nonNil(r.ObjectClasses), Enabled: r.Enabled == nil || *r.Enabled}
+			Events: r.Events, ObjectClasses: r.ObjectClasses, Enabled: r.Enabled == nil || *r.Enabled}.Normalized()
 		if rules[i].Points == nil {
 			rules[i].Points = []domain.Point{}
 		}
@@ -376,15 +403,19 @@ func (s *Service) firedView(b *cameraBundle, res ipc.TriggerResult, triggerID st
 // must be enabled and report the type, or else the first enabled rule
 // that does. Without one, the camera stands in a default line or region.
 func ruleForEvent(b *cameraBundle, typ, ruleID string) (*domain.Rule, error) {
+	kind := vcaCaps(b.doc).RuleTypeFor(typ)
 	if ruleID == "" {
+		if kind == "" {
+			return nil, nil
+		}
 		for _, r := range b.rules {
 			if r.Enabled && r.Reports(typ) {
 				return &r, nil
 			}
 		}
-		return nil, nil
+		return nil, domain.Invalid("rule_id", "no enabled rule of the camera reports %s events: draw a %s that does in its Rules tab", typ, kind)
 	}
-	if domain.RuleTypeFor(typ) == "" {
+	if kind == "" {
 		return nil, domain.Invalid("rule_id", "%s events do not come from a rule", typ)
 	}
 	i := slices.IndexFunc(b.rules, func(r domain.Rule) bool { return r.ID == ruleID })
@@ -428,4 +459,91 @@ func copyVCA(rules []domain.Rule, triggers []domain.Trigger) ([]domain.Rule, []d
 		outTriggers[i] = t
 	}
 	return outRules, outTriggers
+}
+
+// Limits of the heat map the API returns: the camera's grid.
+const (
+	maxHeatCols = 128
+	maxHeatRows = 72
+)
+
+// CameraAnalytics returns what a running camera's analytics counted from
+// the events it emitted since it started or its counts were reset: the
+// crossings of each line, the entries, exits and occupancy of each region,
+// the events of each type and, when cols and rows are given, where the
+// objects were, as a heat map of cols by rows cells.
+func (s *Service) CameraAnalytics(ctx context.Context, id string, cols, rows int) (*ipc.Analytics, error) {
+	if cols < 0 || cols > maxHeatCols || rows < 0 || rows > maxHeatRows || (cols == 0) != (rows == 0) {
+		return nil, domain.Invalid("cols", "cols (1 to %d) and rows (1 to %d) come together", maxHeatCols, maxHeatRows)
+	}
+	b, err := s.loadBundle(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.askAnalytics(ctx, b, ipc.AnalyticsQuery{Cols: cols, Rows: rows})
+}
+
+// ResetCameraAnalytics starts a running camera's counts again from zero.
+func (s *Service) ResetCameraAnalytics(ctx context.Context, actor Actor, id string) (*ipc.Analytics, error) {
+	b, err := s.loadBundle(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	a, err := s.askAnalytics(ctx, b, ipc.AnalyticsQuery{Reset: true})
+	if err != nil {
+		return nil, err
+	}
+	s.audit(ctx, actor, "camera.analytics.reset", "camera", id, nil)
+	return a, nil
+}
+
+// askAnalytics asks a running camera for its counts and keeps only what it
+// may report: counts of its own rules, events its profile delivers, and a
+// heat map of the size asked (audit B1).
+func (s *Service) askAnalytics(ctx context.Context, b *cameraBundle, q ipc.AnalyticsQuery) (*ipc.Analytics, error) {
+	ss := s.session(b.cam.ID)
+	if ss == nil || !ss.active() {
+		return nil, domain.Conflict("", "camera %s is not running", b.cam.Name)
+	}
+	var got ipc.Analytics
+	if err := ss.conn().Request(ctx, ipc.TypeAnalytics, q, &got); err != nil {
+		return nil, err
+	}
+	caps := vcaCaps(b.doc)
+	names := map[string]string{}
+	for _, r := range b.rules {
+		names[r.ID] = r.Name
+	}
+	out := &ipc.Analytics{Since: got.Since, Lines: []ipc.LineCount{}, Regions: []ipc.RegionCount{}, Events: map[string]int{}}
+	for typ, n := range got.Events {
+		if caps.Delivers(typ) && n >= 0 {
+			out.Events[typ] = n
+		}
+	}
+	for _, l := range got.Lines {
+		if name, ok := names[l.RuleID]; ok && l.AToB >= 0 && l.BToA >= 0 && len(out.Lines) < domain.MaxRules {
+			classes := map[string]ipc.DirectionPair{}
+			for c, p := range l.Classes {
+				if c != "" && len(c) <= 32 && p.AToB >= 0 && p.BToA >= 0 && len(classes) < 64 {
+					classes[c] = p
+				}
+			}
+			out.Lines = append(out.Lines, ipc.LineCount{RuleID: l.RuleID, Name: name, AToB: l.AToB, BToA: l.BToA, Classes: classes})
+		}
+	}
+	for _, r := range got.Regions {
+		if name, ok := names[r.RuleID]; ok && r.Entries >= 0 && r.Exits >= 0 && r.Occupancy >= 0 && len(out.Regions) < domain.MaxRules {
+			events := map[string]int{}
+			for typ, n := range r.Events {
+				if caps.Delivers(typ) && n >= 0 {
+					events[typ] = n
+				}
+			}
+			out.Regions = append(out.Regions, ipc.RegionCount{RuleID: r.RuleID, Name: name, Entries: r.Entries, Exits: r.Exits, Occupancy: r.Occupancy, Events: events})
+		}
+	}
+	if h := got.Heat; h != nil && q.Cols > 0 && h.Cols == q.Cols && h.Rows == q.Rows && len(h.Cells) == h.Cols*h.Rows && !slices.ContainsFunc(h.Cells, func(n int) bool { return n < 0 }) {
+		out.Heat = h
+	}
+	return out, nil
 }

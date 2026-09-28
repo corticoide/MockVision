@@ -143,11 +143,14 @@ type CameraView struct {
 	Users        []UserView     `json:"users"`
 	Targets      []TargetRef    `json:"targets"`
 	// Rules and Triggers are the camera's analytics (D39, D40).
-	Rules     []domain.Rule    `json:"rules"`
-	Triggers  []domain.Trigger `json:"triggers"`
-	Metrics   *MetricsView     `json:"metrics"`
-	CreatedAt time.Time        `json:"created_at"`
-	UpdatedAt time.Time        `json:"updated_at"`
+	Rules    []domain.Rule    `json:"rules"`
+	Triggers []domain.Trigger `json:"triggers"`
+	// EventTypes are the events the camera can send, as its profile
+	// declares them.
+	EventTypes []CameraEventView `json:"event_types"`
+	Metrics    *MetricsView      `json:"metrics"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // ParamView is a native parameter of a camera.
@@ -216,6 +219,29 @@ type ProfileEventView struct {
 	VendorName    string   `json:"vendor_name"`
 	MinIntervalMS int64    `json:"min_interval_ms"`
 	Transports    []string `json:"transports"`
+	// Rule is the kind of rule the event comes from: line, region or ""
+	// for none.
+	Rule string `json:"rule"`
+	// Report marks an event that carries counts, not an object.
+	Report bool `json:"report"`
+}
+
+// CameraEventView is an event a camera can send: its type, the kind of
+// rule it comes from ("" for none) and whether it is a report.
+type CameraEventView struct {
+	Type   string `json:"type"`
+	Rule   string `json:"rule"`
+	Report bool   `json:"report"`
+}
+
+// cameraEvents lists the events a profile lets its cameras send.
+func cameraEvents(doc *profile.Document) []CameraEventView {
+	caps := doc.VCACaps()
+	out := []CameraEventView{}
+	for _, typ := range profile.SortedKeys(caps.Events) {
+		out = append(out, CameraEventView{Type: typ, Rule: string(caps.RuleTypeFor(typ)), Report: caps.Reports[typ]})
+	}
+	return out
 }
 
 // ProfileVCAView is what a profile's analytics have: kinds of rule and the

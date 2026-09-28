@@ -29,6 +29,9 @@ type eventBus struct {
 	subs    map[string]func(engine.Dispatch)
 	last    map[string]time.Time
 	targets []ipc.Target
+	// observe sees every event the camera emits before it goes out, so the
+	// counts a template reads include it.
+	observe func(engine.Event)
 }
 
 func newEventBus(rt *Runtime) *eventBus {
@@ -74,6 +77,9 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 	}
 	if e.At.IsZero() {
 		e.At = now
+	}
+	if b.observe != nil {
+		b.observe(e)
 	}
 	if err := b.rt.conn.Notify(ipc.TypeEvent, ipc.EventMsg{Event: e, TriggerID: triggerID}); err != nil {
 		return e, err

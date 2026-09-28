@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
@@ -67,6 +68,23 @@ func fromTrigger(t *testing.T, svc *Service, cameraID, triggerID string) int {
 	return n
 }
 
+// storedEvent waits for the service to store an event the camera reported:
+// the API answers with the event before the camera's notice arrives.
+func storedEvent(t *testing.T, svc *Service, id string) *EventView {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ev, err := svc.GetEvent(context.Background(), id)
+		if err == nil {
+			return ev
+		}
+		if !errors.Is(err, domain.ErrNotFound) || time.Now().After(deadline) {
+			t.Fatalf("event %s: %v", id, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func wantConflict(t *testing.T, err error, contains string) {
 	t.Helper()
 	var ce *domain.ConflictError
@@ -96,6 +114,27 @@ func TestRulesAndTriggers(t *testing.T) {
 	}
 	cam = waitState(t, svc, cam.ID, domain.StateRunning)
 	pid := cam.Status.PID
+
+	// A new camera has its profile's factory rules, and knows the events it
+	// can send and where they come from.
+	if len(cam.Rules) != 2 || cam.Rules[0].Name != "Line 1" || cam.Rules[1].Name != "Region 1" || cam.Rules[0].ID == "" {
+		t.Fatalf("factory rules %+v", cam.Rules)
+	}
+	kinds := map[string]CameraEventView{}
+	for _, e := range cam.EventTypes {
+		kinds[e.Type] = e
+	}
+	if kinds["line_crossing"].Rule != "line" || kinds["loitering"].Rule != "region" || !kinds["custom:people_counting"].Report ||
+		kinds["custom:people_counting"].Rule != "" || len(cam.EventTypes) != 6 {
+		t.Fatalf("event types %+v", cam.EventTypes)
+	}
+
+	// Without rules, events that come from rules cannot happen.
+	if _, err := svc.SetCameraRules(ctx, testActor, cam.ID, []RuleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.TriggerEvent(ctx, testActor, cam.ID, ManualEventInput{Type: "line_crossing"})
+	wantInvalid(t, err, "rule_id")
 
 	// Rules are checked against the profile.
 	_, err = svc.SetCameraRules(ctx, testActor, cam.ID, []RuleInput{{Name: "Lot", Type: "region", Points: []domain.Point{{X: 0.1, Y: 0.1}, {X: 0.5, Y: 0.5}},
@@ -131,9 +170,9 @@ func TestRulesAndTriggers(t *testing.T) {
 		if rule["id"] != gate.ID || rule["name"] != "Gate" || rule["type"] != "line" || p["direction"] != "A->B" || object["box"] == nil {
 			t.Fatalf("payload %v", p)
 		}
-		stored, err := svc.GetEvent(ctx, ev.ID)
-		if err != nil || stored.RuleID != gate.ID || stored.TriggerID != "" {
-			t.Fatalf("stored event %+v, %v", stored, err)
+		stored := storedEvent(t, svc, ev.ID)
+		if stored.RuleID != gate.ID || stored.TriggerID != "" {
+			t.Fatalf("stored event %+v", stored)
 		}
 		// Without a rule, the first enabled one that reports the type.
 		ev, err = svc.TriggerEvent(ctx, testActor, cam.ID, ManualEventInput{Type: "region_entrance"})
@@ -156,6 +195,46 @@ func TestRulesAndTriggers(t *testing.T) {
 		} {
 			_, err := svc.TriggerEvent(ctx, testActor, cam.ID, c.in)
 			wantInvalid(t, err, c.field)
+		}
+	})
+
+	t.Run("analytics", func(t *testing.T) {
+		// One crossing A->B on Gate and one entry into Lot so far.
+		a, err := svc.CameraAnalytics(ctx, cam.ID, 8, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.Lines) != 1 || a.Lines[0].RuleID != gate.ID || a.Lines[0].Name != "Gate" || a.Lines[0].AToB != 1 || a.Lines[0].BToA != 0 {
+			t.Fatalf("lines %+v", a.Lines)
+		}
+		if len(a.Regions) != 1 || a.Regions[0].Entries != 1 || a.Regions[0].Occupancy != 1 || a.Events["line_crossing"] != 1 {
+			t.Fatalf("regions %+v, events %v", a.Regions, a.Events)
+		}
+		sum := 0
+		for _, n := range a.Heat.Cells {
+			sum += n
+		}
+		if a.Heat.Cols != 8 || a.Heat.Rows != 4 || sum != 2 {
+			t.Fatalf("heat %+v", a.Heat)
+		}
+		// A report carries the counts to the targets.
+		ev, err := svc.TriggerEvent(ctx, testActor, cam.ID, ManualEventInput{Type: "custom:people_counting"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := rcv.payload(t, ev.ID)
+		lines, _ := p["lines"].([]any)
+		first, _ := lines[0].(map[string]any)
+		if p["eventType"] != "PeopleCounting" || first["name"] != "Gate" || first["in"] != 1.0 || ev.RuleID != "" {
+			t.Fatalf("report %v", p)
+		}
+		_, err = svc.CameraAnalytics(ctx, cam.ID, 0, 4)
+		wantInvalid(t, err, "cols")
+		_, err = svc.CameraAnalytics(ctx, cam.ID, 200, 4)
+		wantInvalid(t, err, "cols")
+		a, err = svc.ResetCameraAnalytics(ctx, testActor, cam.ID)
+		if err != nil || a.Lines[0].AToB != 0 || a.Regions[0].Entries != 0 || a.Heat != nil {
+			t.Fatalf("after a reset %+v, %v", a, err)
 		}
 	})
 
@@ -247,7 +326,9 @@ func TestRulesAndTriggers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(v.Rules) != 0 || len(v.Triggers) != 1 || v.Triggers[0].RuleID != "" || v.Triggers[0].ID != clone.Triggers[0].ID {
+		// Its rules go back to the profile's; its triggers stay, unbound.
+		if len(v.Rules) != 2 || v.Rules[0].Name != "Line 1" || v.Rules[0].ID == clone.Rules[0].ID || len(v.Triggers) != 1 ||
+			v.Triggers[0].RuleID != "" || v.Triggers[0].ID != clone.Triggers[0].ID {
 			t.Fatalf("after a reset: rules %+v, triggers %+v", v.Rules, v.Triggers)
 		}
 	})
@@ -256,6 +337,8 @@ func TestRulesAndTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = svc.FireTrigger(ctx, testActor, cam.ID, traffic.ID)
+	wantConflict(t, err, "is not running")
+	_, err = svc.CameraAnalytics(ctx, cam.ID, 0, 0)
 	wantConflict(t, err, "is not running")
 }
 
@@ -279,12 +362,42 @@ func TestRulesFollowTheProfile(t *testing.T) {
 		Direction: domain.CrossBoth}}, vcaCaps(&bare)); err == nil {
 		t.Fatal("a profile without analytics accepted a line")
 	}
-	d, err := svc.GetProfile(ctx, "milesight/demo", "0.3.0")
+	d, err := svc.GetProfile(ctx, "milesight/demo", "0.4.0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.VCA.Rules) != 2 || len(d.EventSpecs) != 5 || d.EventSpecs[1].Type != "line_crossing" || d.EventSpecs[1].MinIntervalMS != 1000 ||
-		d.EventSpecs[1].Transports[0] != "http_push" {
+	if len(d.VCA.Rules) != 2 || len(d.EventSpecs) != 6 || d.EventSpecs[2].Type != "line_crossing" || d.EventSpecs[2].MinIntervalMS != 1000 ||
+		d.EventSpecs[2].Transports[0] != "http_push" || d.EventSpecs[2].Rule != "line" || !d.EventSpecs[0].Report || d.EventSpecs[0].Rule != "" {
 		t.Fatalf("profile detail vca %+v, events %+v", d.VCA, d.EventSpecs)
+	}
+
+	// A profile without line crossings: its cameras cannot send them, nor
+	// draw lines that report them.
+	noCross := *b.doc
+	noCross.Events = map[string]profile.EventSpec{}
+	for typ, spec := range b.doc.Events {
+		if typ != "line_crossing" {
+			noCross.Events[typ] = spec
+		}
+	}
+	for _, e := range cameraEvents(&noCross) {
+		if e.Type == "line_crossing" {
+			t.Fatal("a camera of a profile without crossings offers them")
+		}
+	}
+	err = domain.ValidateRules([]domain.Rule{domain.Rule{Name: "L", Type: domain.RuleLine, Points: []domain.Point{{X: 0.1, Y: 0.1}, {X: 0.9, Y: 0.9}}}.Normalized()}, vcaCaps(&noCross))
+	if err == nil || !strings.Contains(err.Error(), "does not deliver line_crossing") {
+		t.Fatalf("a line on a profile without crossings: %v", err)
+	}
+
+	// Factory rules come once: rules removed later stay removed at boot.
+	if _, err := svc.SetCameraRules(ctx, testActor, cam.ID, []RuleInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.applyFactoryRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := svc.GetCamera(ctx, cam.ID); len(v.Rules) != 0 {
+		t.Fatalf("factory rules came back: %+v", v.Rules)
 	}
 }
