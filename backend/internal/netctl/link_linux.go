@@ -151,6 +151,9 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 		}
 	}
 	if spec.DHCP() {
+		if err := nh.RouteReplace(onLinkDefault(eth.Attrs().Index)); err != nil {
+			return res, fmt.Errorf("on-link default route: %w", err)
+		}
 		return res, nil
 	}
 	warn, err := setAddress(host, ns, spec, &AddressSpec{ID: spec.ID, IP: spec.IP, Prefix: spec.Prefix, Gateway: spec.Gateway, Force: spec.Force}, cancel)
@@ -244,10 +247,18 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 			return nil, fmt.Errorf("default route via %s: %w", a.Gateway, err)
 		}
 	} else if routes, err := nh.RouteList(eth, netlink.FAMILY_V4); err == nil {
+		// A lease without a router drops the previous one's route; a DHCP
+		// camera keeps its on-link one.
 		for _, r := range routes {
-			if r.Dst == nil && r.Gw != nil {
+			if isDefault(r.Dst) && r.Gw != nil {
 				_ = nh.RouteDel(&r)
 			}
+		}
+	}
+	if spec.DHCP() {
+		// Deleting the interface's last address flushed its routes.
+		if err := nh.RouteReplace(onLinkDefault(ifindex)); err != nil {
+			return nil, fmt.Errorf("on-link default route: %w", err)
 		}
 	}
 	if err := announce(ns.fd, ifindex, mac, ip); err != nil {
@@ -266,6 +277,36 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 		}()
 	}
 	return warnings, nil
+}
+
+// onLinkMetric ranks a DHCP camera's on-link default route below any
+// router's.
+const onLinkMetric = 0xffff
+
+// onLinkDefault is the default route through the camera's interface that
+// a DHCP camera keeps. Where reverse path filtering is on, as Ubuntu and
+// Debian set it and new namespaces inherit it, the kernel drops a packet
+// from a source it has no route back to: without an address, or at a
+// factory address without a router, the camera would never hear the DHCP
+// server. The route is set over netlink, since containers mount
+// /proc/sys read-only and rp_filter cannot be turned off there.
+func onLinkDefault(ifindex int) *netlink.Route {
+	return &netlink.Route{
+		LinkIndex: ifindex,
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Scope:     netlink.SCOPE_LINK,
+		Priority:  onLinkMetric,
+	}
+}
+
+// isDefault reports whether dst is the IPv4 default route, which the
+// netlink package lists as 0.0.0.0/0.
+func isDefault(dst *net.IPNet) bool {
+	if dst == nil {
+		return true
+	}
+	ones, _ := dst.Mask.Size()
+	return ones == 0 && dst.IP.IsUnspecified()
 }
 
 // parentBusy explains an EBUSY from the kernel: a network card takes
@@ -352,7 +393,7 @@ func removeLinks(ns *namespace) {
 	}
 	defer nh.Close()
 	links, err := nh.LinkList()
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		return
 	}
 	for _, l := range links {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"time"
@@ -47,7 +48,7 @@ func (e *MACConflictError) Error() string {
 // the probe never claims mac itself. A device with IPv6 off that stays
 // silent goes unnoticed; the ARP probe of the address still runs.
 func macProbe(host, ns netns.NsHandle, ifindex int, probeMAC, mac net.HardwareAddr) error {
-	if how := knownMAC(host, mac); how != "" {
+	if how, _ := knownMAC(host, mac); how != "" {
 		return &MACConflictError{MAC: mac.String(), How: how}
 	}
 	fd := -1
@@ -110,42 +111,53 @@ func macProbe(host, ns netns.NsHandle, ifindex int, probeMAC, mac net.HardwareAd
 
 // knownMAC reports where the node already sees mac: on one of its own
 // interfaces, or in its neighbor tables. Entries on the bridge to the
-// cameras are the cameras themselves.
-func knownMAC(host netns.NsHandle, mac net.HardwareAddr) string {
-	h, err := netlink.NewHandleAt(host)
-	if err != nil {
-		return ""
+// cameras are the cameras themselves. A table it cannot read is skipped
+// and its error returned with what the others show; the active probe
+// still runs. A dump the kernel reports as interrupted still holds what
+// it listed.
+func knownMAC(host netns.NsHandle, mac net.HardwareAddr) (string, error) {
+	var errs []error
+	var ifs []net.Interface
+	if err := inNamespace(host, func() error {
+		var err error
+		ifs, err = net.Interfaces()
+		return err
+	}); err != nil {
+		errs = append(errs, fmt.Errorf("interfaces: %w", err))
 	}
-	defer h.Close()
-	links, err := h.LinkList()
-	if err != nil {
-		return ""
-	}
-	skip := map[int]bool{}
-	for _, l := range links {
-		if l.Attrs().Name == bridgeName {
-			skip[l.Attrs().Index] = true
+	bridge := -1
+	for _, i := range ifs {
+		if i.Name == bridgeName {
+			bridge = i.Index
 			continue
 		}
-		if bytes.Equal(l.Attrs().HardwareAddr, mac) {
-			return "interface " + l.Attrs().Name + " of this node has it"
+		if bytes.Equal(i.HardwareAddr, mac) {
+			return "interface " + i.Name + " of this node has it", nil
 		}
 	}
 	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		neigh, err := h.NeighList(0, family)
+		// A socket per dump: one that failed may leave messages behind.
+		h, err := netlink.NewHandleAt(host, unix.NETLINK_ROUTE)
 		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		neigh, err := h.NeighList(0, family)
+		h.Close()
+		if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
+			errs = append(errs, fmt.Errorf("neighbors: %w", err))
 			continue
 		}
 		for _, n := range neigh {
-			if skip[n.LinkIndex] || n.State&(netlink.NUD_FAILED|netlink.NUD_INCOMPLETE|netlink.NUD_NOARP) != 0 {
+			if n.LinkIndex == bridge || n.State&(netlink.NUD_FAILED|netlink.NUD_INCOMPLETE|netlink.NUD_NOARP) != 0 {
 				continue
 			}
 			if bytes.Equal(n.HardwareAddr, mac) {
-				return "the node's neighbor table has it for " + n.IP.String()
+				return "the node's neighbor table has it for " + n.IP.String(), nil
 			}
 		}
 	}
-	return ""
+	return "", errors.Join(errs...)
 }
 
 // eui64 returns the EUI-64 link-local IPv6 address of a MAC.

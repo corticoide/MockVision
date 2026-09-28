@@ -4,6 +4,7 @@ package netctl
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -139,10 +140,10 @@ func dial(ns netns.NsHandle, addr string) error {
 func TestMACProbe(t *testing.T) {
 	host := requireRoot(t)
 	testParent(t, "mvtest2")
-	try := func(t *testing.T, id, mac string, force bool) (linkResult, error) {
+	try := func(t *testing.T, parent, id, mac string, force bool) (linkResult, error) {
 		t.Helper()
 		spec := testSpec(id, "10.94.0.10")
-		spec.Parent, spec.MAC, spec.Force = "mvtest2", mac, force
+		spec.Parent, spec.MAC, spec.Force = parent, mac, force
 		ns, err := createNamespace(spec.Netns)
 		if err != nil {
 			t.Fatal(err)
@@ -160,10 +161,13 @@ func TestMACProbe(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer netlink.NeighDel(n)
-		if _, err := try(t, "01J8Z3QK0000000000000M0001", mac.String(), false); !isCode(err, CodeMACInUse) {
+		if how, err := knownMAC(host, mac); how == "" {
+			t.Fatalf("the node's tables do not show %s (errors: %v); neighbors on mvtest2: %s", mac, err, neighbors(p))
+		}
+		if _, err := try(t, "mvtest2", "01J8Z3QK0000000000000M0001", mac.String(), false); !isCode(err, CodeMACInUse) {
 			t.Fatalf("expected mac_in_use, got %v", err)
 		}
-		if res, err := try(t, "01J8Z3QK0000000000000M0001", mac.String(), true); err != nil || len(res.Warnings) == 0 {
+		if res, err := try(t, "mvtest2", "01J8Z3QK0000000000000M0001", mac.String(), true); err != nil || len(res.Warnings) == 0 {
 			t.Fatalf("forced: %+v, %v", res, err)
 		}
 	})
@@ -171,7 +175,7 @@ func TestMACProbe(t *testing.T) {
 	t.Run("another interface on the parent", func(t *testing.T) {
 		mac, _ := net.ParseMAC("02:42:ac:11:00:92")
 		lanDevice(t, "mvtest2", "sim-itest-dev2", "10.94.0.20", mac)
-		if _, err := try(t, "01J8Z3QK0000000000000M0002", mac.String(), false); !isCode(err, CodeMACInUse) {
+		if _, err := try(t, "mvtest2", "01J8Z3QK0000000000000M0002", mac.String(), false); !isCode(err, CodeMACInUse) {
 			t.Fatalf("expected mac_in_use, got %v", err)
 		}
 	})
@@ -180,7 +184,10 @@ func TestMACProbe(t *testing.T) {
 		if _, err := os.Stat("/proc/sys/net/ipv6"); err != nil {
 			t.Skip("IPv6 is disabled on this kernel")
 		}
-		// The veth peer is a device of its own, as one behind a switch.
+		// The veth peer is a device of its own, as one behind a switch. On
+		// a parent of its own: deleting the device's namespace deletes the
+		// pair.
+		testParent(t, "mvtest5")
 		dev, err := createNamespace("sim-itest-dev5")
 		if err != nil {
 			t.Fatal(err)
@@ -190,7 +197,7 @@ func TestMACProbe(t *testing.T) {
 			return os.WriteFile("/proc/sys/net/ipv6/conf/default/accept_dad", []byte("0"), 0o644)
 		})
 		mac, _ := net.ParseMAC("02:42:ac:11:00:93")
-		peer, _ := netlink.LinkByName("mvtest2p")
+		peer, _ := netlink.LinkByName("mvtest5p")
 		_ = netlink.LinkSetDown(peer)
 		if err := netlink.LinkSetHardwareAddr(peer, mac); err != nil {
 			t.Fatal(err)
@@ -198,9 +205,9 @@ func TestMACProbe(t *testing.T) {
 		if err := netlink.LinkSetNsFd(peer, int(dev.fd)); err != nil {
 			t.Fatal(err)
 		}
-		configureDevice(t, dev, "mvtest2p", "10.94.0.30")
+		configureDevice(t, dev, "mvtest5p", "10.94.0.30")
 		time.Sleep(200 * time.Millisecond) // link-local address
-		_, err = try(t, "01J8Z3QK0000000000000M0003", mac.String(), false)
+		_, err = try(t, "mvtest5", "01J8Z3QK0000000000000M0003", mac.String(), false)
 		if !isCode(err, CodeMACInUse) {
 			t.Fatalf("expected mac_in_use, got %v", err)
 		}
@@ -225,6 +232,16 @@ func TestMACProbe(t *testing.T) {
 			t.Fatalf("eth0 has %s, want %s", eth.Attrs().HardwareAddr, free.MAC)
 		}
 	})
+}
+
+// neighbors lists the IPv4 neighbors of a link, for a failure's message.
+func neighbors(l netlink.Link) string {
+	list, err := netlink.NeighList(l.Attrs().Index, netlink.FAMILY_V4)
+	out := make([]string, 0, len(list))
+	for _, n := range list {
+		out = append(out, fmt.Sprintf("%s %s state %#x", n.IP, n.HardwareAddr, n.State))
+	}
+	return fmt.Sprintf("%v (error %v)", out, err)
 }
 
 // The firewall lets a camera reach its targets and its clients, and
@@ -285,7 +302,8 @@ func TestFirewall(t *testing.T) {
 }
 
 // A DHCP camera's socket broadcasts before the camera has an address, and
-// receives the broadcast answers.
+// receives the broadcast answers, with reverse path filtering on: Ubuntu
+// and Debian set it, and new namespaces inherit it.
 func TestDHCPSocket(t *testing.T) {
 	host := requireRoot(t)
 	testParent(t, "mvtest4")
@@ -301,6 +319,12 @@ func TestDHCPSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ns.delete()
+	// Its strictest form, whatever this host sets.
+	if err := inNamespace(ns.fd, func() error {
+		return os.WriteFile("/proc/sys/net/ipv4/conf/all/rp_filter", []byte("1"), 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := setupInterface(host, ns, spec, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -359,6 +383,32 @@ func TestDHCPSocket(t *testing.T) {
 	a.IP = "10.92.0.1" // the server's own address
 	if _, err := setAddress(host, ns, spec, a, nil); !isCode(err, CodeIPInUse) {
 		t.Fatalf("expected ip_in_use, got %v", err)
+	}
+
+	// At a factory address without a router the camera keeps asking, and
+	// still hears a server of another subnet; the lease's router is gone.
+	factory := &AddressSpec{ID: spec.ID, IP: "192.168.5.190", Prefix: 24}
+	if _, err := setAddress(host, ns, spec, factory, nil); err != nil {
+		t.Fatal(err)
+	}
+	nh, err := netlink.NewHandleAt(ns.fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nh.Close()
+	routes, _ := nh.RouteList(nil, netlink.FAMILY_V4)
+	for _, r := range routes {
+		if isDefault(r.Dst) && r.Gw != nil {
+			t.Fatalf("the previous router is still the default route: %+v", r)
+		}
+	}
+	if _, err := server.WriteTo([]byte("offer2"), &net.UDPAddr{IP: net.IPv4bcast, Port: 68}); err != nil {
+		t.Fatal(err)
+	}
+	_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err = pc.ReadFrom(buf)
+	if err != nil || string(buf[:n]) != "offer2" {
+		t.Fatalf("at the factory address the camera got %q: %v", buf[:n], err)
 	}
 }
 
