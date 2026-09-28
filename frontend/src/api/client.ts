@@ -38,6 +38,12 @@ export type JobStatus = Job["status"];
 export type JobDetail = Schemas["JobDetail"];
 export type JobEvent = Schemas["JobEvent"];
 export type JobPage = Schemas["JobPage"];
+export type Point = Schemas["Point"];
+export type Rule = Schemas["Rule"];
+export type RuleInput = Schemas["RuleInput"];
+export type Trigger = Schemas["Trigger"];
+export type TriggerInput = Schemas["TriggerInput"];
+export type ManualEvent = Schemas["ManualEvent"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.

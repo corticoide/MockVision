@@ -1,16 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { type ComponentType, useEffect } from "react";
+import { type ComponentType, lazy, Suspense, useEffect } from "react";
 import { errorMessage } from "@/api/client";
 import { startLive, stopLive } from "@/api/live";
 import { useMe } from "@/api/queries";
 import { Layout, Logo } from "@/components/Layout";
 import { Toaster } from "@/components/toast";
-import { Notice } from "@/components/ui/card";
+import { Empty, Notice } from "@/components/ui/card";
 import { useT } from "@/lib/i18n";
 import { usePath } from "@/lib/router";
 import { AssetsPage } from "@/pages/Assets";
 import { AuditPage } from "@/pages/Audit";
-import { CameraPage } from "@/pages/camera/CameraPage";
 import { CamerasPage } from "@/pages/Cameras";
 import { DashboardPage } from "@/pages/Dashboard";
 import { EventsPage } from "@/pages/Events";
@@ -19,6 +18,9 @@ import { LoginPage } from "@/pages/Login";
 import { ProfilesPage } from "@/pages/Profiles";
 import { SettingsPage } from "@/pages/Settings";
 import { TargetsPage } from "@/pages/Targets";
+
+// The camera page and its editors load the first time a camera is opened.
+const CameraPage = lazy(() => import("@/pages/camera/CameraPage").then((m) => ({ default: m.CameraPage })));
 
 const pages: Record<string, ComponentType> = {
   "/": DashboardPage,
@@ -80,7 +82,13 @@ function Routes() {
   const t = useT();
   const path = usePath().replace(/\/+$/, "") || "/";
   const camera = /^\/cameras\/([^/]+)(?:\/([^/]+))?$/.exec(path);
-  if (camera) return <CameraPage id={decodeURIComponent(camera[1])} tab={camera[2]} />;
+  if (camera) {
+    return (
+      <Suspense fallback={<Empty title={t("Loading camera…")} />}>
+        <CameraPage id={decodeURIComponent(camera[1])} tab={camera[2]} />
+      </Suspense>
+    );
+  }
   const Page = pages[path];
   if (!Page) return <Notice tone="warn">{t("Page not found: {path}", { path })}</Notice>;
   return <Page />;

@@ -17,7 +17,10 @@ import {
   type Job,
   type JobDetail,
   type JobPage,
+  type ManualEvent,
+  type RuleInput,
   type Settings,
+  type TriggerInput,
   type TargetInput,
   type TokenInput,
   type UpdateCamera,
@@ -300,17 +303,40 @@ export function usePatchConfig(id: string) {
   });
 }
 
+/** A manual trigger: the camera emits the event and delivers it. */
 export function useTrigger() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { id: string; type: string; direction?: "A->B" | "B->A" | "none" }) =>
-      unwrap(
-        await api.POST("/cameras/{id}/events", {
-          params: { path: { id: v.id } },
-          body: { type: v.type, direction: v.direction },
-        }),
-      ),
+    mutationFn: async ({ id, ...body }: ManualEvent & { id: string }) =>
+      unwrap(await api.POST("/cameras/{id}/events", { params: { path: { id } }, body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["events"] }),
+  });
+}
+
+/** Emits one event of a stored trigger now, enabled or not. */
+export function useFireTrigger() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; trigger: string }) =>
+      unwrap(await api.POST("/cameras/{id}/triggers/{trigger}/actions/fire", { params: { path: { id: v.id, trigger: v.trigger } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["events"] }),
+  });
+}
+
+export function useSetCameraRules(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (rules: RuleInput[]) => unwrap(await api.PUT("/cameras/{id}/rules", { params: { path: { id } }, body: { rules } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
+  });
+}
+
+export function useSetCameraTriggers(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (triggers: TriggerInput[]) =>
+      unwrap(await api.PUT("/cameras/{id}/triggers", { params: { path: { id } }, body: { triggers } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
   });
 }
 
