@@ -12,6 +12,7 @@ import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { useT } from "@/lib/i18n";
 import { Link, navigate } from "@/lib/router";
 import { cameraIP } from "@/lib/network";
+import { reasonDetail, reasonText } from "@/lib/reasons";
 import { ConfigTab } from "./ConfigTab";
 import { CloneDialog, ResetDialog } from "./dialogs";
 import { GeneralTab } from "./GeneralTab";
@@ -58,7 +59,10 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
       {pending.length > 0 && <PendingRestart camera={camera} />}
       {camera.status.state === "error" && camera.status.reason && (
         <div className="mb-3">
-          <Notice tone="error">{camera.status.reason}</Notice>
+          <Notice tone="error">
+            {reasonText(camera.status, t)}
+            {reasonDetail(camera.status) && <span className="mt-1 block font-mono text-xs opacity-80">{reasonDetail(camera.status)}</span>}
+          </Notice>
         </div>
       )}
       <Tabs
@@ -104,7 +108,7 @@ function Header({ camera }: { camera: Camera }) {
         <div className="min-w-0">
           <div className="flex items-center gap-3">
             <h1 className="truncate text-lg font-semibold tracking-tight">{camera.name}</h1>
-            <StateBadge state={state} reason={camera.status.reason} />
+            <StateBadge state={state} reason={reasonText(camera.status, t)} />
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
             <span>
@@ -190,7 +194,7 @@ function PendingRestart({ camera }: { camera: Camera }) {
       <Notice tone="warn">
         <div className="flex items-center justify-between gap-4">
           <span>
-            {t("Saved changes to the {what} apply when the camera restarts (RN-09); it keeps running with the previous ones.", { what })}
+            {t("Saved changes to the {what} apply when the camera restarts; it keeps running with the previous ones.", { what })}
           </span>
           <Button
             size="sm"

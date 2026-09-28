@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 )
+
+// MaxDNS is how many DNS servers a camera uses, as a resolv.conf holds.
+const MaxDNS = 3
 
 // NetMode is how a camera attaches to the physical network.
 type NetMode string
@@ -127,8 +131,8 @@ func MaskToPrefix(mask string) (int, error) {
 		return 0, fmt.Errorf("empty netmask")
 	}
 	if !strings.Contains(mask, ".") {
-		var n int
-		if _, err := fmt.Sscanf(mask, "%d", &n); err != nil || n < 0 || n > 32 {
+		n, err := strconv.Atoi(mask)
+		if err != nil || n < 0 || n > 32 {
 			return 0, fmt.Errorf("invalid prefix length %q", mask)
 		}
 		return n, nil
@@ -142,6 +146,16 @@ func MaskToPrefix(mask string) (int, error) {
 		return 0, fmt.Errorf("netmask %q is not contiguous", mask)
 	}
 	return ones, nil
+}
+
+// GatewayIn returns gw when it is an IPv4 address inside ip/prefix other
+// than ip itself: a router a camera can use.
+func GatewayIn(ip netip.Addr, prefix int, gw string) (netip.Addr, bool) {
+	g, err := netip.ParseAddr(gw)
+	if err != nil || !g.Is4() || g == ip || !netip.PrefixFrom(ip, prefix).Masked().Contains(g) {
+		return netip.Addr{}, false
+	}
+	return g, true
 }
 
 // PrefixToMask converts a prefix length into a dotted netmask.

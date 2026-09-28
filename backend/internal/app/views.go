@@ -36,7 +36,11 @@ type NetworkView struct {
 
 // StatusView is the runtime state of a camera.
 type StatusView struct {
-	State         string     `json:"state"`
+	State string `json:"state"`
+	// ReasonCode is a stable word for the reason (ip_in_use,
+	// dhcp_waiting…) the panel explains in the user's language; Reason is
+	// the detail, in English.
+	ReasonCode    string     `json:"reason_code,omitempty"`
 	Reason        string     `json:"reason"`
 	StartedAt     *time.Time `json:"started_at"`
 	LastHeartbeat *time.Time `json:"last_heartbeat"`

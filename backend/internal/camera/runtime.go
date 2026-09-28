@@ -76,6 +76,7 @@ type Runtime struct {
 	accounts  accountStore
 
 	dhcp *dhcpClient
+	dns  dnsServers
 
 	mu         sync.Mutex
 	running    []*runningEngine
@@ -299,9 +300,10 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	r.model = profile.NewModel(doc)
 	r.identity = cfg.Identity
 	r.accounts.set(cfg.Users)
-	if len(cfg.DNS) > 0 {
-		net.DefaultResolver = resolverFor(cfg.DNS)
-	}
+	// Installed before any engine runs, so nothing reads the default
+	// resolver while it changes; later changes go through r.dns.
+	r.dns.set(cfg.DNS)
+	net.DefaultResolver = r.dns.resolver()
 	r.state = newStateStore(r.model, cfg.State, func(changes []engine.Change) {
 		if err := r.conn.Notify(ipc.TypeStateChanged, ipc.StateChanged{Changes: changes}); err != nil {
 			r.log.Warn("cannot report state change", "error", err)
@@ -477,7 +479,10 @@ func (r *Runtime) reload(rl *ipc.Reload) error {
 		r.state.replace(rl.State)
 	}
 	if rl.Targets != nil {
-		r.events.setTargets(rl.Targets)
+		r.events.setTargets(*rl.Targets)
+	}
+	if len(rl.DNS) > 0 {
+		r.dns.set(rl.DNS)
 	}
 	if rl.Users != nil {
 		r.accounts.set(rl.Users)

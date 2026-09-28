@@ -194,7 +194,7 @@ func (s *Service) NodeHistory(since time.Time) []telemetry.NodeSample {
 // cameras hang from; in local mode they answer on the loopback.
 func (s *Service) measureInterface(ctx context.Context) {
 	iface := "lo"
-	if s.rt.Kind() != "local" {
+	if s.rt.Kind() != netctl.KindLocal {
 		iface = s.defaultParent(ctx)
 	}
 	s.node.SetInterface(iface)

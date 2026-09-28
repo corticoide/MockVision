@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 )
@@ -83,7 +84,7 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 		set.MaxCPUPercent = *p.MaxCPUPercent
 	}
 	if p.ParentInterface != nil {
-		if *p.ParentInterface != "" && s.rt.Kind() == "netns" {
+		if *p.ParentInterface != "" && s.rt.Kind() == netctl.KindNetns {
 			info, _ := nodeInfo()
 			if _, ok := info.Lookup(*p.ParentInterface); !ok {
 				v.Add("parent_interface", "interface %s does not exist on this node", *p.ParentInterface)
@@ -111,6 +112,14 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 	}
 	if p.NodeBridge != nil {
 		set.NodeBridge = *p.NodeBridge
+	}
+	// A new default network card or a bridge must not put cameras where
+	// the kernel or an access point cannot take them.
+	if s.rt.Kind() == netctl.KindNetns && v.Err() == nil &&
+		(set.ParentInterface != before.ParentInterface || (set.NodeBridge && !before.NodeBridge)) {
+		if err := s.checkNetworkSettings(ctx, set, v); err != nil {
+			return before, err
+		}
 	}
 	if err := v.Err(); err != nil {
 		return before, err
@@ -179,7 +188,7 @@ func (s *Service) admitStart(ctx context.Context) error {
 	return domain.AdmitStart(s.Settings(ctx).limits(), usage, s.cameraCost())
 }
 
-// errorIs is a small helper for store lookups.
+// notFound reports whether a store lookup found nothing.
 func notFound(err error) bool {
 	return errors.Is(store.NotFound(err), domain.ErrNotFound)
 }

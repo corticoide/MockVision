@@ -3,6 +3,7 @@ package pkg
 import (
 	"archive/zip"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,10 +49,16 @@ func TestPackageRoundTrip(t *testing.T) {
 	}
 	// Remove the leftover key so the schema stays valid.
 	prof = removeBlock(prof, "          x-removed: |")
-	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
-	os.WriteFile(filepath.Join(dir, "profile.yaml"), []byte(prof), 0o644)
-	os.WriteFile(filepath.Join(dir, "templates", "info.json.tmpl"), []byte(`{"serialNumber": {{ json .Camera.Serial }}}`), 0o644)
-	os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("format: 1\nkind: profile\nid: milesight/demo\nversion: 0.2.0\nprovenance: { source: documented }\n"), 0o644)
+	for _, err := range []error{
+		os.MkdirAll(filepath.Join(dir, "templates"), 0o755),
+		os.WriteFile(filepath.Join(dir, "profile.yaml"), []byte(prof), 0o644),
+		os.WriteFile(filepath.Join(dir, "templates", "info.json.tmpl"), []byte(`{"serialNumber": {{ json .Camera.Serial }}}`), 0o644),
+		os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("format: 1\nkind: profile\nid: milesight/demo\nversion: 0.2.0\nprovenance: { source: documented }\n"), 0o644),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	data, err := Build(dir)
 	if err != nil {
@@ -80,7 +87,7 @@ func TestUnsafePaths(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, _ := zw.Create("../evil.yaml")
-	w.Write([]byte("x: 1"))
+	_, _ = w.Write([]byte("x: 1"))
 	zw.Close()
 	res := Inspect(buf.Bytes(), "evil.mvpkg", engines.Builtin())
 	if res.Report.OK() || !hasProblem(res.Report, profile.StepIntegrity, "unsafe path") {
@@ -131,14 +138,12 @@ func rezip(t *testing.T, data []byte, name string, content []byte) []byte {
 	for _, f := range zr.File {
 		w, _ := zw.Create(f.Name)
 		if f.Name == name {
-			w.Write(content)
+			_, _ = w.Write(content)
 			continue
 		}
 		rc, _ := f.Open()
-		b := new(bytes.Buffer)
-		b.ReadFrom(rc)
+		_, _ = io.Copy(w, rc)
 		rc.Close()
-		w.Write(b.Bytes())
 	}
 	zw.Close()
 	return buf.Bytes()

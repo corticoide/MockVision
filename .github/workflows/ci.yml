@@ -28,6 +28,8 @@ jobs:
         run: make frontend
       - name: Unit tests
         run: make test
+      - name: Lint
+        run: make lint
       - name: Known vulnerabilities in Go dependencies
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Known vulnerabilities in panel dependencies

@@ -158,7 +158,7 @@ func TestCameraEndToEnd(t *testing.T) {
 	svcSide, camSide := net.Pipe()
 	svc := &fakeService{msgs: map[string][]*ipc.Envelope{}, got: make(chan *ipc.Envelope, 64)}
 	svc.conn = ipc.NewConn(svcSide, svc.handle, nil)
-	go svc.conn.Run(ctx)
+	go func() { _ = svc.conn.Run(ctx) }()
 
 	rt := NewRuntime(Options{CameraID: "cam1", IPC: camSide, Local: true})
 	runDone := make(chan error, 1)
@@ -326,6 +326,26 @@ func TestCameraEndToEnd(t *testing.T) {
 		}
 		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "line_crossing"}, nil); err == nil {
 			t.Fatal("min_interval must rate limit a second event")
+		}
+	})
+
+	t.Run("reload without targets", func(t *testing.T) {
+		// An empty list reaches the camera: it must stop delivering.
+		if err := svc.conn.Request(ctx, ipc.TypeReload, ipc.Reload{Targets: &[]ipc.Target{}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		rt.events.mu.Lock()
+		n := len(rt.events.targets)
+		rt.events.mu.Unlock()
+		if n != 0 {
+			t.Fatalf("%d targets left after reloading none", n)
+		}
+		// DNS servers change in place.
+		if err := svc.conn.Request(ctx, ipc.TypeReload, ipc.Reload{DNS: []string{"10.0.0.53"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if l := rt.dns.list.Load(); l == nil || len(*l) != 1 || (*l)[0] != "10.0.0.53" {
+			t.Fatalf("DNS servers %v", l)
 		}
 	})
 

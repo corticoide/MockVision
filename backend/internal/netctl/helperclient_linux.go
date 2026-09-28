@@ -43,7 +43,7 @@ func NewHelperRuntime(f *os.File, log *slog.Logger) (*HelperRuntime, error) {
 }
 
 // Kind implements Runtime.
-func (r *HelperRuntime) Kind() string { return "netns" }
+func (r *HelperRuntime) Kind() string { return KindNetns }
 
 // Exits implements Runtime.
 func (r *HelperRuntime) Exits() <-chan Exit { return r.exits }

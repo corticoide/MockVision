@@ -12,6 +12,7 @@ import (
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
@@ -135,13 +136,8 @@ func (s *Service) SetCameraUsers(ctx context.Context, actor Actor, id string, in
 		if err := q.DeleteCameraUsers(ctx, id); err != nil {
 			return err
 		}
-		for _, u := range users {
-			if err := q.InsertCameraUser(ctx, db.InsertCameraUserParams{
-				ID: ulid.Make().String(), CameraID: id, Username: u.Username,
-				PasswordEnc: s.box.Seal([]byte(u.Password), "camera_users:"+id+":"+u.Username), Role: u.Role,
-			}); err != nil {
-				return err
-			}
+		if err := s.insertUsers(ctx, q, id, users); err != nil {
+			return err
 		}
 		return s.touchCamera(ctx, q, id)
 	})
@@ -153,15 +149,11 @@ func (s *Service) SetCameraUsers(ctx context.Context, actor Actor, id string, in
 		audit[i] = map[string]string{"username": u.Username, "role": u.Role}
 	}
 	s.audit(ctx, actor, "camera.users", "camera", id, map[string]any{"users": audit, "passwords_set": changed})
-	if ss := s.session(id); ss != nil && ss.active() {
-		accounts := make([]engine.User, len(users))
-		for i, u := range users {
-			accounts[i] = engine.User{Username: u.Username, Password: u.Password, Role: u.Role}
-		}
-		if err := ss.conn().Request(ctx, ipc.TypeReload, ipc.Reload{Users: accounts}, nil); err != nil {
-			s.log.Warn("the camera did not reload its accounts", "camera", id, "error", err)
-		}
+	accounts := make([]engine.User, len(users))
+	for i, u := range users {
+		accounts[i] = engine.User{Username: u.Username, Password: u.Password, Role: u.Role}
 	}
+	s.tellCamera(ctx, id, ipc.TypeReload, ipc.Reload{Users: accounts})
 	return s.publishCamera(ctx, id)
 }
 
@@ -346,13 +338,9 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 	for _, k := range profile.SortedKeys(coerced) {
 		changes = append(changes, engine.Change{Key: k, Value: coerced[k], Bind: b.doc.State[k].Bind, Origin: origin})
 	}
-	now := time.Now().UnixMilli()
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
-		for _, c := range changes {
-			raw, _ := json.Marshal(c.Value)
-			if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: c.Key, ValueJson: string(raw), Origin: "panel", UpdatedAt: now}); err != nil {
-				return err
-			}
+		if err := upsertChanges(ctx, q, id, changes, "panel"); err != nil {
+			return err
 		}
 		if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: name, AssetID: asset.ID, RenditionID: store.NullString(rend.ID)}); err != nil {
 			return err
@@ -365,11 +353,7 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 	s.audit(ctx, actor, "camera.stream", "camera", id, map[string]any{"stream": name, "asset_id": asset.ID, "values": coerced})
 	if len(coerced) > 0 {
 		// The emulated API reports the new values right away.
-		if ss := s.session(id); ss != nil && ss.active() {
-			if err := ss.conn().Request(ctx, ipc.TypeStateSet, ipc.StateSet{Values: coerced, Origin: origin}, nil); err != nil {
-				s.log.Warn("could not apply stream settings to the running camera", "camera", id, "error", err)
-			}
-		}
+		s.tellCamera(ctx, id, ipc.TypeStateSet, ipc.StateSet{Values: coerced, Origin: origin})
 		s.pub.Publish("camera:"+id, "config", changes)
 	}
 	s.regenerateStreamsLater(id)
@@ -407,7 +391,7 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 	var netw *resolvedNetwork
 	if scope == ResetFull {
 		f := b.doc.Identity.Factory.Network
-		if s.rt.Kind() == "netns" && f.IP == "" {
+		if s.rt.Kind() == netctl.KindNetns && f.IP == "" {
 			return nil, domain.Invalid("scope", "profile %s has no factory address", b.prof.ProfileID)
 		}
 		force := false
@@ -444,13 +428,8 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 		if err := q.DeleteCameraUsers(ctx, id); err != nil {
 			return err
 		}
-		for _, u := range users {
-			if err := q.InsertCameraUser(ctx, db.InsertCameraUserParams{
-				ID: ulid.Make().String(), CameraID: id, Username: u.Username,
-				PasswordEnc: s.box.Seal([]byte(u.Password), "camera_users:"+id+":"+u.Username), Role: u.Role,
-			}); err != nil {
-				return err
-			}
+		if err := s.insertUsers(ctx, q, id, users); err != nil {
+			return err
 		}
 		for key, port := range ports {
 			if err := q.UpdateCameraProtocol(ctx, db.UpdateCameraProtocolParams{CameraID: id, EngineKey: key, Enabled: 1, Port: port}); err != nil {
@@ -458,10 +437,7 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 			}
 		}
 		if netw != nil {
-			if err := q.UpdateCameraNetwork(ctx, db.UpdateCameraNetworkParams{
-				CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode, Ip: netw.ip,
-				Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: "[]",
-			}); err != nil {
+			if err := q.UpdateCameraNetwork(ctx, networkUpdate(id, *netw)); err != nil {
 				return err
 			}
 		}
@@ -505,17 +481,7 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 	}
 	id := ulid.Make().String()
 	in.Network.DefaultMAC = in.Network.MAC == ""
-	if in.Network.Mode == "" {
-		in.Network.Mode = b.net.Mode
-	}
-	if in.Network.IPMode == "" {
-		in.Network.IPMode = b.net.IpMode
-	}
-	if in.Network.Force == nil {
-		f := store.Bool(b.net.Force)
-		in.Network.Force = &f
-	}
-	netw, err := s.resolveNetwork(ctx, id, b.doc, in.Network)
+	netw, err := s.resolveNetwork(ctx, id, b.doc, in.Network.withDefaults(b.net))
 	if err != nil {
 		return nil, err
 	}
@@ -525,60 +491,21 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 	if err := s.admitCreate(ctx); err != nil {
 		return nil, err
 	}
-	type account struct{ username, password, role string }
-	accounts := make([]account, 0, len(b.users))
+	users := make([]domain.CameraUser, 0, len(b.users))
 	for _, u := range b.users {
 		pw, err := s.box.Open(u.PasswordEnc, "camera_users:"+srcID+":"+u.Username)
 		if err != nil {
 			return nil, fmt.Errorf("cannot decrypt the password of %s: %w", u.Username, err)
 		}
-		accounts = append(accounts, account{u.Username, string(pw), u.Role})
+		users = append(users, domain.CameraUser{Username: u.Username, Password: string(pw), Role: u.Role})
 	}
-	now := time.Now()
-	err = s.store.Tx(ctx, func(q *db.Queries) error {
-		if err := q.InsertCamera(ctx, db.InsertCameraParams{
+	now := time.Now().UnixMilli()
+	err = s.insertCamera(ctx, newCamera{
+		row: db.InsertCameraParams{
 			ID: id, Name: in.Name, ProfileID: b.prof.ProfileID, ProfileVersion: b.prof.Version, Serial: serialFor(id, b.doc.Identity.Serial),
-			DesiredState: string(domain.DesiredStopped), Autostart: b.cam.Autostart, TagsJson: b.cam.TagsJson,
-			CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli(),
-		}); err != nil {
-			return err
-		}
-		dns, _ := json.Marshal(nonNil(netw.dns))
-		if err := q.InsertCameraNetwork(ctx, db.InsertCameraNetworkParams{
-			CameraID: id, Mode: netw.mode, ParentIf: netw.parent, Mac: netw.mac, IpMode: netw.ipMode,
-			Ip: netw.ip, Netmask: netw.netmask, Gateway: netw.gateway, DnsJson: string(dns), Force: store.Int(netw.force),
-		}); err != nil {
-			return err
-		}
-		for _, st := range b.state {
-			if err := q.UpsertCameraState(ctx, db.UpsertCameraStateParams{CameraID: id, Key: st.Key, ValueJson: st.ValueJson, Origin: st.Origin, UpdatedAt: now.UnixMilli()}); err != nil {
-				return err
-			}
-		}
-		for _, p := range b.protos {
-			if err := q.InsertCameraProtocol(ctx, db.InsertCameraProtocolParams{CameraID: id, EngineKey: p.EngineKey, Enabled: p.Enabled, Port: p.Port, OptionsJson: p.OptionsJson}); err != nil {
-				return err
-			}
-		}
-		for _, a := range accounts {
-			if err := q.InsertCameraUser(ctx, db.InsertCameraUserParams{
-				ID: ulid.Make().String(), CameraID: id, Username: a.username,
-				PasswordEnc: s.box.Seal([]byte(a.password), "camera_users:"+id+":"+a.username), Role: a.role,
-			}); err != nil {
-				return err
-			}
-		}
-		for _, st := range b.streams {
-			if err := q.UpsertCameraStream(ctx, db.UpsertCameraStreamParams{CameraID: id, Stream: st.Stream, AssetID: st.AssetID, RenditionID: st.RenditionID}); err != nil {
-				return err
-			}
-		}
-		for _, t := range b.targets {
-			if err := q.InsertCameraTarget(ctx, db.InsertCameraTargetParams{CameraID: id, TargetID: t.ID, EventTypesJson: t.EventTypesJson, OverridesJson: t.OverridesJson}); err != nil {
-				return err
-			}
-		}
-		return q.UpsertCameraStatus(ctx, db.UpsertCameraStatusParams{CameraID: id, ActualState: string(domain.StateStopped), UpdatedAt: now.UnixMilli()})
+			DesiredState: string(domain.DesiredStopped), Autostart: b.cam.Autostart, TagsJson: b.cam.TagsJson, CreatedAt: now, UpdatedAt: now,
+		},
+		netw: netw, state: b.state, protos: b.protos, users: users, streams: b.streams, targets: b.targets,
 	})
 	if err != nil {
 		if store.IsUnique(err) {

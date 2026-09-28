@@ -101,6 +101,7 @@ type CameraStatus struct {
 	UpdatedAt     int64
 	Ip            string
 	IpSource      string
+	ReasonCode    string
 }
 
 type CameraStream struct {

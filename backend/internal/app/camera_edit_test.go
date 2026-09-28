@@ -55,6 +55,13 @@ func newTestService(t *testing.T) *Service {
 // newTestServiceWith is newTestService with another FFmpeg binary.
 func newTestServiceWith(t *testing.T, ffmpeg string) *Service {
 	t.Helper()
+	return newTestServiceRuntime(t, ffmpeg, nil)
+}
+
+// newTestServiceRuntime is newTestService whose runtime wrap replaces,
+// from the start: the background loops use it at once.
+func newTestServiceRuntime(t *testing.T, ffmpeg string, wrap func(netctl.Runtime) netctl.Runtime) *Service {
+	t.Helper()
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -66,7 +73,11 @@ func newTestServiceWith(t *testing.T, ffmpeg string) *Service {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rt := netctl.NewLocalRuntime(testExe, log)
-	svc, err := New(Options{DataDir: dir, FFmpeg: ffmpeg, Exe: testExe, Runtime: rt, Log: log}, st, nil)
+	var runtime netctl.Runtime = rt
+	if wrap != nil {
+		runtime = wrap(rt)
+	}
+	svc, err := New(Options{DataDir: dir, FFmpeg: ffmpeg, Exe: testExe, Runtime: runtime, Log: log}, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,8 +405,7 @@ func TestResetAndCloneCamera(t *testing.T) {
 	}
 
 	// A reset reboots a running camera, which then takes the factory account.
-	v, err = svc.ResetCamera(ctx, testActor, clone.ID, ResetFull)
-	if err != nil {
+	if _, err := svc.ResetCamera(ctx, testActor, clone.ID, ResetFull); err != nil {
 		t.Fatal(err)
 	}
 	v = waitState(t, svc, clone.ID, domain.StateRunning)
@@ -423,3 +433,38 @@ func paramValue(t *testing.T, svc *Service, id, key string) any {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// What changes while a camera starts reaches it once it runs: the process
+// is configured with the camera as it is by then, not as it was when the
+// start was asked (B-04). Encodings are slowed down so the change lands
+// while the camera provisions.
+func TestChangesWhileStartingReachTheCamera(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no shell")
+	}
+	slow := filepath.Join(t.TempDir(), "slow-ffmpeg")
+	script := "#!/bin/sh\ncase \"$*\" in *libx264*) sleep 2;; esac\nexec ffmpeg \"$@\"\n"
+	if err := os.WriteFile(slow, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := newTestServiceWith(t, slow)
+	ctx := context.Background()
+	cam := createCamera(t, svc, "Early", false)
+	if _, err := svc.StartCamera(ctx, testActor, cam.ID); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := svc.GetCamera(ctx, cam.ID); v.Status.State == string(domain.StateRunning) {
+		t.Fatal("the camera ran before its first encoding")
+	}
+	if _, err := svc.SetCameraUsers(ctx, testActor, cam.ID, []UserInput{{Username: "admin", Password: "early-pass", Role: "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+	running := waitState(t, svc, cam.ID, domain.StateRunning)
+	base := httpBase(t, running)
+	if code, _ := digestGet(t, base+"/snapshot.cgi", "admin", "early-pass"); code != http.StatusOK {
+		t.Fatalf("the password set while the camera started: %d", code)
+	}
+	if code, _ := digestGet(t, base+"/snapshot.cgi", "admin", "ms1234"); code != http.StatusUnauthorized {
+		t.Fatalf("the factory password is still accepted: %d", code)
+	}
+}

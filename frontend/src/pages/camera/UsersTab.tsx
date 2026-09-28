@@ -145,7 +145,7 @@ export function UsersTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note={t("At least one admin (RN-11). Changes apply at once; clients re-authenticate with the new passwords.")}
+          note={t("At least one admin. Changes apply at once; clients re-authenticate with the new passwords.")}
         />
       </div>
     </Card>

@@ -18,6 +18,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/buildinfo"
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
+	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -268,7 +269,7 @@ func (s *Service) testFromNode(ctx context.Context, name string, t engine.Target
 		req.SetBasicAuth(t.Username, t.Password)
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	if s.rt.Kind() != "local" {
+	if s.rt.Kind() != netctl.KindLocal {
 		// Checked on the address actually dialed, after name resolution,
 		// so a name that resolves to the node is refused too.
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {

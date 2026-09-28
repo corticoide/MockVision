@@ -17,6 +17,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/vishvananda/netns"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 )
 
@@ -438,8 +439,8 @@ func (h *Helper) setBridge(req *BridgeSpec) (BridgeState, error) {
 		h.attachBridgeLocked(cp)
 		cp.op.Unlock()
 	}
-	h.opts.Log.Info("bridge created", "interface", bridgeName, "parent", req.Parent)
-	return BridgeState{Enabled: true, Interface: bridgeName, Parent: req.Parent}, nil
+	h.opts.Log.Info("bridge created", "interface", bridgeName, "parent", req.Parent, "node_ips", b.addrs())
+	return BridgeState{Enabled: true, Interface: bridgeName, Parent: req.Parent, NodeIPs: b.addrs()}, nil
 }
 
 // attachBridge routes a new camera through the bridge, if there is one.
@@ -456,7 +457,7 @@ func (h *Helper) attachBridgeLocked(cp *camProc) {
 	h.mu.Lock()
 	b, ns, ip, gone := h.bridge, cp.ns, cp.addr, cp.deleting
 	h.mu.Unlock()
-	if b == nil || gone || ns == nil || !ip.IsValid() || cp.spec.Mode != "macvlan" || cp.spec.Parent != b.parent {
+	if b == nil || gone || ns == nil || !ip.IsValid() || cp.spec.Mode != string(domain.NetMacvlan) || cp.spec.Parent != b.parent {
 		return
 	}
 	if err := b.attach(h.host, ns, ip); err != nil {

@@ -17,13 +17,14 @@ import (
 // fakeDHCP answers on loopback like a DHCP server: it offers from a pool
 // and acks requests, or naks them once told to.
 type fakeDHCP struct {
-	t     *testing.T
-	conn  *net.UDPConn
-	mu    sync.Mutex
-	pool  []string
-	lease time.Duration
-	nak   bool
-	got   []dhcpv4.MessageType
+	t      *testing.T
+	conn   *net.UDPConn
+	mu     sync.Mutex
+	pool   []string
+	lease  time.Duration
+	router string
+	nak    bool
+	got    []dhcpv4.MessageType
 }
 
 func newFakeDHCP(t *testing.T, pool ...string) *fakeDHCP {
@@ -31,7 +32,7 @@ func newFakeDHCP(t *testing.T, pool ...string) *fakeDHCP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeDHCP{t: t, conn: c, pool: pool, lease: time.Hour}
+	f := &fakeDHCP{t: t, conn: c, pool: pool, lease: time.Hour, router: "10.0.0.1"}
 	t.Cleanup(func() { c.Close() })
 	go f.serve()
 	return f
@@ -50,7 +51,7 @@ func (f *fakeDHCP) serve() {
 		}
 		f.mu.Lock()
 		f.got = append(f.got, req.MessageType())
-		ip, lease, nak := f.pool[0], f.lease, f.nak
+		ip, lease, router, nak := f.pool[0], f.lease, f.router, f.nak
 		f.mu.Unlock()
 		var typ dhcpv4.MessageType
 		switch req.MessageType() {
@@ -75,7 +76,7 @@ func (f *fakeDHCP) serve() {
 			dhcpv4.WithMessageType(typ),
 			dhcpv4.WithYourIP(net.ParseIP(ip)),
 			dhcpv4.WithNetmask(net.CIDRMask(24, 32)),
-			dhcpv4.WithRouter(net.ParseIP("10.0.0.1")),
+			dhcpv4.WithRouter(net.ParseIP(router)),
 			dhcpv4.WithDNS(net.ParseIP("10.0.0.53")),
 			dhcpv4.WithLeaseTime(uint32(lease/time.Second)),
 			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(net.IPv4(127, 0, 0, 1))),
@@ -188,6 +189,33 @@ func TestDHCPLeaseDeclineRenewAndRelease(t *testing.T) {
 	}
 	if declines != 2 {
 		t.Fatalf("declines %d: %v", declines, got)
+	}
+}
+
+// A renewal that keeps the address but brings another router is reported,
+// so the service applies it; one that changes nothing is not.
+func TestDHCPRenewalReportsChanges(t *testing.T) {
+	server := newFakeDHCP(t, "10.0.0.60")
+	server.mu.Lock()
+	server.lease = time.Second
+	server.mu.Unlock()
+	c, log := testClient(t, server)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.run(ctx)
+	if l := log.next(t, ipc.TypeDHCPLease).(ipc.Lease); l.IP != "10.0.0.60" || l.Router != "10.0.0.1" {
+		t.Fatalf("lease %+v", l)
+	}
+	select {
+	case typ := <-log.ch:
+		t.Fatalf("a renewal without changes reported %s", typ)
+	case <-time.After(700 * time.Millisecond): // past T1
+	}
+	server.mu.Lock()
+	server.router = "10.0.0.254"
+	server.mu.Unlock()
+	if l := log.next(t, ipc.TypeDHCPLease).(ipc.Lease); l.IP != "10.0.0.60" || l.Router != "10.0.0.254" {
+		t.Fatalf("renewed lease %+v", l)
 	}
 }
 

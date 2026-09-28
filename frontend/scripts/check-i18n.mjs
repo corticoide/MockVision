@@ -1,7 +1,9 @@
 // Checks that every text the panel translates with a literal key, t("…")
-// or plural(t, n, "…", "…"), has its Spanish entry. Keys built at run time
-// (labels looked up from a map) are not seen and must be added by hand, as
-// must texts left out of t() altogether.
+// or plural(t, n, "…", "…"), has its Spanish entry, and that every entry is
+// still used. Keys built at run time (labels looked up from a map) are not
+// seen as missing and must be added by hand, as must texts left out of t()
+// altogether; an entry counts as used when its text is a quoted literal
+// anywhere, the API's enum values in schema.d.ts included.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,7 +13,7 @@ const walk = (dir) => {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) walk(p);
-    else if (/\.(tsx?|mts)$/.test(name) && !name.endsWith(".d.ts") && name !== "i18n.es.ts") files.push(p);
+    else if (/\.(tsx?|mts)$/.test(name) && name !== "i18n.es.ts") files.push(p);
   }
 };
 walk(root);
@@ -24,8 +26,10 @@ const patterns = [
 ];
 const unquote = (s, quote) => (quote === "'" ? JSON.parse(`"${s.replace(/\\'/g, "'").replace(/"/g, '\\"')}"`) : JSON.parse(`"${s}"`));
 const used = new Map();
+const sources = [];
 for (const f of files) {
   const src = readFileSync(f, "utf8");
+  sources.push(src);
   for (const re of patterns) {
     for (const m of src.matchAll(re)) {
       for (let i = 1; i < m.length; i += 2) {
@@ -45,5 +49,8 @@ for (const m of dict.matchAll(new RegExp(String.raw`^\s*(?:` + lit + String.raw`
 
 const missing = [...used].filter(([k]) => !known.has(k));
 for (const [k, f] of missing) console.error(`missing Spanish text for "${k}" (${f})`);
-console.log(`${used.size} texts, ${known.size} Spanish entries, ${missing.length} missing`);
-process.exit(missing.length ? 1 : 0);
+const quoted = (k) => [JSON.stringify(k), `'${k.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`];
+const unused = [...known].filter((k) => !quoted(k).some((q) => sources.some((src) => src.includes(q))));
+for (const k of unused) console.error(`unused Spanish text "${k}"`);
+console.log(`${used.size} texts, ${known.size} Spanish entries, ${missing.length} missing, ${unused.length} unused`);
+process.exit(missing.length || unused.length ? 1 : 0);

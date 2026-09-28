@@ -80,17 +80,14 @@ SELECT * FROM camera_users WHERE camera_id = @camera_id ORDER BY username;
 DELETE FROM camera_users WHERE camera_id = @camera_id;
 
 -- name: UpsertCameraStatus :exec
-INSERT INTO camera_status (camera_id, actual_state, reason, started_at, last_heartbeat, updated_at)
-VALUES (@camera_id, @actual_state, @reason, @started_at, @last_heartbeat, @updated_at)
+INSERT INTO camera_status (camera_id, actual_state, reason_code, reason, started_at, last_heartbeat, updated_at)
+VALUES (@camera_id, @actual_state, @reason_code, @reason, @started_at, @last_heartbeat, @updated_at)
 ON CONFLICT (camera_id) DO UPDATE SET
-  actual_state = excluded.actual_state, reason = excluded.reason, started_at = excluded.started_at,
-  last_heartbeat = excluded.last_heartbeat, updated_at = excluded.updated_at;
+  actual_state = excluded.actual_state, reason_code = excluded.reason_code, reason = excluded.reason,
+  started_at = excluded.started_at, last_heartbeat = excluded.last_heartbeat, updated_at = excluded.updated_at;
 
 -- name: SetCameraAddress :exec
 UPDATE camera_status SET ip = @ip, ip_source = @ip_source WHERE camera_id = @camera_id;
-
--- name: CameraIDByActualIP :one
-SELECT camera_id FROM camera_status WHERE ip = @ip AND camera_id <> @camera_id LIMIT 1;
 
 -- name: GetCameraStatus :one
 SELECT * FROM camera_status WHERE camera_id = @camera_id;
@@ -123,3 +120,25 @@ ORDER BY targets.name;
 
 -- name: CamerasUsingTarget :many
 SELECT camera_id FROM camera_targets WHERE target_id = @target_id;
+
+-- Every camera at once, for the camera list: one query per table instead
+-- of one per camera.
+
+-- name: ListAllCameraState :many
+SELECT * FROM camera_state ORDER BY camera_id, key;
+
+-- name: ListAllCameraProtocols :many
+SELECT * FROM camera_protocols ORDER BY camera_id, engine_key;
+
+-- name: ListAllCameraUsers :many
+SELECT * FROM camera_users ORDER BY camera_id, username;
+
+-- name: ListAllCameraStreams :many
+SELECT * FROM camera_streams ORDER BY camera_id, stream;
+
+-- name: ListAllCameraTargets :many
+SELECT camera_targets.camera_id, camera_targets.event_types_json, camera_targets.overrides_json,
+       targets.id, targets.name, targets.type, targets.config_json, targets.secret_enc, targets.enabled
+FROM camera_targets
+JOIN targets ON targets.id = camera_targets.target_id
+ORDER BY camera_targets.camera_id, targets.name;

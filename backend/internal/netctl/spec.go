@@ -84,7 +84,7 @@ func (f *Firewall) Validate() error {
 	if len(f.Allow) > maxFirewallRules {
 		return fmt.Errorf("too many firewall destinations")
 	}
-	if len(f.DNS) > 3 {
+	if len(f.DNS) > domain.MaxDNS {
 		return fmt.Errorf("too many DNS servers")
 	}
 	for _, d := range f.Allow {
@@ -148,7 +148,10 @@ type BridgeState struct {
 	Enabled   bool   `json:"enabled"`
 	Interface string `json:"interface,omitempty"`
 	Parent    string `json:"parent,omitempty"`
-	Error     string `json:"error,omitempty"`
+	// NodeIPs are the node's addresses on the parent the bridge routes
+	// from; the service sets the bridge again when they change.
+	NodeIPs []string `json:"node_ips,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 var (
@@ -260,9 +263,18 @@ type Exit struct {
 	Signal   string `json:"signal,omitempty"`
 }
 
+// Kinds of runtime.
+const (
+	// KindNetns runs cameras in network namespaces through the helper.
+	KindNetns = "netns"
+	// KindLocal runs cameras as plain processes on 127.0.0.1, for
+	// development without privileges.
+	KindLocal = "local"
+)
+
 // Runtime starts and destroys camera processes.
 type Runtime interface {
-	// Kind is "netns" for the network helper or "local" for development.
+	// Kind is KindNetns or KindLocal.
 	Kind() string
 	Launch(ctx context.Context, spec LaunchSpec) (*Launched, error)
 	// Destroy stops the process and removes the namespace; it is
@@ -282,9 +294,13 @@ type Runtime interface {
 
 // Error codes returned by runtimes.
 const (
-	CodeIPInUse      = "ip_in_use"
-	CodeMACInUse     = "mac_in_use"
-	CodeNoInterface  = "no_interface"
+	CodeIPInUse     = "ip_in_use"
+	CodeMACInUse    = "mac_in_use"
+	CodeNoInterface = "no_interface"
+	// CodeParentBusy: the parent already carries interfaces of the other
+	// kind. The kernel gives a NIC macvlan or ipvlan children, not both,
+	// and the node bridge is a macvlan.
+	CodeParentBusy   = "parent_busy"
 	CodeUnsupported  = "unsupported"
 	CodeInvalid      = "invalid"
 	CodeInternal     = "internal"

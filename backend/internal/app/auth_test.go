@@ -103,6 +103,12 @@ func TestLoginGuardIsNeverEmptiedByFlooding(t *testing.T) {
 func TestLoginRateLimitedPerAddress(t *testing.T) {
 	svc, _ := newBareService(t)
 	adminActor(t, svc)
+	// A frozen clock: slow hashing (the race detector) must not refill
+	// the bucket between attempts.
+	frozen := time.Now()
+	svc.login.mu.Lock()
+	svc.login.now = func() time.Time { return frozen }
+	svc.login.mu.Unlock()
 	var rl *RateLimitError
 	for i := range ipBurst + 1 {
 		_, _, err := svc.Login(context.Background(), fmt.Sprintf("nobody%d", i), "wrong password!", "192.0.2.44", "")

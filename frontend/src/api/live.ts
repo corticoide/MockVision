@@ -235,13 +235,13 @@ export class LiveClient {
   private onCamera(m: Message) {
     switch (m.type) {
       case "status": {
-        const s = m.data as { id: string; state: Camera["status"]["state"]; reason: string };
+        const s = m.data as { id: string; state: Camera["status"]["state"]; reason_code?: string; reason: string };
         let found = false;
         this.qc.setQueryData<Camera[]>(keys.cameras, (list) =>
           list?.map((c) => {
             if (c.id !== s.id) return c;
             found = true;
-            return { ...c, status: { ...c.status, state: s.state, reason: s.reason } };
+            return { ...c, status: { ...c.status, state: s.state, reason_code: s.reason_code, reason: s.reason } };
           }),
         );
         // Endpoints, PIDs and start times arrive with the full camera.

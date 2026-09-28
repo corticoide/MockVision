@@ -16,8 +16,8 @@ func pair(t *testing.T, ha, hb Handler) (*Conn, *Conn) {
 	ca, cb := NewConn(a, ha, nil), NewConn(b, hb, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go ca.Run(ctx)
-	go cb.Run(ctx)
+	go func() { _ = ca.Run(ctx) }()
+	go func() { _ = cb.Run(ctx) }()
 	return ca, cb
 }
 
@@ -75,14 +75,14 @@ func TestOversizedAndBadVersion(t *testing.T) {
 		got <- m.Type
 		return nil, nil
 	}, nil)
-	go conn.Run(context.Background())
+	go func() { _ = conn.Run(context.Background()) }()
 	defer a.Close()
 
 	go func() {
 		w := bufio.NewWriter(a)
-		w.WriteString(`{"v":1,"id":"x","type":"` + strings.Repeat("a", MaxMessageSize) + `"}` + "\n")
-		w.WriteString(`{"v":2,"id":"y","type":"old"}` + "\n")
-		w.WriteString(`{"v":1,"type":"heartbeat"}` + "\n")
+		_, _ = w.WriteString(`{"v":1,"id":"x","type":"` + strings.Repeat("a", MaxMessageSize) + `"}` + "\n")
+		_, _ = w.WriteString(`{"v":2,"id":"y","type":"old"}` + "\n")
+		_, _ = w.WriteString(`{"v":1,"type":"heartbeat"}` + "\n")
 		w.Flush()
 	}()
 	r := bufio.NewReader(a)

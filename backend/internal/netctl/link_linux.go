@@ -84,6 +84,9 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 		if spec.Mode == string(domain.NetIPvlan) && (errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP)) {
 			return res, errorf(CodeUnsupported, "this kernel has no ipvlan support; use macvlan")
 		}
+		if errors.Is(err, unix.EBUSY) {
+			return res, parentBusy(spec.Parent, spec.Mode)
+		}
 		if errors.Is(err, unix.EADDRINUSE) {
 			return res, errorf(CodeMACInUse, "%s", localMACConflict(mac, spec.Parent))
 		}
@@ -148,6 +151,9 @@ func setupInterface(host netns.NsHandle, ns *namespace, spec *CameraSpec, cancel
 		}
 	}
 	if spec.DHCP() {
+		if err := nh.RouteReplace(onLinkDefault(eth.Attrs().Index)); err != nil {
+			return res, fmt.Errorf("on-link default route: %w", err)
+		}
 		return res, nil
 	}
 	warn, err := setAddress(host, ns, spec, &AddressSpec{ID: spec.ID, IP: spec.IP, Prefix: spec.Prefix, Gateway: spec.Gateway, Force: spec.Force}, cancel)
@@ -180,7 +186,20 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 	if err != nil {
 		return nil, err
 	}
-	if !spec.SkipProbe {
+	want := &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(a.Prefix, 32)}
+	addrs, err := nh.AddrList(eth, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, err
+	}
+	// An address the interface already has is the camera's own: a renewal
+	// that changes the prefix or the router is not probed again.
+	held := false
+	for _, old := range addrs {
+		if old.IP.Equal(want.IP) {
+			held = true
+		}
+	}
+	if !spec.SkipProbe && !held {
 		probeNS, probeIf, probeMAC := ns.fd, ifindex, mac
 		if spec.Mode == string(domain.NetIPvlan) {
 			hh, err := netlink.NewHandleAt(host)
@@ -208,11 +227,6 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 			return nil, fmt.Errorf("ARP probe: %w", err)
 		}
 	}
-	want := &net.IPNet{IP: net.IP(ip.AsSlice()), Mask: net.CIDRMask(a.Prefix, 32)}
-	addrs, err := nh.AddrList(eth, netlink.FAMILY_V4)
-	if err != nil {
-		return nil, err
-	}
 	have := false
 	for _, old := range addrs {
 		if old.IPNet.String() == want.String() {
@@ -233,10 +247,18 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 			return nil, fmt.Errorf("default route via %s: %w", a.Gateway, err)
 		}
 	} else if routes, err := nh.RouteList(eth, netlink.FAMILY_V4); err == nil {
+		// A lease without a router drops the previous one's route; a DHCP
+		// camera keeps its on-link one.
 		for _, r := range routes {
-			if r.Dst == nil && r.Gw != nil {
+			if isDefault(r.Dst) && r.Gw != nil {
 				_ = nh.RouteDel(&r)
 			}
+		}
+	}
+	if spec.DHCP() {
+		// Deleting the interface's last address flushed its routes.
+		if err := nh.RouteReplace(onLinkDefault(ifindex)); err != nil {
+			return nil, fmt.Errorf("on-link default route: %w", err)
 		}
 	}
 	if err := announce(ns.fd, ifindex, mac, ip); err != nil {
@@ -255,6 +277,46 @@ func setAddress(host netns.NsHandle, ns *namespace, spec *CameraSpec, a *Address
 		}()
 	}
 	return warnings, nil
+}
+
+// onLinkMetric ranks a DHCP camera's on-link default route below any
+// router's.
+const onLinkMetric = 0xffff
+
+// onLinkDefault is the default route through the camera's interface that
+// a DHCP camera keeps. Where reverse path filtering is on, as Ubuntu and
+// Debian set it and new namespaces inherit it, the kernel drops a packet
+// from a source it has no route back to: without an address, or at a
+// factory address without a router, the camera would never hear the DHCP
+// server. The route is set over netlink, since containers mount
+// /proc/sys read-only and rp_filter cannot be turned off there.
+func onLinkDefault(ifindex int) *netlink.Route {
+	return &netlink.Route{
+		LinkIndex: ifindex,
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Scope:     netlink.SCOPE_LINK,
+		Priority:  onLinkMetric,
+	}
+}
+
+// isDefault reports whether dst is the IPv4 default route, which the
+// netlink package lists as 0.0.0.0/0.
+func isDefault(dst *net.IPNet) bool {
+	if dst == nil {
+		return true
+	}
+	ones, _ := dst.Mask.Size()
+	return ones == 0 && dst.IP.IsUnspecified()
+}
+
+// parentBusy explains an EBUSY from the kernel: a network card takes
+// macvlan or ipvlan children, not both, and one in a bridge or a bond
+// takes neither.
+func parentBusy(parent, mode string) *Error {
+	if mode == string(domain.NetIPvlan) {
+		return errorf(CodeParentBusy, "%s cannot take an ipvlan interface: it already has macvlan interfaces (cameras or the node bridge), or belongs to a bridge or a bond", parent)
+	}
+	return errorf(CodeParentBusy, "%s cannot take a macvlan interface: it already has ipvlan cameras, or belongs to a bridge or a bond", parent)
 }
 
 // localMACConflict describes a MAC another interface on the parent has.
@@ -331,7 +393,7 @@ func removeLinks(ns *namespace) {
 	}
 	defer nh.Close()
 	links, err := nh.LinkList()
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		return
 	}
 	for _, l := range links {

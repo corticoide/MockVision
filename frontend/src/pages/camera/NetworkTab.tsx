@@ -6,9 +6,11 @@ import { Badge, Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Notice } from "@/components/ui/card";
+import { NetworkModeFields } from "@/components/NetworkModeFields";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
 import { type Translate, useT } from "@/lib/i18n";
+import { defaultParent, isWireless } from "@/lib/network";
 import { Info, isRunning, SaveBar, SectionTitle } from "./parts";
 
 const splitList = (s: string) =>
@@ -93,9 +95,10 @@ export function NetworkTab({ camera }: { camera: Camera }) {
   };
 
   const interfaces = (node?.interfaces ?? []).filter((i) => !i.loopback);
-  const parentName = d.parent || node?.parent_interface || node?.default_interface || "";
-  const parentWireless = interfaces.find((i) => i.name === parentName)?.wireless ?? false;
+  const parentName = d.parent || defaultParent(node);
+  const parentWireless = isWireless(node, parentName);
   const st = camera.status;
+  const savedIpvlan = camera.network.mode === "ipvlan";
 
   return (
     <div className="flex flex-col gap-4">
@@ -116,8 +119,8 @@ export function NetworkTab({ camera }: { camera: Camera }) {
                 )
               }
             />
-            <Info label={t("MAC it answers with")} value={<Mono>{st.mac || (ipvlan ? t("the node's") : camera.network.mac)}</Mono>} />
-            <Info label={t("Mode")} value={camera.network.mode === "ipvlan" ? "ipvlan" : "macvlan"} />
+            <Info label={t("MAC it answers with")} value={<Mono>{st.mac || (savedIpvlan ? t("the node's") : camera.network.mac)}</Mono>} />
+            <Info label={t("Mode")} value={savedIpvlan ? "ipvlan" : "macvlan"} />
             <Info
               label={t("Outbound firewall")}
               value={
@@ -148,49 +151,16 @@ export function NetworkTab({ camera }: { camera: Camera }) {
           </div>
         )}
         <form id="camera-network" onSubmit={submit} className="grid grid-cols-3 gap-x-4 gap-y-3">
-          <Field
-            label={t("Network mode")}
-            error={errors["network.mode"]}
-            hint={
-              ipvlan
-                ? t("ipvlan: the camera uses the node's MAC. For Wi-Fi and switches that allow one MAC per port. No DHCP.")
-                : t("macvlan: the camera has its own MAC, like a real device. For wired networks.")
-            }
-          >
-            <Select
-              value={d.mode}
-              onChange={(e) => form.set({ mode: e.target.value, ipMode: e.target.value === "ipvlan" ? "static" : d.ipMode })}
-              disabled={local}
-            >
-              <option value="macvlan">{t("macvlan — its own MAC (wired)")}</option>
-              <option value="ipvlan">{t("ipvlan — the node's MAC (Wi-Fi)")}</option>
-            </Select>
-          </Field>
-          <Field
-            label={t("Addressing")}
-            error={errors["network.ip_mode"]}
-            hint={
-              dhcp
-                ? profile?.factory_ip
-                  ? t("The camera asks the LAN's DHCP server for an address, like a new camera. If none answers within about 15 s it takes the profile's factory address, {ip}.", {
-                      ip: profile.factory_ip,
-                    })
-                  : t("The camera asks the LAN's DHCP server for an address, like a new camera.")
-                : ipvlan
-                  ? t("ipvlan cameras share the node's MAC, so they need a static IP.")
-                  : t("A fixed address you choose, probed on the LAN before use.")
-            }
-          >
-            <Select value={d.ipMode} onChange={(e) => form.set({ ipMode: e.target.value })} disabled={local}>
-              <option value="static">{t("Static IP")}</option>
-              <option value="dhcp" disabled={ipvlan}>
-                {t("DHCP")}
-              </option>
-            </Select>
-          </Field>
+          <NetworkModeFields
+            value={{ mode: d.mode, ipMode: d.ipMode }}
+            onChange={(next) => form.set(next)}
+            factoryIP={profile?.factory_ip}
+            errors={errors}
+            disabled={local}
+          />
           <Field label={t("Parent interface")} error={errors["network.parent"]} hint={t("The node's network card the camera attaches to.")}>
             <Select value={d.parent} onChange={(e) => form.set({ parent: e.target.value })} disabled={local}>
-              <option value="">{t("Default ({iface})", { iface: node?.parent_interface || node?.default_interface || t("none") })}</option>
+              <option value="">{t("Default ({iface})", { iface: defaultParent(node) || t("none") })}</option>
               {interfaces.map((i) => (
                 <option key={i.name} value={i.name}>
                   {i.name}
@@ -263,7 +233,7 @@ export function NetworkTab({ camera }: { camera: Camera }) {
             form.discard();
             setErrors({});
           }}
-          note={t("Network changes apply when the camera restarts (RN-09). Its IP and MAC are probed on the LAN before use.")}
+          note={t("Network changes apply when the camera restarts. Its IP and MAC are probed on the LAN before use.")}
         />
       </Card>
     </div>
