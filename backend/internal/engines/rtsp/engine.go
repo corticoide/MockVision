@@ -420,7 +420,10 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 // if its SETUP was authorized, or with credentials of its own (audit
 // B13). Like a camera encoder, the stream restarts at a keyframe for the
 // new viewer: H.265 decoders cannot start in the middle of a group of
-// pictures.
+// pictures. The server adds the session to the stream's readers after
+// OnPlay returns, so the stream holds its frames until the response
+// (OnResponse): a frame sent in between would reach the viewer before
+// its keyframe.
 func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
 	sess := stateOf(ctx.Session)
 	sess.mu.Lock()
@@ -440,14 +443,22 @@ func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 			sess.playing = st
 		}
 		sess.mu.Unlock()
-		st.keyframeAt.Store(time.Now().Add(keyframeDelay).UnixNano())
+		st.hold()
+		ctx.Conn.SetUserData(st)
 	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
 
-// keyframeDelay leaves the server time to add a new reader to the stream,
-// right after OnPlay, before the keyframe it asked for goes out.
-const keyframeDelay = 20 * time.Millisecond
+// OnResponse implements gortsplib.ServerHandlerOnResponse. It follows
+// every request of a connection; after a PLAY, the server has added the
+// session to the stream's readers, and the stream goes on from its
+// keyframe.
+func (e *Engine) OnResponse(sc *gortsplib.ServerConn, _ *base.Response) {
+	if st, ok := sc.UserData().(*streamer); ok {
+		sc.SetUserData(nil)
+		st.release()
+	}
+}
 
 // streamer loops a GOP into a server stream at the stream's frame rate.
 type streamer struct {
@@ -458,12 +469,32 @@ type streamer struct {
 	done   chan struct{}
 	once   sync.Once
 
-	// keyframeAt asks for the loop to restart at its keyframe with the
-	// first frame due from then on (Unix nanoseconds, 0 for none).
-	keyframeAt atomic.Int64
+	// mu keeps each frame whole on one side of a hold: a frame goes out
+	// before a PLAY holds the stream, or after the stream is released.
+	mu sync.Mutex
+	// joining counts the PLAY requests being answered; the stream sends
+	// nothing until they are.
+	joining int
+	// restart asks for the loop to start again at its keyframe.
+	restart bool
 	// viewers counts the sessions playing this stream; a stream nobody
 	// plays skips the packetizing work.
 	viewers atomic.Int64
+}
+
+// hold stops the frames while a session joins the stream's readers.
+func (s *streamer) hold() {
+	s.mu.Lock()
+	s.joining++
+	s.mu.Unlock()
+}
+
+// release lets the frames go again, from the keyframe.
+func (s *streamer) release() {
+	s.mu.Lock()
+	s.joining--
+	s.restart = true
+	s.mu.Unlock()
 }
 
 func (s *streamer) stop() {
@@ -510,20 +541,24 @@ func (s *streamer) run(ctx context.Context) {
 		} else if ctx.Err() != nil {
 			return
 		}
-		if at := s.keyframeAt.Load(); at != 0 && due.UnixNano() >= at && s.keyframeAt.CompareAndSwap(at, 0) {
-			i = 0
-		}
-		// Nobody is watching: keep the clock running, skip the work.
-		if s.viewers.Load() > 0 {
-			pkts, err := encode(s.src.AccessUnits[i], i == 0)
-			if err == nil {
-				ts := rtpBase + uint32(n*90000/int64(fps))
-				for _, p := range pkts {
-					p.Timestamp = ts
-					_ = s.stream.WritePacketRTPWithNTP(media, p, due)
+		s.mu.Lock()
+		if s.joining == 0 {
+			if s.restart {
+				s.restart, i = false, 0
+			}
+			// Nobody is watching: keep the clock running, skip the work.
+			if s.viewers.Load() > 0 {
+				pkts, err := encode(s.src.AccessUnits[i], i == 0)
+				if err == nil {
+					ts := rtpBase + uint32(n*90000/int64(fps))
+					for _, p := range pkts {
+						p.Timestamp = ts
+						_ = s.stream.WritePacketRTPWithNTP(media, p, due)
+					}
 				}
 			}
 		}
+		s.mu.Unlock()
 		n++
 		i = (i + 1) % len(s.src.AccessUnits)
 	}
