@@ -8,7 +8,7 @@ import { Card, CardHeader, Empty, Notice } from "@/components/ui/card";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
 import { type Translate, useT } from "@/lib/i18n";
-import { directionLabel, eventLabel, quickEvent, ruleEvents, ruleTypeFor } from "@/lib/vca";
+import { directionLabel, eventLabel, isReport, quickEvent, ruleEvents, ruleTypeFor } from "@/lib/vca";
 import { isRunning, SaveBar } from "./parts";
 
 /** Event types the camera can emit: the profile's, with a transport. */
@@ -49,8 +49,8 @@ export function ManualEventForm({ camera, profile, onSent }: { camera: Camera; p
   const t = useT();
   const trigger = useTrigger();
   const types = emittable(profile).map((e) => e.type);
-  const quick = quickEvent(camera).type;
-  const [type, setType] = useState(types.includes(quick) ? quick : types[0]);
+  const quick = quickEvent(camera)?.type;
+  const [type, setType] = useState(quick && types.includes(quick) ? quick : types[0]);
   const [ruleId, setRuleId] = useState("");
   const [direction, setDirection] = useState("");
   const [objectClass, setObjectClass] = useState("");
@@ -58,8 +58,11 @@ export function ManualEventForm({ camera, profile, onSent }: { camera: Camera; p
   const [speed, setSpeed] = useState("");
   const running = isRunning(camera);
 
-  const kind = ruleTypeFor(type);
+  const kind = ruleTypeFor(type, camera.event_types);
+  const report = isReport(type, camera.event_types);
   const candidates = camera.rules.filter((r) => ruleEvents(r).includes(type));
+  // Events of lines and regions happen on one: without any, none can.
+  const noRule = kind !== "" && !candidates.some((r) => r.enabled);
   const rule = candidates.find((r) => r.id === ruleId);
   const directions = kind !== "line" ? [] : rule && rule.direction !== "both" ? [rule.direction] : ["A->B", "B->A"];
   const classes = rule?.object_classes.length ? rule.object_classes : profile.vca.object_classes;
@@ -105,8 +108,8 @@ export function ManualEventForm({ camera, profile, onSent }: { camera: Camera; p
           </Select>
         </Field>
         {kind && (
-          <Field label={t("Rule")} hint={candidates.length === 0 ? t("No rule reports it: a default one.") : undefined}>
-            <Select value={ruleId} onChange={(e) => setRuleId(e.target.value)} disabled={candidates.length === 0}>
+          <Field label={t("Rule")} error={noRule ? t("No enabled rule reports it: draw one in the Rules tab.") : undefined}>
+            <Select value={ruleId} onChange={(e) => setRuleId(e.target.value)} disabled={noRule}>
               <option value="">{t("The first enabled one")}</option>
               {candidates.map((r) => (
                 <option key={r.id} value={r.id} disabled={!r.enabled}>
@@ -128,7 +131,7 @@ export function ManualEventForm({ camera, profile, onSent }: { camera: Camera; p
             </Select>
           </Field>
         )}
-        {classes.length > 0 && (
+        {classes.length > 0 && !report && (
           <Field label={t("Object")}>
             <Select value={objectClass} onChange={(e) => setObjectClass(e.target.value)}>
               <option value="">{t("Any")}</option>
@@ -152,10 +155,11 @@ export function ManualEventForm({ camera, profile, onSent }: { camera: Camera; p
         )}
       </div>
       <div className="flex items-center gap-3">
-        <Button type="submit" variant="primary" size="sm" disabled={!running || trigger.isPending}>
+        <Button type="submit" variant="primary" size="sm" disabled={!running || noRule || trigger.isPending}>
           <Zap /> {t("Fire")}
         </Button>
         {!running && <span className="text-xs text-muted">{t("Start the camera to fire events.")}</span>}
+        {running && report && <span className="text-xs text-muted">{t("A report carries what the camera counted so far.")}</span>}
       </div>
     </form>
   );
@@ -225,7 +229,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
     });
 
   const add = () => {
-    const type = quickEvent(camera).type;
+    const type = quickEvent(camera)?.type;
     const spec = specs.find((s) => s.type === type) ?? specs[0];
     const min = Math.max(5, Math.ceil(spec.min_interval_ms / 1000));
     form.update((ts) => [
@@ -302,7 +306,8 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
         <div className="flex flex-col gap-3">
           {triggers.map((x, i) => {
             const e = (f: string) => errors[`triggers[${i}].${f}`];
-            const kind = ruleTypeFor(x.event_type);
+            const kind = ruleTypeFor(x.event_type, camera.event_types);
+            const report = isReport(x.event_type, camera.event_types);
             const candidates = camera.rules.filter((r) => ruleEvents(r).includes(x.event_type));
             const rule = candidates.find((r) => r.id === x.rule_id);
             const spec = specs.find((s) => s.type === x.event_type);
@@ -311,7 +316,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
               kind && x.rule_id && rule && !rule.enabled
                 ? t("Its rule is disabled: the trigger raises nothing.")
                 : kind && !x.rule_id && !candidates.some((r) => r.enabled)
-                  ? t("No enabled rule reports these events: they happen on a default one.")
+                  ? t("No enabled rule reports these events: the trigger raises nothing until one does.")
                   : "";
             return (
               <div key={x.key} className="rounded-sm border border-border p-3">
@@ -330,7 +335,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
                   </Field>
                   <Field label={t("Rule")} error={e("rule_id")}>
                     <Select value={x.rule_id} onChange={(ev) => update(i, { rule_id: ev.target.value })} disabled={!kind}>
-                      <option value="">{kind ? t("Any enabled rule") : t("None: not a rule event")}</option>
+                      <option value="">{kind ? t("Any enabled rule") : report ? t("None: a report") : t("None: not a rule event")}</option>
                       {candidates.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.enabled ? r.name : t("{name} (disabled)", { name: r.name })}
@@ -367,11 +372,18 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
                   </Field>
                 </div>
                 {warning && <p className="mt-2 text-xs text-warn">{warning}</p>}
+                {report && (
+                  <p className="mt-2 text-xs text-muted">
+                    {t("A report carries what the camera counted; the same shortest and longest wait sends one at a fixed interval.")}
+                  </p>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   <Checkbox label={t("Enabled")} checked={x.enabled} onChange={(ev) => update(i, { enabled: ev.target.checked })} />
-                  <Button size="sm" variant="ghost" onClick={() => toggle(x.key)} aria-expanded={expanded}>
-                    {expanded ? <ChevronDown /> : <ChevronRight />} {t("Event data")}
-                  </Button>
+                  {!report && (
+                    <Button size="sm" variant="ghost" onClick={() => toggle(x.key)} aria-expanded={expanded}>
+                      {expanded ? <ChevronDown /> : <ChevronRight />} {t("Event data")}
+                    </Button>
+                  )}
                   <span className="ml-auto" />
                   <Button
                     size="sm"
@@ -392,7 +404,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
                     <Trash2 />
                   </Button>
                 </div>
-                {expanded && (
+                {expanded && !report && (
                   <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-start gap-3 border-t border-border pt-3">
                     <Field label={t("Plates")} error={e("plates")} hint={t("One per line; each event picks one.")}>
                       <Textarea

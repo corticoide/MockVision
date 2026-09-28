@@ -365,6 +365,18 @@ export const es: Record<string, string> = {
     "Se aplica de inmediato. Gana el último cambio, ya sea del panel o de un cliente de la API emulada.",
 
   // Rules and triggers (feature 7)
+  "Heat map": "Mapa de calor",
+  "Start the counts again from zero": "Volver a contar desde cero",
+  "Counts reset": "Conteos reiniciados",
+  "Reset counts": "Reiniciar conteos",
+  "The camera counts crossings, entries and exits, and where objects were, from its events since {time}.":
+    "La cámara cuenta cruces, entradas y salidas, y dónde estuvieron los objetos, a partir de sus eventos desde {time}.",
+  "Start the camera to see what it counts: crossings, entries and exits, and a heat map.":
+    "Inicia la cámara para ver lo que cuenta: cruces, entradas y salidas, y un mapa de calor.",
+  "What the line reports.": "Lo que informa la línea.",
+  "Inside {n}": "Adentro {n}",
+  "In {n}": "Entraron {n}",
+  "Out {n}": "Salieron {n}",
   Rules: "Reglas",
   Triggers: "Disparadores",
   Rule: "Regla",
@@ -428,7 +440,8 @@ export const es: Record<string, string> = {
   "Trigger an event on {name}": "Disparar un evento en {name}",
   "The camera sends it to its targets at once. What you leave empty, the camera makes up.":
     "La cámara lo envía a sus destinos en el momento. Lo que dejes vacío lo inventa la cámara.",
-  "No rule reports it: a default one.": "Ninguna regla lo informa: se usa una por defecto.",
+  "No enabled rule reports it: draw one in the Rules tab.": "Ninguna regla habilitada lo informa: dibuja una en la pestaña Reglas.",
+  "A report carries what the camera counted so far.": "Un reporte lleva lo que la cámara contó hasta ahora.",
   "The first enabled one": "La primera habilitada",
   "{name} (disabled)": "{name} (deshabilitada)",
   "As the rule reports": "Según la regla",
@@ -444,8 +457,11 @@ export const es: Record<string, string> = {
   "Add trigger": "Agregar disparador",
   "No random triggers yet.": "Todavía no hay disparadores aleatorios.",
   "Its rule is disabled: the trigger raises nothing.": "Su regla está deshabilitada: el disparador no genera eventos.",
-  "No enabled rule reports these events: they happen on a default one.":
-    "Ninguna regla habilitada informa estos eventos: ocurren en una por defecto.",
+  "No enabled rule reports these events: the trigger raises nothing until one does.":
+    "Ninguna regla habilitada informa estos eventos: el disparador no genera nada hasta que alguna lo haga.",
+  "None: a report": "Ninguna: es un reporte",
+  "A report carries what the camera counted; the same shortest and longest wait sends one at a fixed interval.":
+    "Un reporte lleva lo que la cámara contó; con la misma espera mínima y máxima se envía uno a intervalo fijo.",
   "Any enabled rule": "Cualquier regla habilitada",
   "None: not a rule event": "Ninguna: no es un evento de regla",
   "Every (seconds)": "Cada (segundos)",
@@ -483,8 +499,8 @@ export const es: Record<string, string> = {
     "Como el botón de reinicio del dispositivo real. La imagen y los disparadores se conservan.",
   "Restore settings": "Restaurar ajustes",
   "Factory reset": "Restablecer de fábrica",
-  "Parameters, accounts and protocols go back to the profile's defaults and the analytics rules are erased. The network identity stays.":
-    "Los parámetros, cuentas y protocolos vuelven a los valores por defecto del perfil y se borran las reglas de analítica. La identidad de red se mantiene.",
+  "Parameters, accounts, protocols and analytics rules go back to the profile's defaults and factory rules. The network identity stays.":
+    "Los parámetros, cuentas, protocolos y reglas de analítica vuelven a los valores por defecto y las reglas de fábrica del perfil. La identidad de red se mantiene.",
   "Everything above, plus the MAC derived from the camera ID.":
     "Todo lo anterior, más la MAC derivada del ID de la cámara.",
   "Everything above, plus the profile's factory address {ip} and the default MAC.":

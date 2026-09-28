@@ -323,11 +323,39 @@ export function useFireTrigger() {
   });
 }
 
+/** What a running camera counted, with its heat map at cols by rows cells
+ * (none for 0); refreshed while the tab is open. */
+export function useCameraAnalytics(id: string, cols: number, rows: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["cameras", id, "analytics", cols, rows],
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/cameras/{id}/analytics", {
+          params: { path: { id }, query: cols > 0 ? { cols, rows } : {} },
+        }),
+      ),
+    enabled,
+    refetchInterval: 5000,
+    retry: false,
+  });
+}
+
+export function useResetAnalytics(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.POST("/cameras/{id}/analytics/actions/reset", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cameras", id, "analytics"] }),
+  });
+}
+
 export function useSetCameraRules(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (rules: RuleInput[]) => unwrap(await api.PUT("/cameras/{id}/rules", { params: { path: { id } }, body: { rules } })),
-    onSuccess: (camera) => patchCameraCache(qc, camera),
+    onSuccess: (camera) => {
+      patchCameraCache(qc, camera);
+      void qc.invalidateQueries({ queryKey: ["cameras", id, "analytics"] });
+    },
   });
 }
 

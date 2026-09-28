@@ -389,24 +389,26 @@ function RowActions({ camera, onClone }: { camera: Camera; onClone: () => void }
 
   return (
     <div className="flex items-center justify-end gap-1">
-      <Button
-        size="icon"
-        variant="ghost"
-        disabled={!running || trigger.isPending}
-        title={t("Fire {event} now", { event: eventLabel(quick.type, t).toLowerCase() })}
-        aria-label={t("Fire {event} on {name}", { event: eventLabel(quick.type, t).toLowerCase(), name: camera.name })}
-        onClick={() =>
-          trigger.mutate(
-            { id: camera.id, ...quick },
-            {
-              onSuccess: () => toast(t("{event} sent from {name}", { event: eventLabel(quick.type, t), name: camera.name }), "ok"),
-              onError: (err) => toast(errorMessage(err), "error"),
-            },
-          )
-        }
-      >
-        <Zap />
-      </Button>
+      {quick && (
+        <Button
+          size="icon"
+          variant="ghost"
+          disabled={!running || trigger.isPending}
+          title={t("Fire {event} now", { event: eventLabel(quick.type, t).toLowerCase() })}
+          aria-label={t("Fire {event} on {name}", { event: eventLabel(quick.type, t).toLowerCase(), name: camera.name })}
+          onClick={() =>
+            trigger.mutate(
+              { id: camera.id, ...quick },
+              {
+                onSuccess: () => toast(t("{event} sent from {name}", { event: eventLabel(quick.type, t), name: camera.name }), "ok"),
+                onError: (err) => toast(errorMessage(err), "error"),
+              },
+            )
+          }
+        >
+          <Zap />
+        </Button>
+      )}
       {canStart ? (
         <Button size="icon" variant="ghost" disabled={busy} onClick={() => run("start")} title={t("Start")} aria-label={t("Start {name}", { name: camera.name })}>
           <Play />

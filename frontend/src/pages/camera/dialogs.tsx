@@ -113,7 +113,7 @@ export function ResetDialog({ camera, open, onClose }: { camera: Camera; open: b
     {
       id: "settings" as const,
       title: t("Restore settings"),
-      text: t("Parameters, accounts and protocols go back to the profile's defaults and the analytics rules are erased. The network identity stays."),
+      text: t("Parameters, accounts, protocols and analytics rules go back to the profile's defaults and factory rules. The network identity stays."),
     },
     {
       id: "full" as const,

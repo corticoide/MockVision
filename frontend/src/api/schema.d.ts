@@ -651,6 +651,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cameras/{id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What a running camera counted from the events it emitted
+         * @description Crossings of each line by direction and object class, entries, exits and occupancy of each region, events by type, and, with cols and rows, a heat map of where objects were. Counts start with the camera process or at the last reset.
+         */
+        get: operations["getCameraAnalytics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/analytics/actions/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Starts a running camera's counts again from zero */
+        post: operations["resetCameraAnalytics"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -1071,6 +1112,13 @@ export interface components {
                 vendor_name: string;
                 min_interval_ms: number;
                 transports: string[];
+                /**
+                 * @description The kind of rule the event comes from; empty for none
+                 * @enum {string}
+                 */
+                rule: "line" | "region" | "";
+                /** @description The event carries counts */
+                report: boolean;
             }[];
             /** @description The kinds of rule of the profile's analytics and the objects they detect. */
             vca: {
@@ -1293,6 +1341,16 @@ export interface components {
             }[];
             rules: components["schemas"]["Rule"][];
             triggers: components["schemas"]["Trigger"][];
+            /** @description The events the camera can send, as its profile declares them. */
+            event_types: {
+                type: string;
+                /**
+                 * @description The kind of rule the event comes from; empty for none
+                 * @enum {string}
+                 */
+                rule: "line" | "region" | "";
+                report: boolean;
+            }[];
             metrics: components["schemas"]["CameraMetrics"] | null;
             /** Format: date-time */
             created_at: string;
@@ -1440,7 +1498,7 @@ export interface components {
             x: number;
             y: number;
         };
-        /** @description A VCA rule (D39). A line has two points; its side A is on the left walking from the first to the second, and direction says which crossings it reports. A region has 3 to 20 points and events says what it reports. No object_classes means every class of the profile. */
+        /** @description A VCA rule (D39). A line has two points; its side A is on the left walking from the first to the second, and direction says which crossings it reports. A region has 3 to 20 points. Events are what the rule reports, among the events its profile raises from its kind of rule. No object_classes means every class of the profile. */
         Rule: {
             id: string;
             name: string;
@@ -1449,7 +1507,7 @@ export interface components {
             points: components["schemas"]["Point"][];
             /** @enum {string} */
             direction: "A->B" | "B->A" | "both" | "";
-            events: ("region_entrance" | "region_exit" | "loitering" | "intrusion")[];
+            events: string[];
             object_classes: string[];
             enabled: boolean;
         };
@@ -1465,10 +1523,47 @@ export interface components {
              * @enum {string}
              */
             direction?: "A->B" | "B->A" | "both";
-            events?: ("region_entrance" | "region_exit" | "loitering" | "intrusion")[];
+            /** @description Required for regions; a line without events reports line_crossing */
+            events?: string[];
             object_classes?: string[];
             /** @default true */
             enabled: boolean;
+        };
+        Analytics: {
+            /** Format: date-time */
+            since: string;
+            lines: {
+                rule_id: string;
+                name: string;
+                a_to_b: number;
+                b_to_a: number;
+                classes: {
+                    [key: string]: {
+                        a_to_b: number;
+                        b_to_a: number;
+                    };
+                };
+            }[];
+            regions: {
+                rule_id: string;
+                name: string;
+                entries: number;
+                exits: number;
+                /** @description Entries minus exits */
+                occupancy: number;
+                events: {
+                    [key: string]: number;
+                };
+            }[];
+            events: {
+                [key: string]: number;
+            };
+            /** @description Objects seen in each cell, row by row from the top left corner. */
+            heat?: {
+                cols: number;
+                rows: number;
+                cells: number[];
+            };
         };
         SpeedRange: {
             min: number;
@@ -2752,6 +2847,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Event"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getCameraAnalytics: {
+        parameters: {
+            query?: {
+                cols?: number;
+                rows?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Analytics"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    resetCameraAnalytics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts after the reset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Analytics"];
                 };
             };
             404: components["responses"]["Problem"];

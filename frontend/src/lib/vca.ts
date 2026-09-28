@@ -1,4 +1,4 @@
-import type { Camera, ManualEvent, Point, Rule } from "@/api/client";
+import type { Camera, CameraEventType, ManualEvent, Point, Rule } from "@/api/client";
 import type { Translate } from "./i18n";
 
 /** Canonical event types by what they mean, for someone new to analytics. */
@@ -14,24 +14,48 @@ const eventLabels: Record<string, string> = {
   tamper: "Tampering",
 };
 
-/** An event type in words; custom types show as they are. */
+/** The panel lists canonical events in this order, vendor events after. */
+const canonicalOrder = Object.keys(eventLabels);
+
+/** An event type in words; a vendor event (custom:<name>) by its name. */
 export function eventLabel(type: string, t: Translate) {
   const label = eventLabels[type];
-  return label ? t(label) : type;
+  if (label) return t(label);
+  const words = type
+    .replace(/^custom:/, "")
+    .replace(/[_.-]+/g, " ")
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : type;
 }
 
-/** The events a region can report, in the order the panel lists them. */
-export const regionEvents = ["region_entrance", "region_exit", "loitering", "intrusion"] as const;
-
-/** The kind of rule an event type comes from; "" for events no rule raises. */
-export function ruleTypeFor(type: string): "line" | "region" | "" {
-  if (type === "line_crossing") return "line";
-  return (regionEvents as readonly string[]).includes(type) ? "region" : "";
+/** Sorts event types: canonical ones in the panel's order, then the rest. */
+export function sortEvents(types: readonly string[]): string[] {
+  const rank = (x: string) => {
+    const i = canonicalOrder.indexOf(x);
+    return i < 0 ? canonicalOrder.length : i;
+  };
+  return [...types].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-/** The events a rule reports. */
+/** The kind of rule an event type comes from, as the camera's profile
+ * declares it; "" for the events no rule raises. */
+export function ruleTypeFor(type: string, events: readonly CameraEventType[]): "line" | "region" | "" {
+  return events.find((e) => e.type === type)?.rule ?? "";
+}
+
+/** The events a kind of rule can report on this camera. */
+export function ruleChoices(kind: "line" | "region", events: readonly CameraEventType[]): string[] {
+  return sortEvents(events.filter((e) => e.rule === kind).map((e) => e.type));
+}
+
+/** Whether an event is a report: it carries counts, not an object. */
+export function isReport(type: string, events: readonly CameraEventType[]) {
+  return events.some((e) => e.type === type && e.report);
+}
+
+/** The events a rule reports; a line listing none reports crossings. */
 export function ruleEvents(rule: { type: Rule["type"]; events: readonly string[] }): string[] {
-  return rule.type === "line" ? ["line_crossing"] : [...rule.events];
+  return rule.type === "line" && rule.events.length === 0 ? ["line_crossing"] : [...rule.events];
 }
 
 export function directionLabel(direction: string, t: Translate) {
@@ -40,11 +64,17 @@ export function directionLabel(direction: string, t: Translate) {
   return t("Both ways");
 }
 
-/** The event the quick button of a camera fires: its first enabled rule's
- * first event, or a line crossing on the camera's default line. */
-export function quickEvent(camera: Camera): ManualEvent {
-  const rule = camera.rules.find((r) => r.enabled && ruleEvents(r).length > 0);
-  return rule ? { type: ruleEvents(rule)[0], rule_id: rule.id } : { type: "line_crossing" };
+/** The event the quick button of a camera fires: the first event of its
+ * first enabled rule, or else the first event that needs no rule. Null
+ * when its profile gives it nothing to fire at once. */
+export function quickEvent(camera: Camera): ManualEvent | null {
+  const sendable = new Set(camera.event_types.map((e) => e.type));
+  for (const r of camera.rules) {
+    const type = r.enabled ? ruleEvents(r).find((x) => sendable.has(x)) : undefined;
+    if (type) return { type, rule_id: r.id };
+  }
+  const free = sortEvents(camera.event_types.filter((e) => e.rule === "" && !e.report).map((e) => e.type))[0];
+  return free ? { type: free } : null;
 }
 
 /** Picture size of the main stream, for the editor's coordinates. */

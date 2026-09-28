@@ -1,5 +1,5 @@
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
-import type { Camera, Point } from "@/api/client";
+import type { Analytics, Camera, Point } from "@/api/client";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { centroid, clamp01, pictureSize, round4, ruleColors, sideB } from "@/lib/vca";
@@ -39,6 +39,7 @@ export function RuleCanvas({
   onChange,
   onDrawn,
   onCancel,
+  heat,
 }: {
   camera: Camera;
   rules: CanvasRule[];
@@ -48,6 +49,8 @@ export function RuleCanvas({
   onChange: (index: number, points: Point[]) => void;
   onDrawn: (points: Point[]) => void;
   onCancel: () => void;
+  /** A heat map to draw under the rules: objects seen in each cell. */
+  heat?: Analytics["heat"];
 }) {
   const t = useT();
   const svg = useRef<SVGSVGElement>(null);
@@ -288,6 +291,7 @@ export function RuleCanvas({
           {t("Encoding the stream…")}
         </text>
       )}
+      {heat && <HeatLayer heat={heat} w={w} h={h} />}
       {rules.map(shape)}
       {current &&
         current.points.map((p, vi) => (
@@ -337,5 +341,31 @@ export function RuleCanvas({
         </g>
       )}
     </svg>
+  );
+}
+
+/** HeatLayer shades each cell of a heat map by how many objects were seen
+ * there, relative to the busiest cell. */
+function HeatLayer({ heat, w, h }: { heat: NonNullable<Analytics["heat"]>; w: number; h: number }) {
+  const top = Math.max(0, ...heat.cells);
+  if (top === 0) return null;
+  const cw = w / heat.cols;
+  const ch = h / heat.rows;
+  return (
+    <g className="pointer-events-none text-[#ef4444]" aria-hidden>
+      {heat.cells.map((n, i) =>
+        n > 0 ? (
+          <rect
+            key={i}
+            x={(i % heat.cols) * cw}
+            y={Math.floor(i / heat.cols) * ch}
+            width={cw}
+            height={ch}
+            fill="currentColor"
+            fillOpacity={0.12 + 0.5 * (n / top)}
+          />
+        ) : null,
+      )}
+    </g>
   );
 }

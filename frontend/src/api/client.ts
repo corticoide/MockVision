@@ -44,6 +44,8 @@ export type RuleInput = Schemas["RuleInput"];
 export type Trigger = Schemas["Trigger"];
 export type TriggerInput = Schemas["TriggerInput"];
 export type ManualEvent = Schemas["ManualEvent"];
+export type CameraEventType = Camera["event_types"][number];
+export type Analytics = Schemas["Analytics"];
 
 // Every state-changing request carries this header; cross-site forms cannot
 // send it, which is part of the CSRF protection.
