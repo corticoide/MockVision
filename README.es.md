@@ -26,9 +26,11 @@ reemplaza.
   usa CPU.
 - Una API HTTP definida en un perfil YAML, con autenticación Digest:
   snapshot, información del equipo y lectura y escritura de un parámetro.
-- Un evento de cruce de línea, disparado desde el panel y enviado a un
-  destino con un POST HTTP. Cada entrega queda registrada con su estado y su
-  latencia.
+- Analítica de video: líneas y regiones dibujadas sobre la imagen de la
+  cámara, y eventos sobre ellas (cruce de línea, entrada y salida de región,
+  permanencia, intrusión) disparados a mano o en momentos al azar, enviados
+  a un destino con un POST HTTP. Cada entrega queda registrada con su estado
+  y su latencia.
 - Métricas por cámara (CPU, RAM, clientes). Si una cámara superaría el
   máximo de cámaras o los recursos del nodo, se rechaza indicando el motivo.
 - Un panel que se actualiza en vivo por WebSocket.
@@ -90,7 +92,7 @@ Las cuentas de cámara tienen un rol: las `admin` y `operator` pueden cambiar
 parámetros y las `viewer` solo leen (un perfil puede fijar los roles de cada
 ruta). El usuario de la cámara es el que se cargó al crearla. Si la contraseña quedó
 vacía, la cámara usa la cuenta de fábrica del perfil (`admin` / `ms1234`).
-Pulsa **Cruce de línea** en la cámara: el destino recibe el POST, y
+Pulsa **Disparar evento** en la cámara: el destino recibe el POST, y
 **Eventos** muestra la entrega, el código HTTP y la latencia.
 
 > **Prueba desde otro equipo.** Linux no deja que un equipo alcance sus
@@ -151,6 +153,48 @@ cámara cambia a él sin reiniciarse.
   sumo 2040×2040 en múltiplos de 8.
 - Un cliente que se conecta recibe un cuadro clave enseguida, como de un
   codificador real.
+
+### Reglas y disparadores
+
+Las reglas dicen dónde ocurren los eventos y los disparadores, cuándo; la
+cámara no analiza su imagen. En la pestaña **Reglas** de la cámara se dibujan
+sobre su instantánea:
+
+- Una **línea** informa cruces. Sus lados son A (a la izquierda, yendo de su
+  primer punto al segundo) y B; informa A → B, B → A o ambos.
+- Una **región** informa lo que marques: entrada, salida, permanencia o
+  intrusión.
+- Cada regla puede detectar solo algunas clases de objeto (auto, persona…);
+  ninguna significa todas las del perfil.
+
+Un evento nombra su regla (ID, nombre y tipo), la dirección de un cruce y un
+objeto con clase, color, confianza y un recuadro ubicado sobre la regla. Lo
+que nadie le da, la cámara lo inventa.
+
+- **A mano:** **Disparar evento** en la cabecera, los botones ⚡ de cada
+  regla, o `POST /api/v1/cameras/{id}/events` con `type` y, si hace falta,
+  `rule_id`, `direction`, `object`, `plate` y `speed`.
+- **Al azar:** la pestaña **Disparadores** guarda disparadores que emiten un
+  evento de un tipo, en una regla o en cualquiera habilitada, en un momento
+  al azar entre dos esperas, mientras la cámara funciona. Pueden darles a
+  sus eventos patentes, de una lista o generadas con formatos como `AA999AA`
+  (9 un dígito, A una letra, X un dígito hexadecimal), y velocidades en un
+  rango. **Disparar una vez** prueba uno.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X PUT \
+  -d '{"triggers":[{"name":"Tráfico","event_type":"line_crossing","min_seconds":5,"max_seconds":30}]}' \
+  http://<nodo>:8080/api/v1/cameras/<id de la cámara>/triggers
+```
+
+Reglas y disparadores se aplican en el momento, sin reiniciar la cámara. El
+perfil dice qué tipos de regla y qué objetos tiene la cámara, y cada cuánto
+puede informar cada evento; un parámetro vinculado a `events.<tipo>.enabled`
+apaga un tipo, como el interruptor de analítica de una cámara real (en el
+demo, `Event.LineCrossing.Enable`). Los clones copian reglas y disparadores;
+restaurar una cámara borra sus reglas y conserva sus disparadores, que desde
+entonces disparan en cualquier regla. Sin una regla del tipo adecuado, los
+eventos ocurren en una línea o región por defecto.
 
 ### Red
 
@@ -246,11 +290,13 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/i
   de PID propio. Antes de leer cualquier entrada fija `no_new_privs` y un
   filtro seccomp (sin namespaces, montajes, trazas, módulos ni llaveros), y
   Landlock limita sus archivos a sus streams y a lo que necesitan DNS y TLS.
-  Después sirve los motores de su perfil (`rtsp`, `http-api`, `http-push`) y
-  habla con el servicio en líneas JSON; el servicio verifica lo que reporta
-  contra el perfil. Una cámara con DHCP pide su dirección ella misma, por un
-  socket que le abrió el helper: interpreta lo que mandan los servidores sin
-  privilegios, el servicio verifica la concesión y el helper la aplica.
+  Después sirve los motores de su perfil (`rtsp`, `http-api`, `http-push`),
+  corre sus disparadores aleatorios y habla con el servicio en líneas JSON;
+  el servicio verifica lo que reporta contra el perfil, y guarda la regla y
+  el disparador de un evento solo si son de esa cámara. Una cámara con DHCP
+  pide su dirección ella misma, por un socket que le abrió el helper:
+  interpreta lo que mandan los servidores sin privilegios, el servicio
+  verifica la concesión y el helper la aplica.
 - **Sondeos.** Antes de que una cámara tome una IP, el helper la sondea por
   ARP (RFC 5227); antes de que tome una MAC, la busca en las tablas y las
   interfaces del nodo, la pregunta por IPv6 y escucha un momento. El kernel

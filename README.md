@@ -25,8 +25,10 @@ the outside; it does not replace one.
   stream setting and the loop costs almost no CPU.
 - An HTTP API from a YAML profile, with Digest authentication: snapshot,
   device information and reading and writing a parameter.
-- A line-crossing event, triggered from the panel and sent to a target with
-  an HTTP POST. Every delivery is logged with its status and latency.
+- Video analytics: lines and regions drawn on the camera's picture, and
+  events on them (line crossing, region entrance and exit, loitering,
+  intrusion) fired by hand or at random moments, sent to a target with an
+  HTTP POST. Every delivery is logged with its status and latency.
 - Metrics for each camera (CPU, RAM, clients). A camera is refused, with the
   reason, when it would go over the camera limit or the node's resources.
 - A panel that updates live over a WebSocket.
@@ -88,7 +90,7 @@ Camera accounts have a role: `admin` and `operator` accounts may change
 parameters, `viewer` accounts only read (a profile can set the roles of each
 route). The camera user is the one entered when the camera was created. If the
 password was left empty, the camera uses the profile's factory account
-(`admin` / `ms1234`). Press **Line crossing** on the camera: the target
+(`admin` / `ms1234`). Press **Trigger event** on the camera: the target
 receives the POST, and **Events** shows the delivery, the HTTP status and the
 latency.
 
@@ -143,6 +145,46 @@ camera switches to it without restarting.
   the same picture, but not every client plays it. **MJPEG** sends every
   frame as a JPEG; over RTSP it carries at most 2040×2040 in multiples of 8.
 - A client that connects gets a keyframe at once, as from a real encoder.
+
+### Rules and triggers
+
+Rules say where events happen and triggers say when; the camera does not
+look at its picture. In the camera's **Rules** tab you draw them over its
+snapshot:
+
+- A **line** reports crossings. Its sides are A (on the left, walking from
+  its first point to its second) and B; it reports A → B, B → A or both.
+- A **region** reports what you tick: entrance, exit, loitering or
+  intrusion.
+- Each rule can detect some object classes only (car, person…); none means
+  all of the profile's.
+
+An event names its rule (ID, name and type), the direction of a crossing and
+an object with a class, a color, a confidence and a box placed on the rule.
+The camera makes up what nobody gives it.
+
+- **By hand:** **Trigger event** in the header, the ⚡ buttons of each rule,
+  or `POST /api/v1/cameras/{id}/events` with `type` and, optionally,
+  `rule_id`, `direction`, `object`, `plate` and `speed`.
+- **At random:** the **Triggers** tab keeps triggers that emit an event of a
+  type, on a rule or on any enabled one, at a random moment between two
+  waits, while the camera runs. They can give their events license plates,
+  from a list or generated from formats such as `AA999AA` (9 a digit, A a
+  letter, X a hex digit), and speeds in a range. **Fire once** tries one.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X PUT \
+  -d '{"triggers":[{"name":"Traffic","event_type":"line_crossing","min_seconds":5,"max_seconds":30}]}' \
+  http://<node>:8080/api/v1/cameras/<camera id>/triggers
+```
+
+Rules and triggers apply at once, without restarting the camera. The profile
+says which kinds of rule and which objects the camera has, and how often it
+may report each event; a parameter bound to `events.<type>.enabled` turns a
+type off, as the analytics switch of a real camera does (the demo's
+`Event.LineCrossing.Enable`). Clones copy rules and triggers; restoring a
+camera erases its rules and keeps its triggers, which then fire on any rule.
+Without a rule of the right kind, events happen on a default line or region.
 
 ### Network
 
@@ -233,11 +275,13 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/i
   Before reading any input it sets `no_new_privs` and a seccomp filter (no
   namespaces, mounts, tracing, modules or keyrings), and Landlock limits its
   files to its streams and what DNS and TLS need. It then serves the
-  profile's engines (`rtsp`, `http-api`, `http-push`) and talks to the
-  service in JSON lines; the service checks what it reports against the
-  profile. A DHCP camera leases its address itself, over a socket the helper
-  opened for it: it parses what servers send without privileges, the
-  service checks the lease and the helper sets it.
+  profile's engines (`rtsp`, `http-api`, `http-push`), runs its random
+  triggers and talks to the service in JSON lines; the service checks what
+  it reports against the profile, and keeps an event's rule and trigger
+  only when they are the camera's own. A DHCP camera leases its address
+  itself, over a socket the helper opened for it: it parses what servers
+  send without privileges, the service checks the lease and the helper
+  sets it.
 - **Probes.** Before a camera takes an IP, the helper sends an ARP probe
   for it (RFC 5227); before it takes a MAC, the helper looks for it in the
   node's tables and interfaces, asks for it over IPv6 and listens for a

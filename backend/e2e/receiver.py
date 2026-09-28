@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Minimal event target for the end-to-end test: stores every request body."""
+"""Minimal event target for the end-to-end test: stores every request body,
+one per line; JSON bodies are compacted so a line holds a whole event."""
 
 import http.server
+import json
 import sys
 
 
@@ -9,6 +11,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _store(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
+        try:
+            body = json.dumps(json.loads(body), separators=(",", ":")).encode()
+        except ValueError:
+            pass
         with open(sys.argv[2], "ab") as f:
             f.write(body + b"\n")
         self.send_response(200)

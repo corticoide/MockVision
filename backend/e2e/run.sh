@@ -6,8 +6,9 @@
 # `mockvision run` and checks, from the client: ping and MAC (M1), RTSP with
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
-# and camera processes, editing a running camera (accounts, stream and
-# address), sub and third streams in H.264, H.265 and MJPEG, API tokens
+# and camera processes, rules and triggers (manual and random), editing a
+# running camera (accounts, stream and address), sub and third streams in
+# H.264, H.265 and MJPEG, API tokens
 # with bulk actions and the audit log, background jobs, the outbound
 # firewall, the MAC probe, DHCP with the factory address as fallback, the
 # node bridge, ipvlan where the kernel has it, clean stop, and cameras
@@ -94,6 +95,14 @@ wait_status() { # camera, Python expression over the camera d, value, seconds
 		sleep 0.5
 	done
 	fail "camera $1: $2 is $got, want $3"
+}
+
+wait_received() { # event ID: the client's target got it
+	for _ in $(seq 1 40); do
+		grep -q "$1" "$WORK/received.log" 2>/dev/null && return 0
+		sleep 0.25
+	done
+	fail "the target did not receive event $1"
 }
 
 wait_state() { # camera, state, seconds
@@ -269,6 +278,54 @@ sleep 0.5
 ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
 ok "event $EID delivered, latency $(echo "$ev" | json 'd["latency_ms"]') ms"
+
+step "rules and triggers: events name their rule, a random trigger keeps sending (D39, D40)"
+rules=$(api PUT "/cameras/$CID/rules" -H 'Content-Type: application/json' -d '{"rules":[
+	{"name":"Gate line","type":"line","points":[{"x":0.1,"y":0.6},{"x":0.9,"y":0.6}],"direction":"A->B"},
+	{"name":"Lot","type":"region","points":[{"x":0.2,"y":0.2},{"x":0.6,"y":0.2},{"x":0.6,"y":0.5},{"x":0.2,"y":0.5}],
+	 "events":["region_entrance","loitering"],"object_classes":["car"]}]}')
+LINE_ID=$(echo "$rules" | json '[r["id"] for r in d["rules"] if r["name"]=="Gate line"][0]') || fail "rules not saved: $rules"
+LOT_ID=$(echo "$rules" | json '[r["id"] for r in d["rules"] if r["name"]=="Lot"][0]')
+EID=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"loitering"}' | json 'd["id"]')
+wait_received "$EID"
+case "$(grep "$EID" "$WORK/received.log")" in
+*'"name":"Lot","type":"region"'*'"class":"car"'*) ;;
+*) fail "loitering payload: $(grep "$EID" "$WORK/received.log")" ;;
+esac
+[ "$(api GET "/events/$EID" | json 'd["rule_id"]')" = "$LOT_ID" ] || fail "the event does not name rule Lot"
+ok "a manual loitering happens on region Lot, with a car, the only object the rule detects"
+code=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
+	-d "{\"type\":\"line_crossing\",\"rule_id\":\"$LINE_ID\",\"direction\":\"B->A\"}")
+[ "$code" = 422 ] || fail "a crossing the line does not report answered $code"
+client curl -s --digest -u admin:e2e-cam-pw "http://$CAM_IP/cgi-bin/operator/param.cgi?action=set&Event.LineCrossing.Enable=false" |
+	grep -qx OK || fail "switching crossings off from the emulated API"
+code=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' -o /dev/null -w '%{http_code}')
+[ "$code" = 409 ] || fail "a crossing with detection off answered $code"
+client curl -s --digest -u admin:e2e-cam-pw "http://$CAM_IP/cgi-bin/operator/param.cgi?action=set&Event.LineCrossing.Enable=true" |
+	grep -qx OK || fail "switching crossings on from the emulated API"
+ok "a crossing the line does not report is refused; a client of the emulated API turns crossings off and on"
+trigger='"name":"Traffic","event_type":"line_crossing","rule_id":"'$LINE_ID'","min_seconds":1,"max_seconds":1'
+TRG_ID=$(api PUT "/cameras/$CID/triggers" -H 'Content-Type: application/json' -d "{\"triggers\":[{$trigger}]}" | json 'd["triggers"][0]["id"]')
+crossings() { grep -c '"name":"Gate line"' "$WORK/received.log" || true; }
+for _ in $(seq 1 60); do
+	[ "$(crossings)" -ge 3 ] && break
+	sleep 0.25
+done
+[ "$(crossings)" -ge 3 ] || fail "the random trigger sent $(crossings) crossings"
+grep '"name":"Gate line"' "$WORK/received.log" | grep -qv '"direction":"A->B"' && fail "a crossing went the way the line does not report"
+from=$(api GET "/events?camera_id=$CID&limit=50" | json "sum(1 for e in d['items'] if e.get('trigger_id') == '$TRG_ID')")
+[ "$from" -ge 3 ] || fail "$from stored events name the trigger"
+ok "a random trigger sends a crossing on Gate line every second or two; $from events name it"
+api PUT "/cameras/$CID/triggers" -H 'Content-Type: application/json' -d "{\"triggers\":[{\"id\":\"$TRG_ID\",$trigger,\"enabled\":false}]}" >/dev/null
+sleep 1.5
+before=$(crossings)
+sleep 3
+[ "$(crossings)" = "$before" ] || fail "a disabled trigger kept sending"
+FID=$(api POST "/cameras/$CID/triggers/$TRG_ID/actions/fire" | json 'd["id"]')
+wait_received "$FID"
+[ "$(api GET "/events/$FID" | json 'd["trigger_id"]')" = "$TRG_ID" ] || fail "the fired event does not name its trigger"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "rules and triggers restarted the camera"
+ok "disabled, the trigger stops; fired by hand, it sends one; the camera never restarted (pid $PID)"
 
 step "v1 editing: accounts and stream apply without a restart"
 probe() { # password -> codec,width,height
@@ -591,5 +648,9 @@ api POST /auth/login -H 'Content-Type: application/json' -d '{"username":"admin"
 wait_state "$CID" running 60
 client ping -c 1 -W 2 "$CAM_IP" >/dev/null || fail "camera not reachable after the restart"
 ok "camera came back and answers"
+FID=$(api POST "/cameras/$CID/triggers/$TRG_ID/actions/fire" | json 'd["id"]')
+wait_received "$FID"
+grep "$FID" "$WORK/received.log" | grep -q '"name":"Gate line"' || fail "the trigger lost its rule over the restart"
+ok "its rules and triggers came back too: the stored trigger fires on Gate line"
 
 printf '\n\033[32mALL CHECKS PASSED\033[0m\n'
