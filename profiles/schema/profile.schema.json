@@ -136,16 +136,20 @@
       "additionalProperties": { "$ref": "#/$defs/event" }
     },
     "vca": {
+      "description": "Video analytics: the kinds of rule cameras can draw and the objects they detect.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "rules": {
           "type": "array",
+          "uniqueItems": true,
           "items": { "enum": ["line", "region"] }
         },
         "object_classes": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 32 }
         },
         "plate_format": {
           "description": "Plate data format, for example text or text+color.",

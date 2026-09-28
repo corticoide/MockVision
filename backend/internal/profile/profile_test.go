@@ -24,8 +24,8 @@ func TestDemoProfileIsValid(t *testing.T) {
 	for _, p := range res.Problems {
 		t.Logf("%s:%d [%s/%s] %s (%s)", p.File, p.Line, p.Step, p.Severity, p.Message, p.Pointer)
 	}
-	if !res.OK() {
-		t.Fatal("the demo profile must validate")
+	if !res.OK() || len(res.Problems) > 0 {
+		t.Fatal("the demo profile must validate without warnings")
 	}
 	if res.Doc.Profile.ID != "milesight/demo" || len(res.Resolved) == 0 {
 		t.Fatalf("unexpected result: %+v", res.Doc.Profile)
@@ -186,6 +186,25 @@ func TestProblemsCarryLines(t *testing.T) {
 		data := replace(t, base, "  Encode.Main.Codec:\n    type: enum\n    values: [\"h264\", \"h265\"]", "  Encode.Main.Codec:\n    type: string")
 		res := profile.Validate(profile.Input{Data: data}, cat)
 		expectProblem(t, res, profile.StepLint, 0, "must be an enum of the stream's codecs")
+	})
+
+	t.Run("analytics without their events", func(t *testing.T) {
+		data := replace(t, base, "  line_crossing:\n    vendor_name: LineCrossing", "  custom:crossing:\n    vendor_name: LineCrossing")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "rules: [line, region]"), "line rules report no event: define line_crossing")
+		expectProblem(t, res, profile.StepLint, lineOf(data, "bind: events.line_crossing.enabled"), "switches line_crossing events, which the profile does not define")
+		if !res.OK() {
+			t.Fatalf("warnings must not fail: %+v", res.Problems)
+		}
+		data = replace(t, base, "rules: [line, region]", "rules: [line]")
+		res = profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, lineOf(data, "vendor_name: Loitering"), "loitering events come from region rules; add region to vca.rules")
+	})
+
+	t.Run("event switch of another type", func(t *testing.T) {
+		data := replace(t, base, "  Event.LineCrossing.Enable:\n    type: bool\n    default: true", "  Event.LineCrossing.Enable:\n    type: int\n    default: 1")
+		res := profile.Validate(profile.Input{Data: data}, cat)
+		expectProblem(t, res, profile.StepLint, 0, "is bound to events.line_crossing.enabled and must be a bool")
 	})
 
 	t.Run("template file in loose yaml", func(t *testing.T) {

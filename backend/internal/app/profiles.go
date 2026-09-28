@@ -309,7 +309,8 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 		return nil, err
 	}
 	d := &ProfileDetail{ProfileView: profileView(p, pk.SignatureStatus, 0), Streams: []ProfileStreamView{}, Engines: []ProfileEngineView{},
-		Events: []string{}, FactoryUsers: []UserView{}, Params: []ParamView{}}
+		Events: []string{}, EventSpecs: []ProfileEventView{}, VCA: ProfileVCAView{Rules: []string{}, ObjectClasses: []string{}},
+		FactoryUsers: []UserView{}, Params: []ParamView{}}
 	for _, name := range streamNames(doc) {
 		st := doc.Media.Streams[name]
 		sv := ProfileStreamView{Name: name, Codecs: st.Codecs, Resolutions: st.Resolutions}
@@ -329,6 +330,15 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 		d.Engines = append(d.Engines, ProfileEngineView{Instance: inst, Engine: name, Port: port})
 	}
 	d.Events = append(d.Events, profile.SortedKeys(doc.Events)...)
+	for _, typ := range d.Events {
+		spec := doc.Events[typ]
+		d.EventSpecs = append(d.EventSpecs, ProfileEventView{Type: typ, VendorName: spec.VendorName,
+			MinIntervalMS: spec.MinInterval.D().Milliseconds(), Transports: profile.SortedKeys(spec.Transports)})
+	}
+	if doc.VCA != nil {
+		d.VCA.Rules = append(d.VCA.Rules, doc.VCA.Rules...)
+		d.VCA.ObjectClasses = append(d.VCA.ObjectClasses, doc.VCA.ObjectClasses...)
+	}
 	for _, u := range doc.Identity.Factory.Users {
 		d.FactoryUsers = append(d.FactoryUsers, UserView{Username: u.Username, Role: u.Role})
 	}

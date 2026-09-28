@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -16,9 +18,14 @@ import (
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
-// TriggerInput is a manual trigger from the panel or the API.
-type TriggerInput struct {
-	Type      string         `json:"type"`
+// ManualEventInput is a manual trigger from the panel or the API: an event
+// of a type, on a rule of the camera; the camera generates what it leaves
+// out.
+type ManualEventInput struct {
+	Type string `json:"type"`
+	// RuleID is where the event happens; empty takes the first enabled rule
+	// that reports the type.
+	RuleID    string         `json:"rule_id,omitempty"`
 	Direction string         `json:"direction,omitempty"`
 	Object    *engine.Object `json:"object,omitempty"`
 	Plate     *engine.Plate  `json:"plate,omitempty"`
@@ -28,7 +35,7 @@ type TriggerInput struct {
 
 // TriggerEvent makes a running camera emit an event; the camera serializes
 // it with its profile and delivers it to its targets.
-func (s *Service) TriggerEvent(ctx context.Context, actor Actor, cameraID string, in TriggerInput) (*EventView, error) {
+func (s *Service) TriggerEvent(ctx context.Context, actor Actor, cameraID string, in ManualEventInput) (*EventView, error) {
 	b, err := s.loadBundle(ctx, cameraID)
 	if err != nil {
 		return nil, err
@@ -43,33 +50,64 @@ func (s *Service) TriggerEvent(ctx context.Context, actor Actor, cameraID string
 	if len(spec.Transports) == 0 {
 		return nil, domain.Invalid("type", "%s has no transport in the profile and cannot be enabled", in.Type)
 	}
-	if in.Direction != "" && !domain.ValidDirection(domain.Direction(in.Direction)) {
-		return nil, domain.Invalid("direction", "must be A->B, B->A or none")
-	}
-	if raw, _ := json.Marshal(in.Custom); len(raw) > maxCustomBytes {
-		return nil, domain.Invalid("custom", "must be at most %d KiB of JSON", maxCustomBytes>>10)
-	}
-	ss := s.session(cameraID)
-	if ss == nil || !ss.active() {
-		return nil, domain.Conflict("", "camera %s is not running", b.cam.Name)
-	}
-	var res ipc.TriggerResult
-	err = ss.conn().Request(ctx, ipc.TypeTrigger, ipc.Trigger{
-		Type: in.Type, Direction: in.Direction, Object: in.Object, Plate: in.Plate, Speed: in.Speed, Custom: in.Custom,
-	}, &res)
+	rule, err := ruleForEvent(b, in.Type, in.RuleID)
 	if err != nil {
-		var ie *ipc.Error
-		if errors.As(err, &ie) && ie.Code == "trigger" {
-			return nil, domain.Conflict("", "%s", ie.Message)
-		}
 		return nil, err
 	}
-	s.audit(ctx, actor, "event.trigger", "camera", cameraID, map[string]any{"type": in.Type, "event_id": res.Event.ID})
-	data, _ := json.Marshal(res.Event)
-	return &EventView{
-		ID: res.Event.ID, CameraID: cameraID, CameraName: b.cam.Name, Type: res.Event.Type, At: res.Event.At,
-		Data: data, Deliveries: []DeliveryView{}, DeliveryStatus: deliveryStatus(nil, expectedDeliveries(b, in.Type)),
-	}, nil
+	if err := checkManualEvent(b, in, rule); err != nil {
+		return nil, err
+	}
+	res, err := s.askCamera(ctx, b, ipc.Trigger{
+		Type: in.Type, Rule: rule, Direction: in.Direction, Object: in.Object, Plate: in.Plate, Speed: in.Speed, Custom: in.Custom,
+	})
+	if err != nil {
+		return nil, err
+	}
+	diff := map[string]any{"type": in.Type, "event_id": res.Event.ID}
+	if rule != nil {
+		diff["rule_id"] = rule.ID
+	}
+	s.audit(ctx, actor, "event.trigger", "camera", cameraID, diff)
+	return s.firedView(b, res, ""), nil
+}
+
+// checkManualEvent checks what a manual event gives against its rule and
+// the profile: a crossing goes a way its line reports, regions have no
+// direction, and the object is one the rule detects.
+func checkManualEvent(b *cameraBundle, in ManualEventInput, rule *domain.Rule) error {
+	switch {
+	case in.Direction == "" || in.Direction == string(domain.DirectionNone):
+	case !domain.ValidDirection(domain.Direction(in.Direction)):
+		return domain.Invalid("direction", "must be A->B, B->A or none")
+	case domain.RuleTypeFor(in.Type) == domain.RuleRegion:
+		return domain.Invalid("direction", "region events have no direction")
+	case rule != nil && rule.Type == domain.RuleLine && rule.Direction != domain.CrossBoth && rule.Direction != in.Direction:
+		return domain.Invalid("direction", "rule %s reports %s crossings only", rule.Name, rule.Direction)
+	}
+	if o := in.Object; o != nil && o.Class != "" {
+		caps := vcaCaps(b.doc)
+		switch {
+		case rule != nil && len(rule.ObjectClasses) > 0 && !slices.Contains(rule.ObjectClasses, o.Class):
+			return domain.Invalid("object.class", "rule %s does not detect %s", rule.Name, o.Class)
+		case len(caps.ObjectClasses) > 0 && !slices.Contains(caps.ObjectClasses, o.Class):
+			return domain.Invalid("object.class", "the camera's profile does not detect %s", o.Class)
+		}
+	}
+	if p := in.Plate; p != nil && (p.Text == "" || utf8.RuneCountInString(p.Text) > domain.MaxPlateLength || strings.IndexFunc(p.Text, unicode.IsControl) >= 0) {
+		return domain.Invalid("plate.text", "must be 1 to %d characters", domain.MaxPlateLength)
+	}
+	if sp := in.Speed; sp != nil {
+		if !(sp.Value >= 0 && sp.Value <= domain.MaxSpeed) || !(sp.Limit >= 0 && sp.Limit <= domain.MaxSpeed) {
+			return domain.Invalid("speed", "value and limit go from 0 to %d", domain.MaxSpeed)
+		}
+		if sp.Unit != "" && !slices.Contains(domain.SpeedUnits, sp.Unit) {
+			return domain.Invalid("speed.unit", "must be km/h or mph")
+		}
+	}
+	if raw, _ := json.Marshal(in.Custom); len(raw) > maxCustomBytes {
+		return domain.Invalid("custom", "must be at most %d KiB of JSON", maxCustomBytes>>10)
+	}
+	return nil
 }
 
 // Limits of what cameras report, which the service does not take on trust:
@@ -115,8 +153,10 @@ func transportOf(targetType string) string {
 
 // recordEvent stores an event reported by a camera (RN-13), once it is
 // checked: its type must be one the profile defines, its ID a ULID of
-// about now and its data of a reasonable size.
-func (s *Service) recordEvent(ctx context.Context, cameraID string, e engine.Event) {
+// about now and its data of a reasonable size. Its rule and trigger are
+// kept when they are the camera's own: a default rule, or an ID the camera
+// made up, is left out.
+func (s *Service) recordEvent(ctx context.Context, cameraID string, e engine.Event, triggerID string) {
 	b, err := s.loadBundle(ctx, cameraID)
 	if err != nil {
 		return
@@ -140,12 +180,15 @@ func (s *Service) recordEvent(ctx context.Context, cameraID string, e engine.Eve
 		return
 	}
 	var ruleID string
-	if e.Rule != nil {
-		ruleID = truncate(e.Rule.ID, 64)
+	if e.Rule != nil && b.hasRule(e.Rule.ID) {
+		ruleID = e.Rule.ID
+	}
+	if !b.hasTrigger(triggerID) {
+		triggerID = ""
 	}
 	err = s.store.W().InsertEvent(ctx, db.InsertEventParams{
 		ID: e.ID, CameraID: cameraID, Type: e.Type, At: e.At.UnixMilli(), DataJson: string(data),
-		RuleID: store.NullString(ruleID), TriggerID: store.NullString(truncate(e.Trigger, 64)),
+		RuleID: store.NullString(ruleID), TriggerID: store.NullString(triggerID),
 		ReceivedAt: now.UnixMilli(), ExpectedDeliveries: int64(expectedDeliveries(b, e.Type)),
 	})
 	if err != nil {
@@ -238,7 +281,7 @@ func (s *Service) ListEvents(ctx context.Context, f EventFilter) (Page[EventView
 		return page, err
 	}
 	for _, r := range rows {
-		page.Items = append(page.Items, eventView(r.ID, r.CameraID, r.CameraName, r.Type, r.At, r.DataJson, int(r.ExpectedDeliveries), byEvent[r.ID]))
+		page.Items = append(page.Items, eventView(db.GetEventRow(r), byEvent[r.ID]))
 	}
 	return page, nil
 }
@@ -253,7 +296,7 @@ func (s *Service) GetEvent(ctx context.Context, id string) (*EventView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := eventView(r.ID, r.CameraID, r.CameraName, r.Type, r.At, r.DataJson, int(r.ExpectedDeliveries), byEvent[id])
+	v := eventView(r, byEvent[id])
 	return &v, nil
 }
 
@@ -275,12 +318,13 @@ func (s *Service) deliveries(ctx context.Context, ids []string) (map[string][]De
 	return out, nil
 }
 
-func eventView(id, cameraID, cameraName, typ string, at int64, data string, expected int, dels []DeliveryView) EventView {
+func eventView(r db.GetEventRow, dels []DeliveryView) EventView {
 	if dels == nil {
 		dels = []DeliveryView{}
 	}
-	v := EventView{ID: id, CameraID: cameraID, CameraName: cameraName, Type: typ, At: store.Time(at), Data: json.RawMessage(data), Deliveries: dels}
-	v.DeliveryStatus = deliveryStatus(dels, expected)
+	v := EventView{ID: r.ID, CameraID: r.CameraID, CameraName: r.CameraName, Type: r.Type, At: store.Time(r.At), Data: json.RawMessage(r.DataJson),
+		RuleID: r.RuleID.String, TriggerID: r.TriggerID.String, Deliveries: dels}
+	v.DeliveryStatus = deliveryStatus(dels, int(r.ExpectedDeliveries))
 	// Latency of the last successful attempt, or of the last attempt.
 	for i := len(dels) - 1; i >= 0; i-- {
 		if dels[i].Status == engine.DeliveryOK {

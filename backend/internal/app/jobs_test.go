@@ -51,7 +51,7 @@ func demoProfile(t *testing.T, version string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return []byte(strings.Replace(string(data), "version: 0.2.0", "version: "+version, 1))
+	return []byte(strings.Replace(string(data), "version: 0.3.0", "version: "+version, 1))
 }
 
 func TestImportRunsAsAJob(t *testing.T) {

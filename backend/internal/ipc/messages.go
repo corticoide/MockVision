@@ -3,6 +3,7 @@ package ipc
 import (
 	"encoding/json"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
@@ -102,6 +103,13 @@ type Target struct {
 	EventTypes []string `json:"event_types,omitempty"`
 }
 
+// VCA is the camera's video analytics: the rules drawn on its picture and
+// its stored triggers, enabled or not (D39, D40).
+type VCA struct {
+	Rules    []domain.Rule    `json:"rules"`
+	Triggers []domain.Trigger `json:"triggers"`
+}
+
 // Configure is the full configuration of a camera.
 type Configure struct {
 	Identity engine.Identity `json:"identity"`
@@ -111,18 +119,20 @@ type Configure struct {
 	Users    []engine.User   `json:"users"`
 	Streams  []Stream        `json:"streams"`
 	Targets  []Target        `json:"targets"`
+	VCA      VCA             `json:"vca"`
 	// DNS servers of the camera; empty means the node's.
 	DNS []string `json:"dns,omitempty"`
 }
 
 // Reload replaces parts of the configuration; nil fields stay as they are.
-// Targets is a pointer because a camera may be left without any: an empty
-// list must reach it, and would vanish as omitempty.
+// Targets and VCA are pointers because a camera may be left without any:
+// an empty list must reach it, and would vanish as omitempty.
 type Reload struct {
 	Streams []Stream       `json:"streams,omitempty"`
 	Targets *[]Target      `json:"targets,omitempty"`
 	Users   []engine.User  `json:"users,omitempty"`
 	State   map[string]any `json:"state,omitempty"`
+	VCA     *VCA           `json:"vca,omitempty"`
 	// DNS replaces the camera's DNS servers, after a lease brought others.
 	DNS []string `json:"dns,omitempty"`
 }
@@ -162,9 +172,11 @@ type Heartbeat struct {
 	Engines    map[string]engine.Health `json:"engines"`
 }
 
-// EventMsg reports an emitted event.
+// EventMsg reports an emitted event, with the stored trigger behind it,
+// if any.
 type EventMsg struct {
-	Event engine.Event `json:"event"`
+	Event     engine.Event `json:"event"`
+	TriggerID string       `json:"trigger_id,omitempty"`
 }
 
 // StateChanged reports changes applied by clients of the emulated API.
@@ -194,15 +206,20 @@ type Log struct {
 	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
-// Trigger asks the camera to emit an event.
+// Trigger asks the camera to emit an event now: a manual one, of which
+// the camera generates what the message leaves out, or, with TriggerID
+// alone, one of a stored trigger's.
 type Trigger struct {
-	Type      string         `json:"type"`
-	Direction string         `json:"direction,omitempty"`
-	Rule      *engine.Rule   `json:"rule,omitempty"`
-	Object    *engine.Object `json:"object,omitempty"`
-	Plate     *engine.Plate  `json:"plate,omitempty"`
-	Speed     *engine.Speed  `json:"speed,omitempty"`
-	Custom    map[string]any `json:"custom,omitempty"`
+	Type      string `json:"type,omitempty"`
+	TriggerID string `json:"trigger_id,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	// Rule is where the event happens; without one, the events that come
+	// from rules happen on a default line or region.
+	Rule   *domain.Rule   `json:"rule,omitempty"`
+	Object *engine.Object `json:"object,omitempty"`
+	Plate  *engine.Plate  `json:"plate,omitempty"`
+	Speed  *engine.Speed  `json:"speed,omitempty"`
+	Custom map[string]any `json:"custom,omitempty"`
 }
 
 // TriggerResult is the reply to Trigger.

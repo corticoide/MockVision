@@ -714,7 +714,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTrigger(w http.ResponseWriter, r *http.Request) {
-	var in app.TriggerInput
+	var in app.ManualEventInput
 	if err := decode(r, &in); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -722,6 +722,69 @@ func (s *Server) handleTrigger(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	ev, err := s.svc.TriggerEvent(ctx, actor(r), r.PathValue("id"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ev)
+}
+
+// --- Rules and triggers ---
+
+func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
+	rules, err := s.svc.CameraRules(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": rules})
+}
+
+func (s *Server) handleSetRules(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Rules []app.RuleInput `json:"rules"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.SetCameraRules(r.Context(), actor(r), r.PathValue("id"), body.Rules)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleListTriggers(w http.ResponseWriter, r *http.Request) {
+	triggers, err := s.svc.CameraTriggers(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": triggers})
+}
+
+func (s *Server) handleSetTriggers(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Triggers []app.TriggerInput `json:"triggers"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.SetCameraTriggers(r.Context(), actor(r), r.PathValue("id"), body.Triggers)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleFireTrigger(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	ev, err := s.svc.FireTrigger(ctx, actor(r), r.PathValue("id"), r.PathValue("trigger"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

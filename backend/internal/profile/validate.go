@@ -111,8 +111,9 @@ func (v *validator) errorf(step, pointer, format string, args ...any) {
 	v.add(step, SeverityError, pointer, format, args...)
 }
 
-func (v *validator) warnf(step, pointer, format string, args ...any) {
-	v.add(step, SeverityWarning, pointer, format, args...)
+// warnf reports a warning; only the lint step has them.
+func (v *validator) warnf(pointer, format string, args ...any) {
+	v.add(StepLint, SeverityWarning, pointer, format, args...)
 }
 
 // Validate runs the document steps of the import pipeline: safe YAML read,
@@ -468,12 +469,42 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 		}
 		spec := doc.Events[typ]
 		if len(spec.Transports) == 0 {
-			v.warnf(StepLint, ptr, "event %s has no transport and cannot be enabled on a camera", typ)
+			v.warnf(ptr, "event %s has no transport and cannot be enabled on a camera", typ)
 		}
 		for _, t := range SortedKeys(spec.Transports) {
 			if !delivers[t] {
 				v.errorf(StepLint, ptr+"/transports/"+escapePointer(t), "no engine of this profile delivers %s; add an engine instance such as push: {engine: http-push@^1}", t)
 			}
+		}
+	}
+	v.lintVCA(doc)
+}
+
+// lintVCA checks that the rules of the analytics and their events agree:
+// each kind of rule reports some event, and the events that come from a
+// kind of rule have it (without one a camera stands in a default line or
+// region).
+func (v *validator) lintVCA(doc *Document) {
+	var kinds []string
+	if doc.VCA != nil {
+		kinds = doc.VCA.Rules
+	}
+	for _, kind := range kinds {
+		reported := false
+		for typ := range doc.Events {
+			reported = reported || string(domain.RuleTypeFor(typ)) == kind
+		}
+		if !reported {
+			events := "line_crossing"
+			if kind == string(domain.RuleRegion) {
+				events = "region_entrance, region_exit, loitering or intrusion"
+			}
+			v.warnf("/vca/rules", "%s rules report no event: define %s", kind, events)
+		}
+	}
+	for _, typ := range SortedKeys(doc.Events) {
+		if kind := domain.RuleTypeFor(typ); kind != "" && !contains(kinds, string(kind)) {
+			v.warnf("/events/"+escapePointer(typ), "%s events come from %s rules; add %s to vca.rules so cameras can draw them", typ, kind, kind)
 		}
 	}
 }
@@ -505,6 +536,17 @@ func (v *validator) lintFactoryNetwork(n FactoryNetwork) {
 
 func (v *validator) lintBind(doc *Document, key string, p Param, ptr string) {
 	parts := strings.Split(p.Bind, ".")
+	if parts[0] == "events" {
+		// events.<type>.enabled switches the camera's analytics for a type.
+		typ := strings.TrimSuffix(strings.TrimPrefix(p.Bind, "events."), ".enabled")
+		if p.Type != TypeBool {
+			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be a bool", key, p.Bind)
+		}
+		if _, ok := doc.Events[typ]; !ok {
+			v.warnf(ptr+"/bind", "%s switches %s events, which the profile does not define", key, typ)
+		}
+		return
+	}
 	if parts[0] != "media" {
 		return
 	}
@@ -603,7 +645,7 @@ func (v *validator) lintStream(name string, s Stream) {
 				v.errorf(StepLint, ptr+"/default/resolution", "MJPEG over RTSP carries at most %dx%d in multiples of 8; the default %s does not fit", media.MaxMJPEGSize, media.MaxMJPEGSize, r)
 				continue
 			}
-			v.warnf(StepLint, ptr+"/resolutions/"+strconv.Itoa(i), "%s cannot be streamed as MJPEG (at most %dx%d in multiples of 8); choosing both fails", r, media.MaxMJPEGSize, media.MaxMJPEGSize)
+			v.warnf(ptr+"/resolutions/"+strconv.Itoa(i), "%s cannot be streamed as MJPEG (at most %dx%d in multiples of 8); choosing both fails", r, media.MaxMJPEGSize, media.MaxMJPEGSize)
 		}
 	}
 	if !contains(s.Resolutions, d.Resolution) {

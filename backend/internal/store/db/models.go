@@ -222,6 +222,17 @@ type Rendition struct {
 	CreatedAt int64
 }
 
+type Rule struct {
+	ID           string
+	CameraID     string
+	Position     int64
+	Name         string
+	Type         string
+	GeometryJson string
+	ParamsJson   string
+	Enabled      int64
+}
+
 type Session struct {
 	ID        string
 	UserID    string
@@ -244,6 +255,16 @@ type Target struct {
 	SecretEnc  []byte
 	Enabled    int64
 	CreatedAt  int64
+}
+
+type Trigger struct {
+	ID         string
+	CameraID   string
+	Position   int64
+	Name       string
+	Type       string
+	ParamsJson string
+	Enabled    int64
 }
 
 type User struct {

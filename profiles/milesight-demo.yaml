@@ -3,7 +3,8 @@
 # Used by the technical demo to exercise the whole architecture: three RTSP
 # streams (main and sub in H.264 or H.265, third in MJPEG), three HTTP
 # features (snapshot, device information, reading and writing a parameter)
-# and a line-crossing event pushed over HTTP.
+# and video analytics: line and region rules whose events are pushed over
+# HTTP.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -15,7 +16,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.2.0
+  version: 0.3.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -43,6 +44,13 @@ state:
     min: 0
     max: 100
     description: Declarative; stored and returned.
+  # Analytics switch: turned off through the emulated API, the camera stops
+  # reporting line crossings, whatever triggers them.
+  Event.LineCrossing.Enable:
+    type: bool
+    default: true
+    bind: events.line_crossing.enabled
+    description: Line-crossing detection.
   # Effective parameters: changing one regenerates its stream.
   Encode.Main.Codec:
     type: enum
@@ -204,11 +212,13 @@ engines:
     engine: http-push@^1
 
 events:
+  # Every analytics event travels the same way; the body names the event
+  # with its vendor name (.EventName) and the rule that raised it.
   line_crossing:
     vendor_name: LineCrossing
     min_interval: 1s
     transports:
-      http_push:
+      http_push: &push
         method: POST
         content_type: application/json
         body: |
@@ -222,17 +232,37 @@ events:
               "macAddress": {{ json (upper .Camera.MAC) }},
               "ipAddress": {{ json .Camera.IP }}
             },
-            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}}{{ else }}null{{ end }},
-            "direction": {{ json .Event.Direction }},
-            "object": {{ with .Event.Object }}{{ json .Class }}{{ else }}null{{ end }}
+            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}, "type": {{ json .Type }}}{{ else }}null{{ end }},
+            "direction": {{ with .Event.Direction }}{{ json . }}{{ else }}null{{ end }},
+            "object": {{ with .Event.Object }}{"class": {{ json .Class }}, "color": {{ json .Color }}, "confidence": {{ json .Confidence }}, "box": {{ json .Box }}}{{ else }}null{{ end }}
           }
-    delivery: { timeout: 5s, retries: 3, backoff: 2s }
+    delivery: &delivery { timeout: 5s, retries: 3, backoff: 2s }
+  region_entrance:
+    vendor_name: RegionEntrance
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  region_exit:
+    vendor_name: RegionExiting
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  loitering:
+    vendor_name: Loitering
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
+  intrusion:
+    vendor_name: Intrusion
+    min_interval: 1s
+    transports: { http_push: *push }
+    delivery: *delivery
 
 vca:
-  rules: [line]
+  rules: [line, region]
   object_classes: [person, car, truck, bus, motorcycle, bicycle]
 
 coverage:
   rtsp: main stream only
   http-api: snapshot, device information and parameters
-  http_push: line_crossing
+  http_push: line_crossing, region_entrance, region_exit, loitering and intrusion

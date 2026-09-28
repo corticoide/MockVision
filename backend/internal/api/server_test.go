@@ -335,3 +335,34 @@ func TestJobsEndpoints(t *testing.T) {
 		t.Fatalf("audit: %+v", audit.Items)
 	}
 }
+
+// The rules and triggers routes reach the service, and a read token only
+// reads them; the service's own tests cover what they do.
+func TestRulesAndTriggersEndpoints(t *testing.T) {
+	n := newTestNode(t)
+	for _, c := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{"GET", "/cameras/nope/rules", "", http.StatusNotFound},
+		{"PUT", "/cameras/nope/rules", `{"rules":[]}`, http.StatusNotFound},
+		{"PUT", "/cameras/nope/rules", `{"rules":[{"name":"Gate","shape":"line"}]}`, http.StatusBadRequest},
+		{"GET", "/cameras/nope/triggers", "", http.StatusNotFound},
+		{"PUT", "/cameras/nope/triggers", `{"triggers":[]}`, http.StatusNotFound},
+		{"POST", "/cameras/nope/triggers/t1/actions/fire", "", http.StatusNotFound},
+		{"POST", "/cameras/nope/events", `{"type":"line_crossing","rule_id":"r1"}`, http.StatusNotFound},
+	} {
+		if r := n.panel(c.method, c.path, c.body); r.StatusCode != c.want {
+			t.Errorf("%s %s: %d, want %d", c.method, c.path, r.StatusCode, c.want)
+		}
+	}
+	read := bearer(n.token("read"))
+	if r := n.do("GET", "/cameras/nope/rules", "", read); r.StatusCode != http.StatusNotFound {
+		t.Errorf("a read token reading rules: %d", r.StatusCode)
+	}
+	for _, path := range []string{"/cameras/nope/rules", "/cameras/nope/triggers"} {
+		if r := n.do("PUT", path, `{"rules":[],"triggers":[]}`, read); r.StatusCode != http.StatusForbidden {
+			t.Errorf("a read token changing %s: %d", path, r.StatusCode)
+		}
+	}
+}
