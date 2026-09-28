@@ -38,10 +38,10 @@ func lanDevice(t *testing.T, parent, name, ip string, mac net.HardwareAddr) *nam
 		t.Fatal(err)
 	}
 	tmp := "dv" + name[len(name)-4:]
-	attrs := netlink.LinkAttrs{Name: tmp, ParentIndex: p.Attrs().Index}
-	if mac != nil {
-		attrs.HardwareAddr = mac
+	if mac == nil {
+		mac = randomMAC() // not one udev would replace (see testParent)
 	}
+	attrs := netlink.LinkAttrs{Name: tmp, ParentIndex: p.Attrs().Index, HardwareAddr: mac}
 	if err := netlink.LinkAdd(&netlink.Macvlan{LinkAttrs: attrs, Mode: netlink.MACVLAN_MODE_BRIDGE}); err != nil {
 		t.Fatal(err)
 	}

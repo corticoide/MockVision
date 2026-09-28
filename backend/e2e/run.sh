@@ -158,11 +158,13 @@ else
 fi
 
 step "isolated virtual LAN with a client device"
-ip link add "$LAN" type veth peer name "${LAN}p"
+# Every interface gets its MAC here: udev replaces a MAC the kernel made up
+# (MACAddressPolicy=persistent) moments after the interface appears.
+ip link add "$LAN" address 02:e2:e0:00:00:01 type veth peer name "${LAN}p" address 02:e2:e0:00:00:02
 ip link set "$LAN" up
 ip link set "${LAN}p" up
 ip netns add "$CLIENT_NS"
-ip link add mve2ecl link "$LAN" type macvlan mode bridge
+ip link add mve2ecl link "$LAN" address 02:e2:e0:00:00:03 type macvlan mode bridge
 ip link set mve2ecl netns "$CLIENT_NS"
 client ip link set lo up
 client ip link set mve2ecl name eth0
@@ -505,7 +507,7 @@ ok "turned off, the bridge is gone"
 step "ipvlan: a camera with its card's MAC, and one mode per card (D27)"
 # A second card, whose other end is a device of the client.
 WLAN=mve2e1
-ip link add "$WLAN" type veth peer name "${WLAN}p"
+ip link add "$WLAN" address 02:e2:e1:00:00:01 type veth peer name "${WLAN}p" address 02:e2:e1:00:00:02
 ip link set "${WLAN}p" netns "$CLIENT_NS"
 client ip link set "${WLAN}p" name eth1
 client ip addr add 10.78.0.2/24 dev eth1
@@ -533,7 +535,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	api POST "/cameras/$IID/actions/stop" >/dev/null
 	wait_state "$IID" stopped 20
 	for _ in $(seq 1 20); do
-		ip link add mve2emv link "$WLAN" type macvlan mode bridge 2>/dev/null && break
+		ip link add mve2emv link "$WLAN" address 02:e2:e1:00:00:03 type macvlan mode bridge 2>/dev/null && break
 		sleep 0.25 # the stopped camera's ipvlan port may linger a moment
 	done
 	ip link show mve2emv >/dev/null 2>&1 || fail "cannot add a macvlan to $WLAN"
