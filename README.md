@@ -9,8 +9,9 @@ It is for testing software that consumes cameras without buying them and
 without touching production devices. It simulates what a camera does towards
 the outside; it does not replace one.
 
-> **Status: v1 in development.** One vendor profile so far;
-> [docs/DEMO-NOTES.md](docs/DEMO-NOTES.md) lists what is still simplified.
+> **Status: v1 in development.** A demo profile and the draft of a real
+> model (a Dahua dome) so far; [docs/DEMO-NOTES.md](docs/DEMO-NOTES.md)
+> lists what is still simplified.
 > Leer en español: [README.es.md](README.es.md).
 
 ## What the demo does
@@ -224,6 +225,34 @@ Profiles serve them in the vendor's format through their templates:
 trigger with the same shortest and longest wait sends one at a fixed
 interval.
 
+### Profiles
+
+A profile describes what one camera model does on the network, as its
+clients see it: its streams and RTSP paths, its HTTP API, the events it
+sends and how it sends them. The device's own web panel is out of scope,
+and so is any setting that only that panel reads or changes.
+
+- `profiles/milesight-demo.yaml` is illustrative: its routes and payloads
+  were not captured from a device.
+- `profiles/dahua-ipc-hdbw1230e-s4.yaml` drafts a real model, the Dahua
+  IPC-HDBW1230E-S4 (2 MP dome), from its manual, its datasheet and Dahua's
+  public HTTP API. It serves RTSP at `/cam/realmonitor?channel=1&subtype=0`
+  (main) and `subtype=1` (sub), challenges with `Login to <serial>` as the
+  unit does, and answers `magicBox.cgi`, `snapshot.cgi`,
+  `global.cgi?action=getCurrentTime` and `configManager.cgi`:
+  `getConfig&name=Encode` reads a whole table and
+  `setConfig&Encode[0].MainFormat[0].Video.FPS=15` changes the stream. With
+  curl, `-g` sends the brackets as they are:
+  `curl -g --digest -u admin:admin1234 'http://<ip>/cgi-bin/configManager.cgi?action=getConfig&name=Encode'`.
+  Its events have no transport yet: a Dahua sends them over
+  `eventManager.cgi?action=attach`, ONVIF or its private protocol, all on
+  the roadmap, like codec and resolution changes reaching the stream. The
+  file's header lists what else is missing.
+
+Engines repeat what the vendor shows on the wire: `auth.realm` may name the
+camera (`"Login to {{ .Camera.Serial }}"`) in the HTTP API and in RTSP, and
+the RTSP engine's `server` sets the `Server` header of its answers.
+
 ### Network
 
 The camera's **Network** tab, and the new-camera dialog, choose how it joins
@@ -368,7 +397,7 @@ sandbox change every thread at once, and only a pure Go binary can do that.
 backend/    cmd/mockvision, internal/ (domain, app, store, netctl, sandbox, camera, engines, media, pkg, api, telemetry)
 frontend/   React + TypeScript + Vite panel, embedded in the binary
 database/   migrations and queries (sqlc)
-profiles/   profile schema and the demo profile
+profiles/   profile schema, the demo profile and the Dahua draft
 sdk/        engine contract (Go and gRPC)
 deploy/     Dockerfile and systemd unit
 docs/       notes and the code audit (AUDITORIA.md)

@@ -1,0 +1,353 @@
+# MockVision draft profile: Dahua IPC-HDBW1230E-S4, a 2 MP vandal-proof IR
+# dome of Dahua's Lite series (sold by TVC as DHT0040132).
+#
+# The profile describes what the camera does on the network, as its
+# clients see it: the HTTP API (CGI) and RTSP. The web panel is out of
+# scope; so is any setting the panel changes and the network cannot read
+# or write.
+#
+# Sources: the "Dahua Network Camera Web 3.0" operation manual (v1.0.2),
+# the model's datasheet (two streams, H.265 or H.264, MJPEG on the sub
+# stream only; motion, tampering, scene change, network and storage events;
+# no audio, alarm contacts, SD card or smart analytics) and the public Dahua
+# HTTP API. Nothing was captured from a unit yet, so the verification level
+# is Draft: values marked "to confirm" are the likeliest ones and must be
+# checked against a capture.
+#
+# What MockVision cannot do yet for this camera, all of it on the roadmap:
+# - Events leave a Dahua through eventManager.cgi attach, ONVIF or the
+#   private protocol (TCP 37777); none exists yet, so the events are
+#   declared with their Dahua codes and no transport.
+# - Codec and resolution answer and store Dahua's values (H.264, 1920 and
+#   1080), but the stream keeps its defaults until profiles can translate
+#   values; frame rate, bit rate and I-frame interval do drive the stream.
+# - ONVIF, HTTPS, the private protocol, discovery (Dahua's, UPnP, Bonjour),
+#   multicast, the first-boot initialization and error bodies of unknown
+#   parameters are not served as the unit serves them.
+#
+# MockVision is not affiliated with Dahua; the names are only descriptive.
+#
+# yaml-language-server: $schema=./schema/profile.schema.json
+
+schema: 1
+
+profile:
+  id: dahua/ipc-hdbw1230e-s4
+  version: 0.1.0
+  name: Dahua IPC-HDBW1230E-S4 (2 MP dome)
+  vendor: Dahua
+  model: IPC-HDBW1230E-S4
+  firmware: ["2.800.0000000.25.R"]
+
+identity:
+  # 15 characters such as 4E0AB2EPAG00B3B.
+  serial: '9A9XXXXP\AAXXXXX'
+  oui: "3C:EF:8C"
+  factory:
+    network: { ip: 192.168.1.108, mask: 255.255.255.0, gateway: 192.168.1.1 }
+    # The unit ships uninitialized and its first client sets the admin
+    # password (8 to 32 characters mixing two of letters, digits and
+    # symbols). This is the password the simulated unit was initialized
+    # with.
+    users:
+      - { username: admin, password: admin1234, role: admin }
+  device:
+    # getDeviceType and getSoftwareVersion answer these (to confirm).
+    model: IPC-HDBW1230E-S4
+    firmware: "2.800.0000000.25.R"
+
+state:
+  # The device name is the serial number until the unit is renamed (to
+  # confirm): while it is empty, the API answers the serial.
+  General.MachineName:
+    type: string
+    default: ""
+    max_length: 63
+    description: Device name; empty answers the serial number.
+
+  # Encoding, as configManager.cgi names it: Encode[0].MainFormat[0] is the
+  # main stream, Encode[0].ExtraFormat[0] the sub stream. Frame rate, bit
+  # rate and I-frame interval drive the streams; the rest is stored and
+  # answered.
+  "Encode[0].MainFormat[0].VideoEnable":
+    type: bool
+    default: true
+  "Encode[0].MainFormat[0].Video.Compression":
+    type: enum
+    values: [H.264, H.265]
+    default: H.264
+    description: To confirm; the stream keeps its codec until profiles translate values.
+  "Encode[0].MainFormat[0].Video.Profile":
+    type: enum
+    values: [Baseline, Main, High]
+    default: Main
+    description: H.264B, H.264 and H.264H in the manual.
+  "Encode[0].MainFormat[0].Video.Width":
+    type: enum
+    values: [1920, 1280]
+    default: 1920
+  "Encode[0].MainFormat[0].Video.Height":
+    type: enum
+    values: [1080, 960, 720]
+    default: 1080
+  "Encode[0].MainFormat[0].Video.FPS":
+    type: int
+    default: 30
+    min: 1
+    max: 30
+    bind: media.main.fps
+  "Encode[0].MainFormat[0].Video.BitRateControl":
+    type: enum
+    values: [CBR, VBR]
+    default: CBR
+  "Encode[0].MainFormat[0].Video.BitRate":
+    type: int
+    default: 4096
+    min: 32
+    max: 10240
+    bind: media.main.bitrate
+    description: kbit/s; the default is to confirm.
+  "Encode[0].MainFormat[0].Video.Quality":
+    type: int
+    default: 4
+    min: 1
+    max: 6
+    description: Quality of VBR, six levels.
+  "Encode[0].MainFormat[0].Video.GOP":
+    type: int
+    default: 60
+    min: 1
+    max: 150
+    bind: media.main.gop
+    description: Frames between I-frames; twice the frame rate by default.
+  "Encode[0].ExtraFormat[0].VideoEnable":
+    type: bool
+    default: true
+  "Encode[0].ExtraFormat[0].Video.Compression":
+    type: enum
+    values: [H.264, H.265, MJPG]
+    default: H.264
+    description: To confirm; the stream keeps its codec until profiles translate values.
+  "Encode[0].ExtraFormat[0].Video.Profile":
+    type: enum
+    values: [Baseline, Main, High]
+    default: Main
+  "Encode[0].ExtraFormat[0].Video.Width":
+    type: enum
+    values: [704, 640, 352]
+    default: 704
+  "Encode[0].ExtraFormat[0].Video.Height":
+    type: enum
+    values: [480, 240]
+    default: 480
+  "Encode[0].ExtraFormat[0].Video.FPS":
+    type: int
+    default: 30
+    min: 1
+    max: 30
+    bind: media.sub.fps
+  "Encode[0].ExtraFormat[0].Video.BitRateControl":
+    type: enum
+    values: [CBR, VBR]
+    default: CBR
+  "Encode[0].ExtraFormat[0].Video.BitRate":
+    type: int
+    default: 512
+    min: 32
+    max: 10240
+    bind: media.sub.bitrate
+    description: kbit/s; the default is to confirm.
+  "Encode[0].ExtraFormat[0].Video.Quality":
+    type: int
+    default: 4
+    min: 1
+    max: 6
+  "Encode[0].ExtraFormat[0].Video.GOP":
+    type: int
+    default: 60
+    min: 1
+    max: 150
+    bind: media.sub.gop
+
+  # Picture. Read and written over the network; their effect on the
+  # picture (mirror, flip, black and white...) is on the roadmap.
+  "VideoColor[0][0].Brightness": { type: int, default: 50, min: 0, max: 100 }
+  "VideoColor[0][0].Contrast": { type: int, default: 50, min: 0, max: 100 }
+  "VideoColor[0][0].Saturation": { type: int, default: 50, min: 0, max: 100 }
+  "VideoInOptions[0].Mirror": { type: bool, default: false }
+  "VideoInOptions[0].Flip": { type: bool, default: false }
+  "VideoInOptions[0].Rotate90":
+    type: enum
+    values: [0, 1, 2]
+    default: 0
+    description: 0 none, 1 clockwise, 2 counterclockwise.
+  "VideoInOptions[0].DayNightColor":
+    type: enum
+    values: [0, 1, 2]
+    default: 1
+    description: 0 color, 1 automatic, 2 black and white.
+
+  # Overlay: the channel title the unit prints on its video, which clients
+  # read and change (to confirm the default).
+  "ChannelTitle[0].Name":
+    type: string
+    default: "IPC"
+    max_length: 63
+    bind: osd.text
+  "VideoWidget[0].ChannelTitle.EncodeBlend":
+    type: bool
+    default: true
+    bind: osd.enabled
+  "VideoWidget[0].TimeTitle.EncodeBlend":
+    type: bool
+    default: true
+
+  # Detection switches: turned off over the network, the camera stops
+  # raising the event, whatever triggers it.
+  "MotionDetect[0].Enable":
+    type: bool
+    default: true
+    bind: events.motion.enabled
+  "BlindDetect[0].Enable":
+    type: bool
+    default: false
+    bind: events.tamper.enabled
+
+  # Clock synchronization; the NTP client itself is on the roadmap.
+  NTP.Enable:
+    type: bool
+    default: false
+    bind: time.ntp
+  NTP.Address:
+    type: string
+    default: "time.windows.com"
+    max_length: 255
+    description: To confirm.
+  NTP.Port:
+    type: int
+    default: 123
+    min: 1
+    max: 65535
+
+media:
+  streams:
+    # Main stream: 1080P, 1.3M or 720P in H.264 or H.265, up to 30 fps
+    # (NTSC units). Sub stream 1: D1, VGA or CIF, also in MJPEG.
+    main:
+      codecs: [h264, h265]
+      resolutions: ["1920x1080", "1280x960", "1280x720"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 32, max: 10240 }
+      default: { codec: h264, resolution: 1920x1080, fps: 30, bitrate: 4096, gop: 60 }
+    sub:
+      codecs: [h264, h265, mjpeg]
+      resolutions: ["704x480", "640x480", "352x240"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 32, max: 10240 }
+      default: { codec: h264, resolution: 704x480, fps: 30, bitrate: 512, gop: 60 }
+
+engines:
+  rtsp:
+    engine: rtsp@^1
+    port: 554
+    # The challenge names the unit, as on HTTP (to confirm on RTSP).
+    auth: { scheme: digest, realm: "Login to {{ .Camera.Serial }}" }
+    server: Rtsp Server/3.0
+    paths:
+      main: /cam/realmonitor?channel=1&subtype=0
+      sub: /cam/realmonitor?channel=1&subtype=1
+
+  http:
+    engine: http-api@^1
+    port: 80
+    auth: { scheme: digest, realm: "Login to {{ .Camera.Serial }}" }
+    routes:
+      # Snapshot of the main stream: /cgi-bin/snapshot.cgi?channel=1.
+      - id: snapshot
+        match: { method: GET, path: /cgi-bin/snapshot.cgi }
+        action: { handler: snapshot, stream: main }
+
+      # Device information, one key=value line per answer.
+      - id: device-type
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getDeviceType } }
+        action: { type: text/plain;charset=utf-8, body: "type={{ .Camera.Model }}\r\n" }
+      - id: device-class
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getDeviceClass } }
+        action: { type: text/plain;charset=utf-8, body: "class=IPC\r\n" }
+      - id: serial-number
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSerialNo } }
+        action: { type: text/plain;charset=utf-8, body: "sn={{ .Camera.Serial }}\r\n" }
+      - id: machine-name
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getMachineName } }
+        action:
+          type: text/plain;charset=utf-8
+          body: "name={{ with state \"General.MachineName\" }}{{ . }}{{ else }}{{ .Camera.Serial }}{{ end }}\r\n"
+      # The build date is to confirm.
+      - id: software-version
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSoftwareVersion } }
+        action: { type: text/plain;charset=utf-8, body: "version={{ .Camera.Firmware }},build:2020-06-18\r\n" }
+      - id: hardware-version
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getHardwareVersion } }
+        action: { type: text/plain;charset=utf-8, body: "version=1.00\r\n" }
+      - id: system-info
+        match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSystemInfo } }
+        action:
+          type: text/plain;charset=utf-8
+          body: "deviceType={{ .Camera.Model }}\r\nhardwareVersion=1.00\r\nserialNumber={{ .Camera.Serial }}\r\n"
+
+      # The camera clock, for example 2024-05-06 13:02:09.
+      - id: current-time
+        match: { method: GET, path: /cgi-bin/global.cgi, query: { action: getCurrentTime } }
+        action: { type: text/plain;charset=utf-8, body: "result={{ fmtTime .Now \"2006-01-02 15:04:05\" }}\r\n" }
+
+      # Configuration tables, for example
+      #   /cgi-bin/configManager.cgi?action=getConfig&name=Encode
+      #   /cgi-bin/configManager.cgi?action=setConfig&Encode[0].MainFormat[0].Video.FPS=15
+      # A table name answers its members, table.<key>=<value> per line.
+      - id: config-get
+        match: { method: GET, path: /cgi-bin/configManager.cgi, query: { action: getConfig, name: "*" } }
+        action:
+          handler: state.get
+          from: query
+          key: name
+          then:
+            type: text/plain;charset=utf-8
+            body: "{{ range .Result }}table.{{ .Key }}={{ if and (eq .Key \"General.MachineName\") (eq (print .Value) \"\") }}{{ $.Camera.Serial }}{{ else }}{{ .Value }}{{ end }}\r\n{{ end }}"
+      - id: config-set
+        match: { method: GET, path: /cgi-bin/configManager.cgi, query: { action: setConfig } }
+        roles: [admin, operator]
+        action:
+          handler: state.set
+          from: query
+          then: { type: text/plain;charset=utf-8, body: "OK\r\n" }
+
+      # Any other action of these programs is a bad request.
+      - id: magicbox-bad-request
+        match: { path: /cgi-bin/magicBox.cgi }
+        action: &bad { status: 400, type: text/plain;charset=utf-8, body: "Error\r\nBad Request!\r\n" }
+      - id: global-bad-request
+        match: { path: /cgi-bin/global.cgi }
+        action: *bad
+      - id: config-bad-request
+        match: { path: /cgi-bin/configManager.cgi }
+        action: *bad
+
+events:
+  # Dahua's event codes, as eventManager.cgi names them (to confirm with a
+  # capture). The unit raises them over eventManager.cgi attach, ONVIF or
+  # its private protocol; until MockVision serves one of them they have no
+  # transport, and the import warns about it.
+  motion: { vendor_name: VideoMotion }
+  tamper: { vendor_name: VideoBlind }
+  custom:scene_change: { vendor_name: SceneChange }
+  custom:net_abort: { vendor_name: NetAbort }
+  custom:ip_conflict: { vendor_name: IPConflict }
+  custom:login_failure: { vendor_name: LoginFailure }
+  custom:storage_not_exist: { vendor_name: StorageNotExist }
+  custom:storage_failure: { vendor_name: StorageFailure }
+  custom:storage_low_space: { vendor_name: StorageLowSpace }
+
+coverage:
+  rtsp: main and sub stream at Dahua's realmonitor paths, digest with the unit's realm
+  http-api: snapshot, device information (magicBox), clock reading, configuration tables (configManager getConfig and setConfig)
+  events: declared with Dahua's codes; no transport until eventManager.cgi attach
