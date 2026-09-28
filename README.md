@@ -28,7 +28,9 @@ the outside; it does not replace one.
 - Video analytics: lines and regions drawn on the camera's picture, and
   events on them (line crossing, region entrance and exit, loitering,
   intrusion) fired by hand or at random moments, sent to a target with an
-  HTTP POST. Every delivery is logged with its status and latency.
+  HTTP POST, and the people counts, occupancy and heat map the camera keeps
+  from them. The profile declares every analytic. Every delivery is logged
+  with its status and latency.
 - Metrics for each camera (CPU, RAM, clients). A camera is refused, with the
   reason, when it would go over the camera limit or the node's resources.
 - A panel that updates live over a WebSocket.
@@ -178,13 +180,49 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X PU
   http://<node>:8080/api/v1/cameras/<camera id>/triggers
 ```
 
-Rules and triggers apply at once, without restarting the camera. The profile
-says which kinds of rule and which objects the camera has, and how often it
-may report each event; a parameter bound to `events.<type>.enabled` turns a
-type off, as the analytics switch of a real camera does (the demo's
-`Event.LineCrossing.Enable`). Clones copy rules and triggers; restoring a
-camera erases its rules and keeps its triggers, which then fire on any rule.
-Without a rule of the right kind, events happen on a default line or region.
+Rules and triggers apply at once, without restarting the camera. A camera
+of the demo starts with the rules its profile ships (**Line 1** and
+**Region 1**); clones copy rules and triggers, and restoring a camera brings
+its factory rules back and keeps its triggers, which then fire on any rule.
+An event that comes from a line or a region needs one: without an enabled
+rule that reports it, the camera does not send it, as a real one would not.
+
+#### What the profile decides
+
+Nothing about analytics is built into the node; the profile declares it:
+
+- which kinds of rule the camera has (`vca.rules`), the objects it detects
+  and the rules it ships with (`vca.factory_rules`);
+- the events it can send, each with its payload for every transport. Common
+  ones have canonical names (`line_crossing`, `region_entrance`, `lpr`…);
+  anything else is `custom:<name>`;
+- the kind of rule each event comes from (`rule: line`, `region` or
+  `none`). Canonical events have a default; a vendor event such as
+  `custom:object_left` can come from regions and be drawn like any other;
+- how often it may report each event, and which parameter turns it off
+  (`bind: events.<type>.enabled`, the demo's `Event.LineCrossing.Enable`).
+
+A profile without line crossings has no lines to draw, no crossings to fire
+and no ⚡ for them in the camera list.
+
+#### Counts, heat map and reports
+
+Like a real camera, each camera counts from the events it emits: crossings
+of each line by direction and object class (people counting), entries,
+exits and occupancy of each region, events by type, and where objects were
+on a grid over the picture (a heat map). The **Rules** tab shows the counts
+of each rule and, with **Heat map**, shades where objects were; **Reset
+counts** starts again from zero. `GET /api/v1/cameras/{id}/analytics?cols=32&rows=18`
+returns them.
+
+Profiles serve them in the vendor's format through their templates:
+`analytics` (every count), `lineCount "Gate" "A->B"`, `occupancy "Lot"` and
+`heatmap 32 18` (rows of cells). The demo answers
+`/cgi-bin/operator/operator.cgi?action=get.vca.counting` and
+`action=get.vca.heatmap`, and pushes a report: an event marked `report: true`
+(`custom:people_counting`) carries the counts instead of an object; a
+trigger with the same shortest and longest wait sends one at a fixed
+interval.
 
 ### Network
 

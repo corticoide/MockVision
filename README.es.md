@@ -29,8 +29,10 @@ reemplaza.
 - Analítica de video: líneas y regiones dibujadas sobre la imagen de la
   cámara, y eventos sobre ellas (cruce de línea, entrada y salida de región,
   permanencia, intrusión) disparados a mano o en momentos al azar, enviados
-  a un destino con un POST HTTP. Cada entrega queda registrada con su estado
-  y su latencia.
+  a un destino con un POST HTTP, y los conteos de personas, la ocupación y
+  el mapa de calor que la cámara lleva a partir de ellos. El perfil declara
+  toda la analítica. Cada entrega queda registrada con su estado y su
+  latencia.
 - Métricas por cámara (CPU, RAM, clientes). Si una cámara superaría el
   máximo de cámaras o los recursos del nodo, se rechaza indicando el motivo.
 - Un panel que se actualiza en vivo por WebSocket.
@@ -187,14 +189,51 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X PU
   http://<nodo>:8080/api/v1/cameras/<id de la cámara>/triggers
 ```
 
-Reglas y disparadores se aplican en el momento, sin reiniciar la cámara. El
-perfil dice qué tipos de regla y qué objetos tiene la cámara, y cada cuánto
-puede informar cada evento; un parámetro vinculado a `events.<tipo>.enabled`
-apaga un tipo, como el interruptor de analítica de una cámara real (en el
-demo, `Event.LineCrossing.Enable`). Los clones copian reglas y disparadores;
-restaurar una cámara borra sus reglas y conserva sus disparadores, que desde
-entonces disparan en cualquier regla. Sin una regla del tipo adecuado, los
-eventos ocurren en una línea o región por defecto.
+Reglas y disparadores se aplican en el momento, sin reiniciar la cámara. Una
+cámara del demo arranca con las reglas que trae su perfil (**Line 1** y
+**Region 1**); los clones copian reglas y disparadores, y restaurar una
+cámara le devuelve sus reglas de fábrica y conserva sus disparadores, que
+desde entonces disparan en cualquier regla. Un evento que sale de una línea o
+una región necesita una: sin una regla habilitada que lo informe, la cámara
+no lo envía, como no lo haría una real.
+
+#### Lo que decide el perfil
+
+El nodo no trae ninguna analítica de fábrica; el perfil la declara:
+
+- qué tipos de regla tiene la cámara (`vca.rules`), qué objetos detecta y
+  con qué reglas viene (`vca.factory_rules`);
+- los eventos que puede enviar, cada uno con su contenido para cada
+  transporte. Los comunes tienen nombres canónicos (`line_crossing`,
+  `region_entrance`, `lpr`…); cualquier otro es `custom:<nombre>`;
+- de qué tipo de regla sale cada evento (`rule: line`, `region` o `none`).
+  Los canónicos tienen uno por defecto; un evento del fabricante como
+  `custom:object_left` puede salir de regiones y dibujarse como cualquier
+  otro;
+- cada cuánto puede informar cada evento y qué parámetro lo apaga
+  (`bind: events.<tipo>.enabled`, en el demo `Event.LineCrossing.Enable`).
+
+Un perfil sin cruce de línea no tiene líneas para dibujar, ni cruces para
+disparar, ni ⚡ para ellos en la lista de cámaras.
+
+#### Conteos, mapa de calor y reportes
+
+Como una cámara real, cada cámara cuenta a partir de los eventos que emite:
+cruces de cada línea por sentido y clase de objeto (conteo de personas),
+entradas, salidas y ocupación de cada región, eventos por tipo, y dónde
+estuvieron los objetos en una grilla sobre la imagen (un mapa de calor). La
+pestaña **Reglas** muestra los conteos de cada regla y, con **Mapa de
+calor**, sombrea dónde hubo objetos; **Reiniciar conteos** vuelve a cero.
+`GET /api/v1/cameras/{id}/analytics?cols=32&rows=18` los devuelve.
+
+Los perfiles los sirven en el formato del fabricante con sus plantillas:
+`analytics` (todos los conteos), `lineCount "Gate" "A->B"`,
+`occupancy "Lot"` y `heatmap 32 18` (filas de celdas). El demo responde
+`/cgi-bin/operator/operator.cgi?action=get.vca.counting` y
+`action=get.vca.heatmap`, y envía un reporte: un evento marcado
+`report: true` (`custom:people_counting`) lleva los conteos en lugar de un
+objeto; un disparador con la misma espera mínima y máxima envía uno a
+intervalo fijo.
 
 ### Red
 

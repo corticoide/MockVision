@@ -6,7 +6,8 @@
 # `mockvision run` and checks, from the client: ping and MAC (M1), RTSP with
 # ffprobe over TCP and UDP (M2), the HTTP API with Digest (M3), a
 # line-crossing event (M4), admission (M7), the privileges of the service
-# and camera processes, rules and triggers (manual and random), editing a
+# and camera processes, rules and triggers (manual and random), the counts
+# and heat map the camera derives from its events, editing a
 # running camera (accounts, stream and address), sub and third streams in
 # H.264, H.265 and MJPEG, API tokens
 # with bulk actions and the audit log, background jobs, the outbound
@@ -212,7 +213,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.3.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -268,12 +269,15 @@ origin=$(api GET "/cameras/$CID/config" | json '[p["origin"] for p in d["params"
 ok "parameter written by the client is persisted with origin $origin"
 
 step "M4: line crossing reaches the target and the delivery is logged"
+[ "$(api GET "/cameras/$CID" | json '",".join(r["name"] for r in d["rules"])')" = "Line 1,Region 1" ] ||
+	fail "the camera lacks its profile's factory rules"
 EID=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' | json 'd["id"]')
 for _ in $(seq 1 20); do
 	grep -q "$EID" "$WORK/received.log" 2>/dev/null && break
 	sleep 0.25
 done
 grep -q "$EID" "$WORK/received.log" || fail "the target did not receive $EID"
+grep "$EID" "$WORK/received.log" | grep -q '"name":"Line 1","type":"line"' || fail "the crossing is not on the factory line"
 sleep 0.5
 ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
@@ -326,6 +330,38 @@ wait_received "$FID"
 [ "$(api GET "/events/$FID" | json 'd["trigger_id"]')" = "$TRG_ID" ] || fail "the fired event does not name its trigger"
 [ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "rules and triggers restarted the camera"
 ok "disabled, the trigger stops; fired by hand, it sends one; the camera never restarted (pid $PID)"
+
+step "analytics: counts, occupancy and a heat map from the camera's events, served and reported"
+api POST "/cameras/$CID/analytics/actions/reset" >/dev/null
+for body in "{\"type\":\"line_crossing\",\"rule_id\":\"$LINE_ID\"}" "{\"type\":\"region_entrance\",\"rule_id\":\"$LOT_ID\"}" \
+	"{\"type\":\"line_crossing\",\"rule_id\":\"$LINE_ID\"}"; do
+	# One crossing a second at most, as the profile says.
+	sleep 1.1
+	api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d "$body" >/dev/null
+done
+counts=$(api GET "/cameras/$CID/analytics?cols=8&rows=4")
+[ "$(echo "$counts" | json '[(l["a_to_b"], l["b_to_a"]) for l in d["lines"] if l["name"] == "Gate line"][0]')" = "(2, 0)" ] ||
+	fail "line counts: $counts"
+[ "$(echo "$counts" | json '[(r["entries"], r["occupancy"]) for r in d["regions"] if r["name"] == "Lot"][0]')" = "(1, 1)" ] ||
+	fail "region counts: $counts"
+[ "$(echo "$counts" | json 'sum(d["heat"]["cells"])')" = 3 ] || fail "heat map: $counts"
+ok "the node reads 2 crossings on Gate line, 1 car in Lot and 3 objects on the heat map"
+served=$(client curl -s --digest -u admin:e2e-cam-pw "http://$CAM_IP/cgi-bin/operator/operator.cgi?action=get.vca.counting")
+[ "$(echo "$served" | json '[l["in"] for l in d["lines"] if l["name"] == "Gate line"][0]')" = 2 ] || fail "counting over the emulated API: $served"
+heat=$(client curl -s --digest -u admin:e2e-cam-pw "http://$CAM_IP/cgi-bin/operator/operator.cgi?action=get.vca.heatmap&cols=16&rows=9")
+[ "$(echo "$heat" | json '(d["cols"], d["rows"], sum(map(sum, d["data"])))')" = "(16, 9, 3)" ] || fail "heat map over the emulated API: $heat"
+ok "a client of the emulated API reads the same counts and a 16x9 heat map"
+report='"name":"Counting","event_type":"custom:people_counting","min_seconds":2,"max_seconds":2'
+api PUT "/cameras/$CID/triggers" -H 'Content-Type: application/json' \
+	-d "{\"triggers\":[{\"id\":\"$TRG_ID\",$trigger,\"enabled\":false},{$report}]}" >/dev/null
+for _ in $(seq 1 40); do
+	grep -q '"eventType":"PeopleCounting"' "$WORK/received.log" && break
+	sleep 0.25
+done
+grep '"eventType":"PeopleCounting"' "$WORK/received.log" | grep -q '"name":"Gate line","in":2' ||
+	fail "people counting report: $(grep PeopleCounting "$WORK/received.log" | head -1)"
+api PUT "/cameras/$CID/triggers" -H 'Content-Type: application/json' -d "{\"triggers\":[{\"id\":\"$TRG_ID\",$trigger,\"enabled\":false}]}" >/dev/null
+ok "a report trigger with a fixed interval pushes the counts to the target"
 
 step "v1 editing: accounts and stream apply without a restart"
 probe() { # password -> codec,width,height
@@ -408,7 +444,7 @@ metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.3.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.4.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
@@ -485,7 +521,7 @@ fi
 step "MAC probe: a camera does not start with a MAC another device has (RN-06)"
 CLIENT_MAC=$(client cat /sys/class/net/eth0/address)
 BAD=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.3.0\",
+	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
 	\"network\": {\"ip\": \"10.77.0.13\", \"mac\": \"$CLIENT_MAC\"}, \"start\": true}" | json 'd["id"]')
 for _ in $(seq 1 60); do
 	[ "$(api GET "/cameras/$BAD" | json 'd["status"]["state"]')" = error ] && break
@@ -499,7 +535,7 @@ ok "refused: $reason"
 
 step "DHCP: a new camera takes its factory address without a server, then leases one (D23, D24)"
 LID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.3.0",
+	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.4.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_state "$LID" running 90
 LMAC=$(api GET "/cameras/$LID" | json 'd["network"]["mac"]')
@@ -511,7 +547,7 @@ client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach 
 ok "no server answered: the camera took the profile's factory address 192.168.5.190, as a real one"
 # A second one finds the address taken, and takes it once the first stops.
 L2ID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.3.0",
+	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.4.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_status "$L2ID" 'd["status"].get("reason_code")' dhcp_factory_in_use 90
 ok "a second camera did not take 192.168.5.190 while Lobby holds it"
@@ -574,7 +610,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	ip link del mve2eiv
 	WMAC=$(cat "/sys/class/net/$WLAN/address")
 	IID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.3.0\",
+		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
 		\"network\": {\"mode\": \"ipvlan\", \"parent\": \"$WLAN\", \"ip\": \"10.78.0.10\", \"netmask\": \"255.255.255.0\"},
 		\"stream\": {\"resolution\": \"640x360\"}, \"start\": true}" | json 'd["id"]')
 	wait_state "$IID" running 60
@@ -583,7 +619,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	[ "$(api GET "/cameras/$IID" | json 'd["status"].get("mac")')" = "$WMAC" ] || fail "the status does not show the card's MAC"
 	ok "10.78.0.10 answers with the MAC of $WLAN, $WMAC"
 	code=$(api POST /cameras -H 'Content-Type: application/json' -o "$WORK/mix.json" -w '%{http_code}' -d "{
-		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.3.0\",
+		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
 		\"network\": {\"parent\": \"$WLAN\", \"ip\": \"10.78.0.11\", \"netmask\": \"255.255.255.0\"}}")
 	[ "$code" = 422 ] && grep -q "Wi-Fi 1" "$WORK/mix.json" || fail "a macvlan camera beside an ipvlan one: $code $(cat "$WORK/mix.json")"
 	ok "a macvlan camera on $WLAN is refused and the answer names Wi-Fi 1"
