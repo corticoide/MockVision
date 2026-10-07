@@ -36,6 +36,7 @@ against the Docker image started with `compose.yaml`.
 | ipvlan, and one mode per network card (v1) | where the kernel has ipvlan, a camera on a second card answers with the card's MAC, and a macvlan camera on that card is refused with `parent_busy` |
 | The node reaches its cameras through the bridge (v1) | ping and snapshot from the node with the bridge on, not with it off |
 | Rules and triggers (v1) | a manual loitering on a region carries the rule's name and its only object class; a crossing the line does not report gets 422; the emulated API turns crossings off (409) and on; a random trigger sends a crossing every second or two, stops when disabled and fires once on request, without restarting the camera; its rule and trigger survive a node restart |
+| Event transports (v1) | linked to an MQTT broker on the client, the running camera connects at once, with its serial as client ID and its will, and says online; a line crossing reaches the broker (QoS 1), the FTP server (the snapshot under `<serial>/<date>/`, in passive mode through the camera's firewall) and the mail server (with the snapshot attached); a second crossing within 10 s skips the mail; each target passes its test from the camera; unlinked, the camera disconnects from the broker |
 | Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
@@ -154,6 +155,32 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   real reset does, and keeps its triggers, which then fire on any rule.
 - The loitering time and the intrusion delay of real cameras are not
   modeled: a region reports the event when its trigger says.
+
+### Event transports
+
+- **MQTT 3.1.1** only, with a client of MockVision's own; MQTT 5 is not
+  spoken. The camera never subscribes: it only publishes.
+- **The camera connects to a broker when it learns of it**, as it starts or
+  when the target is linked, and keeps the session: a broker restart sees
+  it reconnect within seconds, with a growing pause after failures. An
+  event while the broker is down fails its attempts like any other target,
+  with the profile's retries; nothing is queued for later (D70 is v1.1).
+- **FTP is passive only** (EPSV, else PASV with the control connection's
+  host): the camera cannot listen for active mode's data connection. FTPS
+  is not spoken; SFTP is, with a password (keyboard-interactive too) and an
+  optional pinned host key. A camera's firewall opens every port of an FTP
+  server, for its data connections.
+- **Mail** speaks PLAIN and LOGIN, the mechanisms cameras use, over plain,
+  STARTTLS or implicit TLS; a certificate that does not verify is refused
+  unless the target accepts it. The interval of the profile counts per
+  target, whatever the event; the mails it holds back are logged as
+  *skipped*, not sent later.
+- **Connection tests send nothing**: an MQTT session, an FTP or SFTP login
+  and the target's directory (created if missing), the sender and
+  recipients of a mail (then RSET).
+- **Delivery overrides** are per target, for every camera that uses it;
+  the per-link overrides of the schema (`camera_targets.overrides_json`)
+  stay unused.
 
 ### API and data
 

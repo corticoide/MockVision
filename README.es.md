@@ -29,11 +29,14 @@ reemplaza.
   snapshot, información del equipo y lectura y escritura de un parámetro.
 - Analítica de video: líneas y regiones dibujadas sobre la imagen de la
   cámara, y eventos sobre ellas (cruce de línea, entrada y salida de región,
-  permanencia, intrusión) disparados a mano o en momentos al azar, enviados
-  a un destino con un POST HTTP, y los conteos de personas, la ocupación y
-  el mapa de calor que la cámara lleva a partir de ellos. El perfil declara
-  toda la analítica. Cada entrega queda registrada con su estado y su
-  latencia.
+  permanencia, intrusión) disparados a mano o en momentos al azar, y los
+  conteos de personas, la ocupación y el mapa de calor que la cámara lleva
+  a partir de ellos. El perfil declara toda la analítica.
+- Eventos entregados como lo hace el equipo: una notificación HTTP (Basic o
+  Digest), un mensaje a un broker MQTT, la instantánea subida a un servidor
+  FTP o SFTP, un correo con la instantánea adjunta; con los reintentos del
+  equipo, que cada destino puede reemplazar. Cada entrega queda registrada
+  con su estado y su latencia.
 - Métricas por cámara (CPU, RAM, clientes). Si una cámara superaría el
   máximo de cámaras o los recursos del nodo, se rechaza indicando el motivo.
 - Un panel que se actualiza en vivo por WebSocket.
@@ -74,7 +77,9 @@ Después:
 1. **Perfiles → Importar perfil:** elige `profiles/milesight-demo.yaml`. Se
    valida y queda listado como *Borrador*.
 2. **Destinos → Nuevo destino:** pon la URL que tiene que recibir los
-   eventos, por ejemplo `http://192.168.1.10:8000/events`.
+   eventos, por ejemplo `http://192.168.1.10:8000/events`, o elige otro
+   tipo: un broker MQTT, un servidor FTP o SFTP, un servidor de correo (ver
+   [Destinos de eventos](#destinos-de-eventos)).
 3. **Cámaras → Nueva cámara:** pon una IP libre de tu LAN y elige el
    destino. La cámara arranca y pasa a *Activa*.
 
@@ -236,6 +241,34 @@ Los perfiles los sirven en el formato del fabricante con sus plantillas:
 objeto; un disparador con la misma espera mínima y máxima envía uno a
 intervalo fijo.
 
+### Destinos de eventos
+
+Un destino es un receptor que comparten varias cámaras; cada cámara le
+envía los eventos de los tipos con que se vinculó, por los transportes que
+su perfil define para cada evento.
+
+| Tipo | URL | Qué hace la cámara |
+| --- | --- | --- |
+| HTTP | `http://host:puerto/ruta` | Una solicitud por evento con el payload del perfil. **Autenticación** Basic, o Digest: la cámara responde al desafío del destino (MD5 o SHA-256, `qop=auth`). |
+| MQTT | `mqtt://host:1883`, `mqtts://host:8883` | Se conecta apenas arranca y mantiene la sesión, con pings cuando está ociosa y reconexión si se corta; publica cada evento con el tópico, el QoS (0, 1 o 2) y el retain del perfil. Los mensajes de nacimiento y testamento (birth y will) del perfil la anuncian en línea y fuera de línea. Un destino puede reemplazar el tópico y el ID de cliente con plantillas; cada cámara necesita su propio ID de cliente, por defecto su número de serie. |
+| FTP | `ftp://host:21/dir` | Sube la instantánea del evento, o un documento que arma el perfil, en modo pasivo (EPSV, si no PASV), en un directorio y con un nombre que dan las plantillas del perfil. La ruta es relativa al directorio de inicio de sesión; `%2F` la empieza en la raíz. |
+| SFTP | `sftp://host:22/dir` | Lo mismo por SSH con la contraseña del destino. La ruta es absoluta; `/~/` la empieza en el directorio personal. **Clave del servidor** fija la huella SHA256 del servidor; vacía acepta cualquiera, como la mayoría de las cámaras. |
+| Correo | `smtp://host:25` | Un correo por evento con el asunto y el texto del perfil y la instantánea adjunta, para hasta cinco destinatarios; sin cifrar, con STARTTLS o con TLS (puerto 465), con AUTH PLAIN o LOGIN. El intervalo del perfil envía a lo sumo un correo por destino dentro de él: el resto figura como *Omitido*. |
+
+**Entrega.** El perfil fija el tiempo máximo, los reintentos y la pausa
+entre intentos del equipo (D42); un destino puede reemplazar cualquiera de
+ellos. **Probar** revisa un destino desde una cámara activa que lo use, por
+la misma red que sus entregas, o si no desde el nodo: una solicitud a un
+destino HTTP, una sesión con el broker, el inicio de sesión y el directorio
+del destino en FTP y SFTP, el remitente y los destinatarios en un servidor
+de correo. No se sube ni se envía nada.
+
+El perfil demo publica sus eventos de analítica en
+`milesight/<serie>/event/<evento>` y el reporte de conteo, retenido, en
+`milesight/<serie>/counting`; sube la instantánea a
+`<serie>/<fecha>/<hora>_<evento>.jpg`; y envía a lo sumo un correo cada
+10 s.
+
 ### Perfiles
 
 Un perfil describe lo que un modelo de cámara hace en la red, tal como lo
@@ -294,7 +327,8 @@ panel nombra las cámaras que lo impiden.
   un conflicto.
 - **Salida.** Una cámara solo se conecta a los destinos de eventos, a sus
   servidores DNS y a DHCP; los clientes llegan a ella desde cualquier lado,
-  como a una real.
+  como a una real. Un servidor FTP queda abierto en todos sus puertos, por
+  sus conexiones de datos en modo pasivo.
 - **Llegar a las cámaras desde el nodo.** **Configuración → Llegar a las
   cámaras desde este nodo** agrega una interfaz puente, `mv-bridge`, y una
   ruta a cada cámara macvlan, así funcionan los reproductores, grabadores y
@@ -373,7 +407,9 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/i
   sondeo.
 - **Firewall.** El namespace de cada cámara tiene una tabla nftables que
   deja salir un único conjunto de dirección, protocolo y puerto: sus
-  destinos y sus servidores DNS en el puerto 53. Los nombres de los destinos
+  destinos y sus servidores DNS en el puerto 53; un segundo conjunto abre
+  todos los puertos de los servidores FTP, por sus conexiones de datos en
+  modo pasivo. Los nombres de los destinos
   se vuelven a resolver cada minuto con los servidores DNS de la cámara, y
   una dirección vista en los últimos diez minutos sigue permitida, para los
   nombres que rotan. También pasan DHCP, las respuestas a sus clientes, el

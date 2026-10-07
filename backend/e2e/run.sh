@@ -181,6 +181,7 @@ client ip link set mve2ecl name eth0
 client ip addr add "$CLIENT_IP/24" dev eth0
 client ip link set eth0 up
 client python3 "$ROOT/backend/e2e/receiver.py" 9000 "$WORK/received.log" </dev/null >/dev/null 2>&1 &
+client python3 "$ROOT/backend/e2e/sinks.py" "$WORK/sinks" </dev/null >/dev/null 2>&1 &
 ok "client $CLIENT_IP on $LAN"
 
 step "start the node (network helper + unprivileged service)"
@@ -213,7 +214,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -282,6 +283,64 @@ sleep 0.5
 ev=$(api GET "/events/$EID")
 [ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "delivery: $ev"
 ok "event $EID delivered, latency $(echo "$ev" | json 'd["latency_ms"]') ms"
+
+step "event transports: an MQTT broker, an FTP server and a mail server (D31, D42)"
+SINKS=$WORK/sinks
+target() { api POST /targets -H 'Content-Type: application/json' -d "$1" | json 'd["id"]'; }
+MQTT_TID=$(target "{\"name\":\"broker\",\"type\":\"mqtt\",\"url\":\"mqtt://$CLIENT_IP:1883\",\"username\":\"cam\",\"password\":\"e2e-mqtt\"}") || fail "mqtt target"
+FTP_TID=$(target "{\"name\":\"nas\",\"type\":\"ftp\",\"url\":\"ftp://$CLIENT_IP:2121/cams\",\"username\":\"cam\",\"password\":\"e2e-ftp\"}") || fail "ftp target"
+MAIL_TID=$(target "{\"name\":\"mail\",\"type\":\"smtp\",\"url\":\"smtp://$CLIENT_IP:2525\",\"username\":\"cam\",\"password\":\"e2e-mail\",
+	\"from\":\"gate1@e2e.lan\",\"to\":[\"ops@e2e.lan\"],\"delivery\":{\"retries\":0}}") || fail "mail target"
+api PATCH "/cameras/$CID" -H 'Content-Type: application/json' -d "{\"target_ids\":[\"$TID\",\"$MQTT_TID\",\"$FTP_TID\",\"$MAIL_TID\"]}" >/dev/null
+# Like a real camera it connects to the broker as soon as it has it, with
+# its serial as client ID, and announces itself online.
+for _ in $(seq 1 40); do grep -q "PUBLISH milesight/$SERIAL/status qos=1 retain=1 online" "$SINKS/mqtt.log" 2>/dev/null && break; sleep 0.25; done
+grep -q "CONNECT client=$SERIAL user=cam ok=True will=milesight/$SERIAL/status:offline" "$SINKS/mqtt.log" ||
+	fail "the camera did not connect to the broker: $(cat "$SINKS/mqtt.log" 2>/dev/null)"
+grep -q "PUBLISH milesight/$SERIAL/status qos=1 retain=1 online" "$SINKS/mqtt.log" || fail "no birth message"
+ok "the camera connected to the broker without restarting, with its will, and said online"
+EID=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' | json 'd["id"]')
+for _ in $(seq 1 40); do
+	[ "$(api GET "/events/$EID" | json 'len(d["deliveries"])')" -ge 4 ] && break
+	sleep 0.25
+done
+ev=$(api GET "/events/$EID")
+[ "$(echo "$ev" | json 'd["delivery_status"]')" = ok ] || fail "deliveries: $(echo "$ev" | json 'd["deliveries"]')"
+grep -q "PUBLISH milesight/$SERIAL/event/LineCrossing qos=1 retain=0 .*$EID" "$SINKS/mqtt.log" || fail "the broker did not get $EID"
+ok "published to milesight/$SERIAL/event/LineCrossing with QoS 1"
+day=$(echo "$ev" | json 'd["at"][:10]')
+up=$(ls "$SINKS/ftp/cams/$SERIAL/$day/" 2>/dev/null | grep '_LineCrossing.jpg$' | head -n 1)
+[ -n "$up" ] || fail "no upload under cams/$SERIAL/$day: $(cat "$SINKS/ftp.log" 2>/dev/null)"
+head -c 2 "$SINKS/ftp/cams/$SERIAL/$day/$up" | od -An -tx1 | grep -q "ff d8" || fail "the upload is not a JPEG"
+grep -q "^EPSV" "$SINKS/ftp.log" || fail "the upload did not use passive mode"
+ok "the snapshot went to cams/$SERIAL/$day/$up in passive mode, through the camera's firewall"
+mail=$(grep -o 'mail-[0-9]*.eml from=gate1@e2e.lan to=ops@e2e.lan' "$SINKS/smtp.log" | head -n 1 | cut -d' ' -f1)
+[ -n "$mail" ] || fail "no mail: $(cat "$SINKS/smtp.log" 2>/dev/null)"
+grep -q "^Subject: LineCrossing on Network Camera" "$SINKS/$mail" || fail "mail subject: $(grep Subject "$SINKS/$mail")"
+grep -q "^Content-Type: image/jpeg" "$SINKS/$mail" || fail "the mail has no snapshot"
+ok "mailed to ops@e2e.lan with the snapshot attached"
+# Within the profile's 10 s mail interval the next mail is skipped.
+sleep 1.1
+EID2=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' | json 'd["id"]')
+for _ in $(seq 1 40); do
+	[ "$(api GET "/events/$EID2" | json 'len(d["deliveries"])')" -ge 4 ] && break
+	sleep 0.25
+done
+[ "$(api GET "/events/$EID2" | json '[x["status"] for x in d["deliveries"] if x["target_name"]=="mail"][0]')" = skipped ] ||
+	fail "the second mail was not skipped: $(api GET "/events/$EID2" | json 'd["deliveries"]')"
+ok "a second crossing within 10 s skips the mail, as the device's interval"
+for id in "$MQTT_TID" "$FTP_TID" "$MAIL_TID"; do
+	res=$(api POST "/targets/$id/actions/test")
+	[ "$(echo "$res" | json 'd["ok"] and d["from"]')" = camera ] || fail "target test: $res"
+done
+ok "each target tested from the camera: a broker session, an FTP login, the mail recipients"
+api PATCH "/cameras/$CID" -H 'Content-Type: application/json' -d "{\"target_ids\":[\"$TID\"]}" >/dev/null
+for _ in $(seq 1 40); do grep -q "^DISCONNECT" "$SINKS/mqtt.log" && break; sleep 0.25; done
+grep -q "^DISCONNECT" "$SINKS/mqtt.log" || fail "unlinking the broker did not end the session"
+# Deleted: the FTP server opened every port of the client in the
+# firewalls, which the firewall step below checks closed.
+for id in "$MQTT_TID" "$FTP_TID" "$MAIL_TID"; do api DELETE "/targets/$id" -o /dev/null; done
+ok "unlinked, the camera says goodbye to the broker"
 
 step "rules and triggers: events name their rule, a random trigger keeps sending (D39, D40)"
 rules=$(api PUT "/cameras/$CID/rules" -H 'Content-Type: application/json' -d '{"rules":[
@@ -444,7 +503,7 @@ metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.4.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.5.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
@@ -521,7 +580,7 @@ fi
 step "MAC probe: a camera does not start with a MAC another device has (RN-06)"
 CLIENT_MAC=$(client cat /sys/class/net/eth0/address)
 BAD=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
+	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
 	\"network\": {\"ip\": \"10.77.0.13\", \"mac\": \"$CLIENT_MAC\"}, \"start\": true}" | json 'd["id"]')
 for _ in $(seq 1 60); do
 	[ "$(api GET "/cameras/$BAD" | json 'd["status"]["state"]')" = error ] && break
@@ -535,7 +594,7 @@ ok "refused: $reason"
 
 step "DHCP: a new camera takes its factory address without a server, then leases one (D23, D24)"
 LID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.4.0",
+	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.5.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_state "$LID" running 90
 LMAC=$(api GET "/cameras/$LID" | json 'd["network"]["mac"]')
@@ -547,7 +606,7 @@ client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach 
 ok "no server answered: the camera took the profile's factory address 192.168.5.190, as a real one"
 # A second one finds the address taken, and takes it once the first stops.
 L2ID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.4.0",
+	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.5.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_status "$L2ID" 'd["status"].get("reason_code")' dhcp_factory_in_use 90
 ok "a second camera did not take 192.168.5.190 while Lobby holds it"
@@ -610,7 +669,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	ip link del mve2eiv
 	WMAC=$(cat "/sys/class/net/$WLAN/address")
 	IID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
+		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
 		\"network\": {\"mode\": \"ipvlan\", \"parent\": \"$WLAN\", \"ip\": \"10.78.0.10\", \"netmask\": \"255.255.255.0\"},
 		\"stream\": {\"resolution\": \"640x360\"}, \"start\": true}" | json 'd["id"]')
 	wait_state "$IID" running 60
@@ -619,7 +678,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	[ "$(api GET "/cameras/$IID" | json 'd["status"].get("mac")')" = "$WMAC" ] || fail "the status does not show the card's MAC"
 	ok "10.78.0.10 answers with the MAC of $WLAN, $WMAC"
 	code=$(api POST /cameras -H 'Content-Type: application/json' -o "$WORK/mix.json" -w '%{http_code}' -d "{
-		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.4.0\",
+		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
 		\"network\": {\"parent\": \"$WLAN\", \"ip\": \"10.78.0.11\", \"netmask\": \"255.255.255.0\"}}")
 	[ "$code" = 422 ] && grep -q "Wi-Fi 1" "$WORK/mix.json" || fail "a macvlan camera beside an ipvlan one: $code $(cat "$WORK/mix.json")"
 	ok "a macvlan camera on $WLAN is refused and the answer names Wi-Fi 1"

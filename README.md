@@ -28,10 +28,14 @@ the outside; it does not replace one.
   device information and reading and writing a parameter.
 - Video analytics: lines and regions drawn on the camera's picture, and
   events on them (line crossing, region entrance and exit, loitering,
-  intrusion) fired by hand or at random moments, sent to a target with an
-  HTTP POST, and the people counts, occupancy and heat map the camera keeps
-  from them. The profile declares every analytic. Every delivery is logged
-  with its status and latency.
+  intrusion) fired by hand or at random moments, and the people counts,
+  occupancy and heat map the camera keeps from them. The profile declares
+  every analytic.
+- Events delivered as the device does: an HTTP notification (Basic or
+  Digest), a message to an MQTT broker, the snapshot uploaded to an FTP or
+  SFTP server, a mail with the snapshot attached; with the device's
+  retries, which each target can override. Every delivery is logged with
+  its status and latency.
 - Metrics for each camera (CPU, RAM, clients). A camera is refused, with the
   reason, when it would go over the camera limit or the node's resources.
 - A panel that updates live over a WebSocket.
@@ -72,7 +76,9 @@ Then:
 1. **Profiles → Import profile:** choose `profiles/milesight-demo.yaml`. It
    is validated and listed as *Draft*.
 2. **Targets → New target:** enter the URL that should receive the events,
-   for example `http://192.168.1.10:8000/events`.
+   for example `http://192.168.1.10:8000/events`, or pick another type: an
+   MQTT broker, an FTP or SFTP server, a mail server (see
+   [Event targets](#event-targets)).
 3. **Cameras → New camera:** enter a free IP address of your LAN and pick the
    target. The camera starts and turns *Running*.
 
@@ -225,6 +231,32 @@ Profiles serve them in the vendor's format through their templates:
 trigger with the same shortest and longest wait sends one at a fixed
 interval.
 
+### Event targets
+
+A target is a receiver several cameras share; each camera sends it the
+events of the types it was linked for, through the transports its profile
+defines for each event.
+
+| Type | URL | What the camera does |
+| --- | --- | --- |
+| HTTP | `http://host:port/path` | A request per event with the profile's payload. **Authentication** Basic, or Digest: the camera answers the target's challenge (MD5 or SHA-256, `qop=auth`). |
+| MQTT | `mqtt://host:1883`, `mqtts://host:8883` | Connects as soon as it runs and keeps the session up, pinging when idle and reconnecting when it drops; publishes each event with the profile's topic, QoS (0, 1 or 2) and retain flag. The profile's birth and will messages announce it online and offline. A target may replace the topic and the client ID with templates; each camera needs its own client ID, its serial by default. |
+| FTP | `ftp://host:21/dir` | Uploads the event's snapshot, or a document the profile renders, in passive mode (EPSV, else PASV), under a directory and name of the profile's templates. The path is relative to the login directory; `%2F` starts it at the root. |
+| SFTP | `sftp://host:22/dir` | The same over SSH with the target's password. The path is absolute; `/~/` starts it at the home directory. **Host key** pins the server's SHA256 fingerprint; empty accepts any key, as most cameras do. |
+| E-mail | `smtp://host:25` | A mail per event with the profile's subject and text and the snapshot attached, to up to five recipients; plain, STARTTLS or TLS (port 465), with AUTH PLAIN or LOGIN. The profile's interval sends at most one mail per target in it: the rest show as *Skipped*. |
+
+**Delivery.** The profile sets the device's timeout, retries and pause
+between attempts (D42); a target may override any of them. **Test** checks a
+target from a running camera that uses it, across the same network as the
+deliveries, or else from the node: a request to an HTTP target, a session
+with a broker, a login and the target's directory on FTP and SFTP, the
+sender and recipients on a mail server. Nothing is uploaded or mailed.
+
+The demo profile publishes its analytics events to
+`milesight/<serial>/event/<event>` and the counting report, retained, to
+`milesight/<serial>/counting`; uploads the snapshot to
+`<serial>/<date>/<time>_<event>.jpg`; and mails at most once every 10 s.
+
 ### Profiles
 
 A profile describes what one camera model does on the network, as its
@@ -278,7 +310,8 @@ names the cameras in the way.
   and names the device. **Start even if another device answers** skips the
   check, to test how clients handle a conflict.
 - **Outbound.** A camera connects only to the event targets, its DNS
-  servers and DHCP; clients reach it from anywhere, as a real one.
+  servers and DHCP; clients reach it from anywhere, as a real one. An FTP
+  server is open on every port, for its passive data connections.
 - **Reaching the cameras from the node.** **Settings → Reach the cameras
   from this node** adds a bridge interface, `mv-bridge`, and a route to each
   macvlan camera, so players, recorders and targets on the node itself work.
@@ -356,7 +389,8 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/i
   when the probe is skipped.
 - **Firewall.** Each camera's namespace has an nftables table that lets out
   one set of address, protocol and port: its targets, and its DNS servers
-  on port 53. Target names are resolved again every minute with the
+  on port 53; a second set opens every port of FTP servers, for their
+  passive data connections. Target names are resolved again every minute with the
   camera's DNS servers, and an address seen in the last ten minutes stays
   allowed, for names that rotate. DHCP, answers to its clients, RTP from
   its own ports and loopback pass too.
