@@ -153,7 +153,7 @@ func TestDahuaDraftCamera(t *testing.T) {
 			t.Fatalf("getConfig Encode[0].MainFormat[0].Video answered the sub stream: %q", body)
 		}
 		if code, body := get(t, "/cgi-bin/configManager.cgi?action=getConfig&name=General"); code != http.StatusOK || body != "table.General.MachineName="+serial+"\r\n" {
-			t.Fatalf("an unnamed unit answers its serial: %d %q", code, body)
+			t.Fatalf("the unit is named after its serial: %d %q", code, body)
 		}
 		if code, body := get(t, "/cgi-bin/configManager.cgi?action=setConfig&General.MachineName=Hall&Encode[0].MainFormat[0].Video.FPS=15"); code != http.StatusOK || body != "OK\r\n" {
 			t.Fatalf("setConfig: %d %q", code, body)
@@ -167,6 +167,96 @@ func TestDahuaDraftCamera(t *testing.T) {
 		}
 		if code, body := get(t, "/cgi-bin/configManager.cgi?action=getConfig&name=VideoColor"); code != http.StatusOK || !strings.Contains(body, "table.VideoColor[0][0].Brightness=50\r\n") {
 			t.Fatalf("getConfig VideoColor: %d %q", code, body)
+		}
+	})
+
+	t.Run("Dahua's values and errors", func(t *testing.T) {
+		if code, body := get(t, "/cgi-bin/configManager.cgi?action=getConfig&name=Nope"); code != http.StatusBadRequest || body != "Error\r\nBad Request!\r\n" {
+			t.Fatalf("an unknown table: %d %q", code, body)
+		}
+		// A width the main stream has, with a height it lacks for it.
+		if code, body := get(t, "/cgi-bin/configManager.cgi?action=setConfig&Encode[0].ExtraFormat[0].Video.Height=240"); code != http.StatusBadRequest || body != "Error\r\nBad Request!\r\n" {
+			t.Fatalf("704x240: %d %q", code, body)
+		}
+		target := "/cgi-bin/configManager.cgi?action=setConfig&Encode[0].MainFormat[0].Video.Compression=H.265&Encode[0].MainFormat[0].Video.Width=1280&Encode[0].MainFormat[0].Video.Height=720"
+		if code, body := get(t, target); code != http.StatusOK || body != "OK\r\n" {
+			t.Fatalf("H.265 at 1280x720: %d %q", code, body)
+		}
+		var sc ipc.StateChanged
+		if err := svc.wait(t, ipc.TypeStateChanged, 2*time.Second).Decode(&sc); err != nil || len(sc.Changes) != 3 || sc.Changes[0].Bind != "media.main.codec" {
+			t.Fatalf("state.changed = %+v, %v", sc, err)
+		}
+	})
+
+	t.Run("attach", func(t *testing.T) {
+		resp := digestGet(t, httpBase+"/cgi-bin/eventManager.cgi?action=attach&codes=[VideoMotion,VideoBlind]&heartbeat=1", "admin", "admin1234")
+		defer resp.Body.Close()
+		if ct := resp.Header.Get("Content-Type"); resp.StatusCode != http.StatusOK || ct != "multipart/x-mixed-replace; boundary=myboundary" {
+			t.Fatalf("%d %q", resp.StatusCode, ct)
+		}
+		parts := make(chan string, 16)
+		go func() {
+			br := bufio.NewReader(resp.Body)
+			for {
+				line, err := br.ReadString('\n')
+				if err != nil {
+					close(parts)
+					return
+				}
+				if strings.HasPrefix(line, "Code=") || strings.HasPrefix(line, "Heartbeat") {
+					parts <- strings.TrimSpace(line)
+				}
+			}
+		}()
+		next := func(want string) {
+			t.Helper()
+			deadline := time.After(8 * time.Second)
+			for {
+				select {
+				case p, ok := <-parts:
+					if !ok {
+						t.Fatalf("the stream ended waiting for %q", want)
+					}
+					if strings.HasPrefix(p, "Code=IPConflict") {
+						t.Fatalf("a code the client did not ask for reached it: %q", p)
+					}
+					if p == want {
+						return
+					}
+				case <-deadline:
+					t.Fatalf("no %q", want)
+				}
+			}
+		}
+		next("Heartbeat")
+		// A code the client did not ask for does not reach it.
+		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "ip_conflict"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.conn.Request(ctx, ipc.TypeTrigger, ipc.Trigger{Type: "motion"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		next("Code=VideoMotion;action=Start;index=0")
+		next("Code=VideoMotion;action=Stop;index=0")
+	})
+
+	t.Run("login failure", func(t *testing.T) {
+		resp := digestGet(t, httpBase+"/cgi-bin/magicBox.cgi?action=getDeviceType", "admin", "wrong")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("wrong password: %d", resp.StatusCode)
+		}
+		for {
+			var ev ipc.EventMsg
+			if err := svc.wait(t, ipc.TypeEvent, 3*time.Second).Decode(&ev); err != nil {
+				t.Fatal(err)
+			}
+			if ev.Event.Type == "custom:login_failure" {
+				if ev.Event.Custom["client"] != "127.0.0.1" {
+					t.Fatalf("event %+v", ev.Event)
+				}
+				break
+			}
 		}
 	})
 

@@ -241,6 +241,16 @@
           "description": "Canonical key the parameter drives. Without it the parameter is declarative.",
           "type": "string"
         },
+        "map": {
+          "description": "The vendor's values and the canonical ones of bind they stand for, such as H.265: h265.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": ["string", "integer", "boolean"] }
+        },
+        "default_from": {
+          "description": "Takes the default from the camera's identity, as a device whose name is its serial number.",
+          "enum": ["serial", "name", "model", "mac", "ip", "firmware"]
+        },
         "description": { "type": "string" }
       }
     },
@@ -313,7 +323,8 @@
             "http_push": { "$ref": "#/$defs/http_push" },
             "mqtt": { "$ref": "#/$defs/mqtt" },
             "ftp": { "$ref": "#/$defs/ftp" },
-            "smtp": { "$ref": "#/$defs/smtp" }
+            "smtp": { "$ref": "#/$defs/smtp" },
+            "attach": { "$ref": "#/$defs/attach" }
           },
           "additionalProperties": { "type": "object" }
         },
@@ -324,6 +335,24 @@
             "timeout": { "$ref": "#/$defs/duration" },
             "retries": { "type": "integer", "minimum": 0, "maximum": 10 },
             "backoff": { "$ref": "#/$defs/duration" }
+          }
+        }
+      }
+    },
+    "attach": {
+      "description": "A part written to the clients that keep a request open to the camera's events.attach route, as Dahua's eventManager.cgi attach. stop writes a second part after a while, for events that start and stop.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "body": { "type": "string", "minLength": 1 },
+        "stop": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["after", "body"],
+          "properties": {
+            "after": { "$ref": "#/$defs/duration" },
+            "body": { "type": "string", "minLength": 1 }
           }
         }
       }

@@ -1,0 +1,512 @@
+# MockVision draft profile: the base of Milesight's IP cameras, a 2 MP
+# camera of the Pro and AI series as their clients see it.
+#
+# Milesight cameras share their network behavior across models: RTSP at
+# /main, /sub and /third, the CGI API under /cgi-bin/operator, alarm
+# notifications over HTTP, MQTT, FTP and mail, an SD slot and NAS
+# recording. This profile is that common part, for model profiles to start
+# from: it answers Milesight's values (H.264, 1920*1080) and the device
+# name is the model until renamed.
+#
+# Sources: Milesight's public HTTP API and user manuals; nothing was
+# captured from a unit, so the verification level is Draft and the values
+# marked "to confirm" must be checked against a capture.
+#
+# MockVision is not affiliated with Milesight; the name is only
+# descriptive.
+#
+# yaml-language-server: $schema=./schema/profile.schema.json
+
+schema: 1
+
+profile:
+  id: milesight/base
+  version: 0.1.0
+  name: Milesight IP camera, 2 MP (base)
+  vendor: Milesight
+  model: MS-C2964
+  firmware: ["45.8.0.3"]
+
+identity:
+  # 12 hexadecimal digits, the MAC's (to confirm).
+  serial: "1CC316XXXXXX"
+  oui: "1C:C3:16"
+  factory:
+    network: { ip: 192.168.5.190, mask: 255.255.255.0, gateway: 192.168.5.1 }
+    users:
+      - { username: admin, password: ms1234, role: admin }
+  device:
+    firmware: "45.8.0.3"
+    hardware: "V1.0"
+  # A reboot keeps the camera off the network this long.
+  boot_time: 20s
+
+state:
+  System.DeviceName:
+    type: string
+    default_from: model
+    max_length: 32
+    description: Name shown by the device; the model until renamed (to confirm).
+  Image.Brightness:
+    type: int
+    default: 50
+    min: 0
+    max: 100
+    description: Declarative; stored and returned.
+  # Analytics switch: turned off through the emulated API, the camera stops
+  # reporting line crossings, whatever triggers them.
+  Event.LineCrossing.Enable:
+    type: bool
+    default: true
+    bind: events.line_crossing.enabled
+    description: Line-crossing detection.
+  # Effective parameters: changing one regenerates its stream.
+  # Milesight's names for codecs and resolutions, translated to the
+  # stream's (to confirm).
+  Encode.Main.Codec:
+    type: enum
+    values: ["H.264", "H.265"]
+    default: "H.264"
+    bind: media.main.codec
+    map: { H.264: h264, H.265: h265 }
+  Encode.Main.Resolution:
+    type: enum
+    values: ["1920*1080", "1280*720", "640*360"]
+    default: "1920*1080"
+    bind: media.main.resolution
+    map: { 1920*1080: 1920x1080, 1280*720: 1280x720, 640*360: 640x360 }
+  Encode.Main.FrameRate:
+    type: int
+    default: 25
+    min: 1
+    max: 30
+    bind: media.main.fps
+  Encode.Main.Bitrate:
+    type: int
+    default: 4096
+    min: 256
+    max: 8192
+    bind: media.main.bitrate
+    description: kbit/s.
+  Encode.Main.IFrameInterval:
+    type: int
+    default: 50
+    min: 1
+    max: 300
+    bind: media.main.gop
+    description: Frames between keyframes.
+  Encode.Sub.Codec:
+    type: enum
+    values: ["H.264", "H.265"]
+    default: "H.264"
+    bind: media.sub.codec
+    map: { H.264: h264, H.265: h265 }
+  Encode.Sub.Resolution:
+    type: enum
+    values: ["704*576", "640*360", "320*240"]
+    default: "640*360"
+    bind: media.sub.resolution
+    map: { 704*576: 704x576, 640*360: 640x360, 320*240: 320x240 }
+  Encode.Sub.FrameRate:
+    type: int
+    default: 10
+    min: 1
+    max: 30
+    bind: media.sub.fps
+  Encode.Third.Resolution:
+    type: enum
+    values: ["640*360", "352*288"]
+    default: "640*360"
+    bind: media.third.resolution
+    map: { 640*360: 640x360, 352*288: 352x288 }
+  Encode.Third.FrameRate:
+    type: int
+    default: 5
+    min: 1
+    max: 15
+    bind: media.third.fps
+
+media:
+  streams:
+    # The main stream for recording, a light sub stream for grids and
+    # phones, and an MJPEG third stream for simple clients.
+    main:
+      codecs: [h264, h265]
+      resolutions: ["1920x1080", "1280x720", "640x360"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 256, max: 8192 }
+      default: { codec: h264, resolution: 1920x1080, fps: 25, bitrate: 4096, gop: 50 }
+    sub:
+      codecs: [h264, h265]
+      resolutions: ["704x576", "640x360", "320x240"]
+      fps: { min: 1, max: 30 }
+      bitrate: { min: 64, max: 2048 }
+      default: { codec: h264, resolution: 640x360, fps: 10, bitrate: 512, gop: 20 }
+    third:
+      codecs: [mjpeg]
+      resolutions: ["640x360", "352x288"]
+      fps: { min: 1, max: 15 }
+      bitrate: { min: 64, max: 4096 }
+      default: { codec: mjpeg, resolution: 640x360, fps: 5, bitrate: 1024 }
+
+# A microSD slot up to 256 GB, and recording to a NAS over NFS or SMB.
+storage:
+  sd: { max_gb: 256 }
+  nas: [nfs, smb]
+
+engines:
+  rtsp:
+    engine: rtsp@^1
+    port: 554
+    auth: { scheme: digest }
+    paths:
+      main: /main
+      sub: /sub
+      third: /third
+    # Recordings by time range, as
+    # /playback?starttime=20261007T143000Z&endtime=20261007T150000Z
+    playback: { path: /playback, start: starttime, end: endtime, time_format: "20060102T150405Z" }
+
+  http:
+    engine: http-api@^1
+    port: 80
+    auth: { scheme: digest, realm: Milesight }
+    server: Milesight
+    routes:
+      # 1. Snapshot of the main stream.
+      - id: snapshot
+        match: { method: GET, path: /snapshot.cgi }
+        action: { handler: snapshot, stream: main }
+
+      # 2. Device information, rendered from the camera identity and state.
+      - id: device-info
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.system.information }
+        action:
+          type: application/json
+          body: |
+            {
+              "deviceName": {{ json (state "System.DeviceName") }},
+              "vendor": {{ json .Camera.Vendor }},
+              "model": {{ json .Camera.Model }},
+              "serialNumber": {{ json .Camera.Serial }},
+              "macAddress": {{ json (upper .Camera.MAC) }},
+              "ipAddress": {{ json .Camera.IP }},
+              "firmwareVersion": {{ json .Camera.Firmware }},
+              "systemTime": {{ json (fmtTime .Now "rfc3339") }}
+            }
+
+      # 3. Reading and writing parameters, for example
+      #    /cgi-bin/operator/param.cgi?action=get&name=Image.Brightness
+      #    /cgi-bin/operator/param.cgi?action=set&Image.Brightness=70
+      - id: param-get
+        match:
+          method: GET
+          path: /cgi-bin/operator/param.cgi
+          query: { action: get }
+        action:
+          handler: state.get
+          from: query
+          key: name
+          then:
+            type: text/plain
+            body: "{{ range .Result }}{{ .Key }}={{ .Value }}\n{{ end }}"
+
+      - id: param-set
+        match:
+          method: GET
+          path: /cgi-bin/operator/param.cgi
+          query: { action: set }
+        # Changing parameters needs an admin or operator account; viewers
+        # may only read, as on the real device.
+        roles: [admin, operator]
+        action:
+          handler: state.set
+          from: query
+          then: { type: text/plain, body: "OK\n" }
+
+      # 4. Analytics counts, as the camera counted them from its events since
+      #    it started: crossings of each line (A->B in, B->A out) and the
+      #    entries, exits and occupancy of each region.
+      - id: vca-counting
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.counting }
+        action:
+          type: application/json
+          body: |
+            {{ $a := analytics }}{
+              "since": {{ json (fmtTime $a.Since "rfc3339") }},
+              "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+              "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "entries": {{ $r.Entries }}, "exits": {{ $r.Exits }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+            }
+
+      # 5. Heat map: objects seen in each cell of a grid over the picture,
+      #    32x18 unless the request asks for cols and rows.
+      - id: vca-heatmap
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.vca.heatmap }
+        action:
+          type: application/json
+          body: |
+            {{ $data := heatmap (default "32" .Request.Query.cols) (default "18" .Request.Query.rows) }}{"cols": {{ len (index $data 0) }}, "rows": {{ len $data }}, "data": {{ json $data }}}
+
+      # 6. Storage: the SD card or NAS share, its state and its space.
+      - id: storage-info
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.storage.info }
+        action:
+          type: application/json
+          body: |
+            {{ $s := storage }}{
+              "type": {{ json $s.kind }},
+              "status": {{ json $s.state }},
+              "totalMB": {{ $s.capacity_mb }},
+              "usedMB": {{ $s.used_mb }},
+              "freeMB": {{ $s.free_mb }},
+              "files": {{ $s.files }},
+              "overwrite": {{ $s.overwrite }}
+            }
+
+      # 7. Recordings by time, kind and event, for example
+      #    ?action=get.record.search&starttime=2026-10-07 14:00:00&endtime=2026-10-07 15:00:00&type=video
+      - id: record-search
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.record.search }
+        action:
+          handler: sd.search
+          params: { start: starttime, end: endtime, kind: type, event: event, limit: max }
+          time_format: "2006-01-02 15:04:05"
+          kinds: { snapshot: picture, clip: video }
+          then:
+            type: application/json
+            body: |
+              {"total": {{ len .Result }}, "records": [{{ range $i, $f := .Result }}{{ if $i }}, {{ end }}{"file": {{ json $f.Name }}, "type": {{ json $f.Kind }}, "event": {{ json $f.Event }}, "startTime": {{ json $f.Start }}, "endTime": {{ json $f.End }}, "size": {{ $f.Size }}}{{ end }}]}
+
+      # 8. A recording by the file name the search gave:
+      #    /cgi-bin/operator/download.cgi?file=20261007/143000_line_crossing_x7k2pq.ts
+      - id: record-download
+        match: { method: GET, path: /cgi-bin/operator/download.cgi }
+        action: { handler: sd.download, key: file }
+
+    unknown:
+      status: 404
+      type: text/html
+      body: "<html><body><h1>404 Not Found</h1></body></html>\n"
+
+  push:
+    engine: http-push@^1
+
+  # The camera as an MQTT client: it connects to each broker as soon as it
+  # runs, announces itself online (birth) and leaves a will the broker
+  # publishes if it vanishes.
+  mqtt:
+    engine: mqtt-publish@^1
+    client_id: "{{ .Camera.Serial }}"
+    keepalive: 60s
+    birth: { topic: "milesight/{{ .Camera.Serial }}/status", body: "online", qos: 1, retain: true }
+    will: { topic: "milesight/{{ .Camera.Serial }}/status", body: "offline", qos: 1, retain: true }
+
+  # Snapshots of each event to FTP and SFTP servers.
+  ftp:
+    engine: ftp-upload@^1
+
+  # Mail with the snapshot attached, one every 10 seconds at most to each
+  # server, as the device's e-mail interval.
+  mail:
+    engine: smtp-mail@^1
+    interval: 10s
+    mailer: Milesight
+
+events:
+  # Every analytics event travels the same way; the body names the event
+  # with its vendor name (.EventName) and the rule that raised it.
+  line_crossing:
+    vendor_name: LineCrossing
+    min_interval: 1s
+    transports: &transports
+      http_push: &push
+        method: POST
+        content_type: application/json
+        body: &event_body |
+          {
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {
+              "name": {{ json (state "System.DeviceName") }},
+              "serialNumber": {{ json .Camera.Serial }},
+              "macAddress": {{ json (upper .Camera.MAC) }},
+              "ipAddress": {{ json .Camera.IP }}
+            },
+            "rule": {{ with .Event.Rule }}{"id": {{ json .ID }}, "name": {{ json .Name }}, "type": {{ json .Type }}}{{ else }}null{{ end }},
+            "direction": {{ with .Event.Direction }}{{ json . }}{{ else }}null{{ end }},
+            "object": {{ with .Event.Object }}{"class": {{ json .Class }}, "color": {{ json .Color }}, "confidence": {{ json .Confidence }}, "box": {{ json .Box }}}{{ else }}null{{ end }}
+          }
+      # The same document on the broker, under the camera's topic.
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *event_body
+      # The snapshot, in a folder per camera and day.
+      ftp:
+        path: '{{ .Camera.Serial }}/{{ fmtTime .Event.At "2006-01-02" }}'
+        file: '{{ fmtTime .Event.At "150405" }}_{{ .EventName }}.jpg'
+      smtp:
+        subject: '{{ .EventName }} on {{ state "System.DeviceName" }}'
+        snapshot: true
+        attachment: '{{ .EventName }}_{{ fmtTime .Event.At "20060102150405" }}.jpg'
+        body: |
+          Event: {{ .EventName }}
+          Time: {{ fmtTime .Event.At "rfc3339" }}
+          Device: {{ state "System.DeviceName" }} ({{ .Camera.Model }}, serial {{ .Camera.Serial }})
+          Address: {{ .Camera.IP }}
+          {{ with .Event.Rule }}Rule: {{ .Name }}
+          {{ end }}{{ with .Event.Object }}Object: {{ .Class }}
+          {{ end }}
+    delivery: &delivery { timeout: 5s, retries: 3, backoff: 2s }
+    # The snapshot and 10 seconds of the main stream, on the SD card or the
+    # NAS share.
+    record: &record { snapshot: true, clip: 10s }
+  region_entrance:
+    vendor_name: RegionEntrance
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+    record: *record
+  region_exit:
+    vendor_name: RegionExiting
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+    record: *record
+  loitering:
+    vendor_name: Loitering
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+    record: *record
+  intrusion:
+    vendor_name: Intrusion
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+    record: *record
+  # The basic detections every model has (vendor names to confirm).
+  motion:
+    vendor_name: MotionDetection
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+    record: *record
+  tamper:
+    vendor_name: Tampering
+    min_interval: 1s
+    transports: *transports
+    delivery: *delivery
+  # A report: what the camera counted, pushed by a trigger with a fixed
+  # interval (the same shortest and longest wait).
+  custom:people_counting:
+    vendor_name: PeopleCounting
+    report: true
+    min_interval: 1s
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: &report_body |
+          {{ $a := analytics }}{
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {"serialNumber": {{ json .Camera.Serial }}, "macAddress": {{ json (upper .Camera.MAC) }}},
+            "since": {{ json (fmtTime $a.Since "rfc3339") }},
+            "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
+            "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
+          }
+      # The latest counts stay on the broker for whoever subscribes.
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/counting"
+        qos: 0
+        retain: true
+        body: *report_body
+    delivery: *delivery
+  # The device's own state: raised by the faults injected into it. While
+  # the network is down the push fails; its retries outlast a short outage.
+  network_lost:
+    vendor_name: NetworkDisconnected
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: &system_body |
+          {
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {"name": {{ json (state "System.DeviceName") }}, "serialNumber": {{ json .Camera.Serial }}, "macAddress": {{ json (upper .Camera.MAC) }}, "ipAddress": {{ json .Camera.IP }}}
+          }
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *system_body
+    delivery: { timeout: 5s, retries: 6, backoff: 5s }
+  ip_conflict:
+    vendor_name: IPConflict
+    transports: &system_transports
+      http_push:
+        method: POST
+        content_type: application/json
+        body: *system_body
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *system_body
+    delivery: *delivery
+  # The SD card out of its slot, failing or read only, and full when it
+  # does not overwrite: raised by faults, and by a card that fills up.
+  storage_missing:
+    vendor_name: SDCardMissing
+    transports: *system_transports
+    delivery: *delivery
+  storage_failure:
+    vendor_name: SDCardError
+    transports: *system_transports
+    delivery: *delivery
+  storage_full:
+    vendor_name: SDCardFull
+    transports: *system_transports
+    delivery: *delivery
+
+vca:
+  rules: [line, region]
+  object_classes: [person, car, truck, bus, motorcycle, bicycle]
+  # As the camera ships: a line across the lower picture and a region in
+  # its middle. Restoring the camera brings them back.
+  factory_rules:
+    - name: Line 1
+      type: line
+      points: [{ x: 0.1, y: 0.6 }, { x: 0.9, y: 0.6 }]
+    - name: Region 1
+      type: region
+      points: [{ x: 0.25, y: 0.35 }, { x: 0.75, y: 0.35 }, { x: 0.75, y: 0.9 }, { x: 0.25, y: 0.9 }]
+      events: [region_entrance, region_exit]
+
+coverage:
+  rtsp: main stream only, and playback of recordings by time range
+  http-api: snapshot, device information, parameters, counting, heat map, storage state, and recording search and download
+  http_push: motion, tampering, line_crossing, region_entrance, region_exit, loitering, intrusion and a people counting report
+  mqtt: the same events and the counting report, with birth and will messages
+  ftp: the snapshot of each analytics event
+  smtp: a mail with the snapshot of each analytics event
+  system: network_lost and ip_conflict, raised by faults; storage_missing, storage_failure and storage_full
+  storage: a snapshot and a 10 s clip of each analytics event, on an SD card up to 256 GB or a NAS share

@@ -214,12 +214,16 @@ func (f *fileStore) shareLocked(ctx context.Context) (nas.Share, error) {
 	return s, nil
 }
 
-// failLocked drops a share that failed: the next use connects again.
+// failLocked drops a share that failed: the next use connects again. A
+// share that worked and fails raises storage_failure, as devices do.
 func (f *fileStore) failLocked(err error) {
 	f.closeShareLocked()
 	msg := delivery.Unwrap(err).Error()
 	if f.nasErr != msg {
 		f.rt.tel.Log(slog.LevelWarn, "the NAS share failed", "error", msg)
+	}
+	if f.nasErr == "" {
+		f.raise(domain.EventStorageFailure)
 	}
 	f.nasErr = msg
 	f.report(ipc.NASState{OK: false, Error: msg})

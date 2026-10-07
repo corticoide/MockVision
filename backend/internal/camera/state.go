@@ -29,8 +29,9 @@ type stateStore struct {
 	skew func() time.Duration
 }
 
-func newStateStore(m *profile.Model, initial map[string]any, report func([]engine.Change), skew func() time.Duration) *stateStore {
-	s := &stateStore{model: m, values: m.Defaults(), watchers: map[int]func([]engine.Change){}, report: report, skew: skew}
+func newStateStore(m *profile.Model, id engine.Identity, initial map[string]any, report func([]engine.Change), skew func() time.Duration) *stateStore {
+	defaults := m.DefaultsFor(profile.CameraIdentity{Serial: id.Serial, Name: id.Name, Model: id.Model, MAC: id.MAC, IP: id.IP, Firmware: id.Firmware})
+	s := &stateStore{model: m, values: defaults, watchers: map[int]func([]engine.Change){}, report: report, skew: skew}
 	for k, v := range initial {
 		p, ok := m.Doc.State[k]
 		if !ok {
@@ -94,6 +95,19 @@ func (s *stateStore) Set(_ context.Context, in map[string]any, origin engine.Ori
 	}
 	sort.Strings(keys)
 	s.mu.Lock()
+	// The streams the change drives must hold together: a width the
+	// stream has with the height it keeps.
+	merged := make(map[string]any, len(s.values))
+	for k, v := range s.values {
+		merged[k] = v
+	}
+	for k, v := range coerced {
+		merged[k] = v
+	}
+	if problems := s.model.CheckStreams(merged, keys); len(problems) > 0 {
+		s.mu.Unlock()
+		return nil, &engine.StateError{Problems: problems}
+	}
 	var changes []engine.Change
 	for _, k := range keys {
 		if fmt.Sprint(s.values[k]) == fmt.Sprint(coerced[k]) {

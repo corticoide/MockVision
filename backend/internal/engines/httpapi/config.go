@@ -28,6 +28,9 @@ type Config struct {
 type Auth struct {
 	Scheme string `json:"scheme"`
 	Realm  string `json:"realm,omitempty"`
+	// FailureEvent is raised when a client sends wrong credentials, as
+	// Dahua's LoginFailure; the event's minimum interval limits it.
+	FailureEvent string `json:"failure_event,omitempty"`
 }
 
 // Route maps a request to an action; the first match in declared order wins.
@@ -90,7 +93,14 @@ type Action struct {
 	// Kinds translate the kinds of recording, snapshot and clip, to the
 	// device's words, both ways.
 	Kinds map[string]string `json:"kinds,omitempty"`
-	Then  *Action           `json:"then,omitempty"`
+	// Boundary separates the parts of events.attach; myboundary when
+	// empty.
+	Boundary string  `json:"boundary,omitempty"`
+	Then     *Action `json:"then,omitempty"`
+	// Error is the answer of a handler that fails, in the vendor's words,
+	// as Dahua's "Error\r\nBad Request!": .Result is the reason. Its status
+	// is the handler's unless it sets one.
+	Error *Action `json:"error,omitempty"`
 }
 
 // Handlers available in this version.
@@ -102,6 +112,9 @@ const (
 	// time, kind and event (D68); HandlerSDDownload sends one.
 	HandlerSDSearch   = "sd.search"
 	HandlerSDDownload = "sd.download"
+	// HandlerEventsAttach keeps the request open and streams the events
+	// of the attach transport, as Dahua's eventManager.cgi attach.
+	HandlerEventsAttach = "events.attach"
 )
 
 var plannedHandlers = map[string]bool{
@@ -129,7 +142,8 @@ const configSchema = `{
       "required": ["scheme"],
       "properties": {
         "scheme": {"enum": ["digest", "basic", "none"]},
-        "realm": {"type": "string", "maxLength": 64}
+        "realm": {"type": "string", "maxLength": 64},
+        "failure_event": {"type": "string", "minLength": 1}
       }
     },
     "server": {"type": "string", "maxLength": 128},
@@ -172,10 +186,13 @@ const configSchema = `{
         "from": {"enum": ["query", "form", "json"]},
         "key": {"type": "string"},
         "stream": {"enum": ["main", "sub", "third"]},
+        "boundary": {"type": "string", "pattern": "^[A-Za-z0-9'()+_,./:=?-]{1,70}$"},
         "params": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "codes": {"type": "string", "minLength": 1},
+            "heartbeat": {"type": "string", "minLength": 1},
             "start": {"type": "string", "minLength": 1},
             "end": {"type": "string", "minLength": 1},
             "kind": {"type": "string", "minLength": 1},
@@ -192,7 +209,8 @@ const configSchema = `{
             "clip": {"type": "string", "minLength": 1}
           }
         },
-        "then": {"$ref": "#/$defs/action"}
+        "then": {"$ref": "#/$defs/action"},
+        "error": {"$ref": "#/$defs/action"}
       }
     }
   }
@@ -289,7 +307,7 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 			add(path+"/handler", "a then action cannot run another handler")
 		}
 		switch a.Handler {
-		case HandlerStateGet, HandlerStateSet, HandlerSnapshot, HandlerSDSearch, HandlerSDDownload:
+		case HandlerStateGet, HandlerStateSet, HandlerSnapshot, HandlerSDSearch, HandlerSDDownload, HandlerEventsAttach:
 		default:
 			if plannedHandlers[a.Handler] {
 				add(path+"/handler", "handler %s is not available in this version", a.Handler)
@@ -302,6 +320,16 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 		}
 		if a.Handler == HandlerStateSet && a.From == "" {
 			add(path+"/from", "state.set needs from: query, form or json")
+		}
+		if a.Handler == HandlerEventsAttach {
+			for k := range a.Params {
+				if !attachParams[k] {
+					add(path+"/params/"+k, "events.attach reads codes and heartbeat")
+				}
+			}
+			if a.Then != nil {
+				add(path+"/then", "events.attach answers with the events themselves")
+			}
 		}
 		if a.Handler == HandlerSDSearch {
 			for k := range a.Params {
@@ -324,12 +352,26 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 		if a.Then != nil {
 			probs = append(probs, validateAction(path+"/then", name, *a.Then, true)...)
 		}
-	} else if a.Then != nil {
-		add(path+"/then", "then is only valid after a handler")
+		if a.Error != nil {
+			probs = append(probs, validateAction(path+"/error", name, *a.Error, true)...)
+		}
+	} else {
+		if a.Then != nil {
+			add(path+"/then", "then is only valid after a handler")
+		}
+		if a.Error != nil && !nested {
+			add(path+"/error", "error is the answer of a handler that fails")
+		}
+	}
+	if nested && a.Error != nil {
+		add(path+"/error", "a then or error action has no error of its own")
+	}
+	if a.Handler != HandlerEventsAttach && a.Boundary != "" {
+		add(path+"/boundary", "only events.attach has a boundary")
 	}
 	if a.Handler != HandlerSDSearch {
-		if len(a.Params) > 0 {
-			add(path+"/params", "only sd.search reads params")
+		if len(a.Params) > 0 && a.Handler != HandlerEventsAttach {
+			add(path+"/params", "only sd.search and events.attach read params")
 		}
 		if a.TimeFormat != "" {
 			add(path+"/time_format", "only sd.search reads time_format")

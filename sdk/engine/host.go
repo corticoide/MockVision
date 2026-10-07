@@ -122,6 +122,10 @@ const (
 	TransportMQTT     = "mqtt"
 	TransportFTP      = "ftp"
 	TransportSMTP     = "smtp"
+	// TransportAttach streams events to the clients that keep a request
+	// open to the camera, as Dahua's eventManager.cgi attach: it reaches
+	// no target, whoever listens gets them.
+	TransportAttach = "attach"
 )
 
 // TransportTargets lists the target types each transport reaches: an FTP
@@ -242,7 +246,7 @@ type Events interface {
 	// profile defines for its type. ID and At are filled when empty.
 	Emit(ctx context.Context, e Event) (Event, error)
 	// Subscribe registers the engine that delivers a transport (http_push,
-	// mqtt, ftp or smtp).
+	// mqtt, ftp, smtp or attach).
 	Subscribe(transport string, fn func(Dispatch)) (cancel func())
 	// Report records the outcome of a delivery attempt.
 	Report(r DeliveryReport)

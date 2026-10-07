@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -330,6 +331,10 @@ func (v *validator) engineSections(doc *Document, root map[string]any) map[strin
 		}
 		desc := eng.Describe()
 		for _, t := range desc.Delivers {
+			// Events stream only through a route that serves them.
+			if t == engine.TransportAttach && !servesAttach(doc.Engines[inst]) {
+				continue
+			}
 			delivers[t] = true
 		}
 		if len(desc.ConfigSchema) > 0 {
@@ -382,7 +387,7 @@ func (v *validator) valueLine(pointer string, inner int) int {
 }
 
 var canonicalPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^media\.(main|sub|third)\.(codec|resolution|fps|bitrate|gop)$`),
+	regexp.MustCompile(`^media\.(main|sub|third)\.(codec|resolution|width|height|fps|bitrate|gop)$`),
 	regexp.MustCompile(`^network\.(ip|mask|gateway|dhcp|dns)$`),
 	regexp.MustCompile(`^ports\.[a-z0-9-]{1,32}$`),
 	regexp.MustCompile(`^users$`),
@@ -432,10 +437,30 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 	for _, key := range SortedKeys(doc.State) {
 		p := doc.State[key]
 		ptr := "/state/" + escapePointer(key)
-		if p.Default == nil {
+		switch {
+		case p.DefaultFrom != "":
+			if p.Type != TypeString {
+				v.errorf(StepLint, ptr+"/default_from", "%s takes its default from the identity and must be a string", key)
+			}
+			if !contains(DefaultSources, p.DefaultFrom) {
+				v.errorf(StepLint, ptr+"/default_from", "unknown identity field %q", p.DefaultFrom)
+			}
+		case p.Default == nil:
 			v.errorf(StepLint, ptr, "parameter %s has no default", key)
-		} else if err := CheckValue(p, p.Default); err != nil {
-			v.errorf(StepLint, ptr+"/default", "default of %s: %v", key, err)
+		default:
+			if err := CheckValue(p, p.Default); err != nil {
+				v.errorf(StepLint, ptr+"/default", "default of %s: %v", key, err)
+			}
+		}
+		if len(p.Map) > 0 {
+			if p.Bind == "" {
+				v.errorf(StepLint, ptr+"/map", "map translates the values of a bound parameter; %s has no bind", key)
+			}
+			for _, mk := range SortedKeys(p.Map) {
+				if p.Type == TypeEnum && !slices.ContainsFunc(p.Values, func(o any) bool { return sameValue(o, mk) }) {
+					v.errorf(StepLint, ptr+"/map/"+escapePointer(mk), "%s is not one of the values of %s", mk, key)
+				}
+			}
 		}
 		if p.Type == TypeEnum && len(p.Values) == 0 {
 			v.errorf(StepLint, ptr, "enum parameter %s needs values", key)
@@ -473,7 +498,11 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 			v.warnf(ptr, "event %s has no transport and cannot be enabled on a camera", typ)
 		}
 		for _, t := range SortedKeys(spec.Transports) {
-			if !delivers[t] {
+			switch {
+			case delivers[t]:
+			case t == engine.TransportAttach:
+				v.errorf(StepLint, ptr+"/transports/"+escapePointer(t), "no route of the HTTP API streams events: add one with handler: events.attach")
+			default:
 				v.errorf(StepLint, ptr+"/transports/"+escapePointer(t), "no engine of this profile delivers %s; add an engine instance such as push: {engine: http-push@^1}", t)
 			}
 		}
@@ -511,7 +540,6 @@ func (v *validator) lintRecord(doc *Document, typ string, rec RecordSpec, ptr st
 		v.warnf(ptr, "%s records, but the model has no storage: declare storage.sd or storage.nas", typ)
 	}
 }
-
 
 // lintVCA checks that the analytics and their events agree: each kind of
 // rule raises some event, the events that come from a kind of rule have it,
@@ -613,9 +641,38 @@ func (v *validator) lintBind(doc *Document, key string, p Param, ptr string) {
 			candidates = []any{p.Default}
 		}
 		for _, c := range candidates {
-			s, _ := c.(string)
+			s := fmt.Sprint(canonValue(p, c))
 			if !contains(stream.Resolutions, s) {
 				v.errorf(StepLint, ptr, "%s allows %v, which stream %s does not support", key, c, parts[1])
+			}
+		}
+	case "width", "height":
+		// A resolution split in two parameters needs both, and their
+		// defaults make one the stream supports.
+		other := map[string]string{"width": "height", "height": "width"}[parts[2]]
+		var pair *Param
+		for _, q := range doc.State {
+			if q.Bind == "media."+parts[1]+"."+other {
+				pair = &q
+			}
+		}
+		if pair == nil {
+			v.errorf(StepLint, ptr+"/bind", "%s splits the resolution of %s: bind another parameter to media.%s.%s", key, parts[1], parts[1], other)
+			return
+		}
+		if p.Type != TypeInt && p.Type != TypeEnum {
+			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be an int or an enum", key, p.Bind)
+		}
+		if parts[2] == "width" {
+			res := fmt.Sprintf("%vx%v", canonValue(p, p.Default), canonValue(*pair, pair.Default))
+			if !contains(stream.Resolutions, res) {
+				v.errorf(StepLint, ptr+"/default", "the defaults make %s, which stream %s does not support", res, parts[1])
+			}
+		}
+		for _, q := range doc.State {
+			if q.Bind == "media."+parts[1]+".resolution" {
+				v.errorf(StepLint, ptr+"/bind", "stream %s binds its resolution whole and split", parts[1])
+				break
 			}
 		}
 	case "fps", "bitrate", "gop":
@@ -627,7 +684,7 @@ func (v *validator) lintBind(doc *Document, key string, p Param, ptr string) {
 			v.errorf(StepLint, ptr+"/type", "%s is bound to %s and must be an enum of the stream's codecs", key, p.Bind)
 		}
 		for _, c := range p.Values {
-			s, _ := c.(string)
+			s := fmt.Sprint(canonValue(p, c))
 			if !contains(stream.Codecs, s) {
 				v.errorf(StepLint, ptr, "%s allows codec %v, which stream %s does not support", key, c, parts[1])
 			}
@@ -657,6 +714,9 @@ func (v *validator) lintStreamRefs(doc *Document) {
 			}
 		case "http-api":
 			var cfg struct {
+				Auth struct {
+					FailureEvent string `json:"failure_event"`
+				} `json:"auth"`
 				Routes []struct {
 					Action struct {
 						Stream string `json:"stream"`
@@ -664,6 +724,11 @@ func (v *validator) lintStreamRefs(doc *Document) {
 				} `json:"routes"`
 			}
 			_ = json.Unmarshal(doc.Engines[inst], &cfg)
+			if ev := cfg.Auth.FailureEvent; ev != "" {
+				if _, ok := doc.Events[ev]; !ok {
+					v.errorf(StepLint, ptr+"/auth/failure_event", "the profile does not define %s events", ev)
+				}
+			}
 			for i, r := range cfg.Routes {
 				if s := r.Action.Stream; s != "" {
 					if _, ok := doc.Media.Streams[s]; !ok {
@@ -710,6 +775,25 @@ func (v *validator) lintStream(name string, s Stream) {
 	}
 }
 
+// servesAttach reports whether an engine section has a route that streams
+// events, as the HTTP API's events.attach.
+func servesAttach(section json.RawMessage) bool {
+	var cfg struct {
+		Routes []struct {
+			Action struct {
+				Handler string `json:"handler"`
+			} `json:"action"`
+		} `json:"routes"`
+	}
+	_ = json.Unmarshal(section, &cfg)
+	for _, r := range cfg.Routes {
+		if r.Action.Handler == "events.attach" {
+			return true
+		}
+	}
+	return false
+}
+
 // transportTemplates lists the fields of each transport that hold a
 // template.
 var transportTemplates = map[string][]string{
@@ -717,6 +801,7 @@ var transportTemplates = map[string][]string{
 	"mqtt":      {"topic", "body"},
 	"ftp":       {"path", "file", "body"},
 	"smtp":      {"subject", "body", "attachment"},
+	"attach":    {"body"},
 }
 
 // eventTemplates compiles the templates of every event's transports and
@@ -748,6 +833,11 @@ func (v *validator) eventTemplates(doc *Document) {
 			}
 			if transport == "ftp" && section["content"] == "body" && section["body"] == nil {
 				v.errorf(StepLint, base, "content: body needs body or template")
+			}
+			if stop, ok := section["stop"].(map[string]any); ok && transport == "attach" {
+				if text, ok := stop["body"].(string); ok {
+					v.checkTemplate(typ, base+"/stop/body", text, false, "")
+				}
 			}
 		}
 	}

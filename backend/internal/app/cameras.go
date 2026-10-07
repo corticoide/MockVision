@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -315,9 +316,22 @@ func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
 	return out, nil
 }
 
+// identity is what the camera's defaults may be taken from.
+func (b *cameraBundle) identity() profile.CameraIdentity {
+	id := profile.CameraIdentity{Serial: b.cam.Serial, Name: b.cam.Name, Model: b.doc.Identity.Device["model"], Firmware: b.doc.Identity.Device["firmware"]}
+	if id.Model == "" {
+		id.Model = b.doc.Profile.Model
+	}
+	if id.Firmware == "" && len(b.doc.Profile.Firmware) > 0 {
+		id.Firmware = b.doc.Profile.Firmware[0]
+	}
+	id.MAC, id.IP = b.net.Mac, b.net.Ip
+	return id
+}
+
 // values returns the camera's native parameters.
 func (b *cameraBundle) values() map[string]any {
-	out := b.model.Defaults()
+	out := b.model.DefaultsFor(b.identity())
 	for _, st := range b.state {
 		var v any
 		if json.Unmarshal([]byte(st.ValueJson), &v) != nil {
@@ -395,22 +409,25 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 		return nil, err
 	}
 
-	// State: profile defaults plus the stream settings chosen in the wizard,
-	// written through the parameters bound to them.
-	values := model.Defaults()
+	// State: profile defaults, those of the identity its own, plus the
+	// stream settings chosen in the wizard, written through the parameters
+	// bound to them.
+	serial := serialFor(id, doc.Identity.Serial)
+	bare := &cameraBundle{cam: db.Camera{Serial: serial, Name: in.Name}, doc: doc, net: db.CameraNetwork{Mac: netw.mac, Ip: netw.ip}}
+	values := model.DefaultsFor(bare.identity())
 	overrides := map[string]any{}
 	if in.Stream.Codec != "" {
-		if err := s.setBound(doc, model, values, overrides, "media.main.codec", in.Stream.Codec, "stream.codec"); err != nil {
+		if err := s.setBound(model, values, overrides, "media.main.codec", in.Stream.Codec, "stream.codec"); err != nil {
 			return nil, err
 		}
 	}
 	if in.Stream.Resolution != "" {
-		if err := s.setBound(doc, model, values, overrides, "media.main.resolution", in.Stream.Resolution, "stream.resolution"); err != nil {
+		if err := s.setBound(model, values, overrides, "media.main.resolution", in.Stream.Resolution, "stream.resolution"); err != nil {
 			return nil, err
 		}
 	}
 	if in.Stream.FPS != 0 {
-		if err := s.setBound(doc, model, values, overrides, "media.main.fps", int64(in.Stream.FPS), "stream.fps"); err != nil {
+		if err := s.setBound(model, values, overrides, "media.main.fps", int64(in.Stream.FPS), "stream.fps"); err != nil {
 			return nil, err
 		}
 	}
@@ -465,7 +482,7 @@ func (s *Service) CreateCamera(ctx context.Context, actor Actor, in CreateCamera
 	now := time.Now().UnixMilli()
 	c := newCamera{
 		row: db.InsertCameraParams{
-			ID: id, Name: in.Name, ProfileID: prof.ProfileID, ProfileVersion: prof.Version, Serial: serialFor(id, doc.Identity.Serial),
+			ID: id, Name: in.Name, ProfileID: prof.ProfileID, ProfileVersion: prof.Version, Serial: serial,
 			DesiredState: string(domain.DesiredStopped), Autostart: store.Int(autostart), TagsJson: string(tags), CreatedAt: now, UpdatedAt: now,
 		},
 		netw: netw, users: cu, rules: factoryRules(doc),
@@ -609,21 +626,22 @@ func networkUpdate(id string, n resolvedNetwork) db.UpdateCameraNetworkParams {
 	}
 }
 
-func (s *Service) setBound(doc *profile.Document, m *profile.Model, values, overrides map[string]any, canon string, v any, field string) error {
-	key, ok := m.NativeFor(canon)
-	if !ok {
+func (s *Service) setBound(m *profile.Model, values, overrides map[string]any, canon string, v any, field string) error {
+	set, err := m.Assign(canon, v)
+	if errors.Is(err, profile.ErrNotBound) {
 		// Asking for what the profile fixes anyway is not a change.
 		if cur, ok := m.Canon(canon, values); ok && fmt.Sprint(cur) == fmt.Sprint(v) {
 			return nil
 		}
 		return domain.Invalid(field, "this profile does not allow changing %s", canon)
 	}
-	cv, err := profile.Coerce(doc.State[key], v)
 	if err != nil {
 		return domain.Invalid(field, "%v", err)
 	}
-	values[key] = cv
-	overrides[key] = cv
+	for key, cv := range set {
+		values[key] = cv
+		overrides[key] = cv
+	}
 	return nil
 }
 
@@ -1233,6 +1251,7 @@ func (s *Service) CameraConfig(ctx context.Context, id string) ([]ParamView, err
 
 func paramViews(b *cameraBundle) []ParamView {
 	values := b.values()
+	defaults := b.model.DefaultsFor(b.identity())
 	meta := map[string]db.CameraState{}
 	for _, st := range b.state {
 		meta[st.Key] = st
@@ -1240,7 +1259,7 @@ func paramViews(b *cameraBundle) []ParamView {
 	out := make([]ParamView, 0, len(b.doc.State))
 	for _, key := range profile.SortedKeys(b.doc.State) {
 		p := b.doc.State[key]
-		pv := ParamView{Key: key, Type: p.Type, Value: values[key], Default: p.Default, Values: p.Values, Min: p.Min, Max: p.Max,
+		pv := ParamView{Key: key, Type: p.Type, Value: values[key], Default: defaults[key], Values: p.Values, Min: p.Min, Max: p.Max,
 			Bind: p.Bind, Effective: p.Bind != "", Description: p.Description, Origin: "profile"}
 		if st, ok := meta[key]; ok {
 			pv.Origin = st.Origin
@@ -1275,6 +1294,16 @@ func (s *Service) UpdateCameraConfig(ctx context.Context, actor Actor, id string
 			continue
 		}
 		coerced[k] = cv
+	}
+	if err := v.Err(); err != nil {
+		return nil, err
+	}
+	values := b.values()
+	for k, cv := range coerced {
+		values[k] = cv
+	}
+	for k, msg := range b.model.CheckStreams(values, profile.SortedKeys(coerced)) {
+		v.Add(k, "%s", msg)
 	}
 	if err := v.Err(); err != nil {
 		return nil, err

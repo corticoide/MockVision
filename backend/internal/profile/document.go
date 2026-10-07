@@ -84,15 +84,26 @@ const (
 // Param is a native parameter. With Bind it is effective (it drives the
 // simulation through a canonical key); without it, declarative (RN-07).
 type Param struct {
-	Type        string   `json:"type"`
-	Default     any      `json:"default,omitempty"`
+	Type    string `json:"type"`
+	Default any    `json:"default,omitempty"`
+	// DefaultFrom takes the default from the camera's identity, as a
+	// device whose name is its serial number: serial, name, model, mac,
+	// ip or firmware.
+	DefaultFrom string   `json:"default_from,omitempty"`
 	Values      []any    `json:"values,omitempty"`
 	Min         *float64 `json:"min,omitempty"`
 	Max         *float64 `json:"max,omitempty"`
 	MaxLength   int      `json:"max_length,omitempty"`
 	Bind        string   `json:"bind,omitempty"`
-	Description string   `json:"description,omitempty"`
+	// Map translates the vendor's values to the canonical ones of Bind,
+	// such as H.265 to h265; the first vendor value of a canonical one
+	// is written back.
+	Map         map[string]any `json:"map,omitempty"`
+	Description string         `json:"description,omitempty"`
 }
+
+// Identity sources of default_from.
+var DefaultSources = []string{"serial", "name", "model", "mac", "ip", "firmware"}
 
 // Media lists the streams of the device.
 type Media struct {
@@ -319,6 +330,9 @@ func DecodeJSON(raw []byte) (*Document, error) {
 		p.Default = normalizeNumber(p.Default)
 		for i := range p.Values {
 			p.Values[i] = normalizeNumber(p.Values[i])
+		}
+		for mk, mv := range p.Map {
+			p.Map[mk] = normalizeNumber(mv)
 		}
 		doc.State[k] = p
 	}

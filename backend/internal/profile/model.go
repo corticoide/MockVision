@@ -2,8 +2,10 @@ package profile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -150,6 +152,32 @@ type Model struct {
 	binds map[string]string // canonical key -> native key
 }
 
+// ErrNotBound is returned for a canonical key no parameter is bound to.
+var ErrNotBound = errors.New("no parameter is bound to it")
+
+// CameraIdentity is what a camera's defaults may be taken from.
+type CameraIdentity struct {
+	Serial, Name, Model, MAC, IP, Firmware string
+}
+
+func (id CameraIdentity) field(name string) string {
+	switch name {
+	case "serial":
+		return id.Serial
+	case "name":
+		return id.Name
+	case "model":
+		return id.Model
+	case "mac":
+		return id.MAC
+	case "ip":
+		return id.IP
+	case "firmware":
+		return id.Firmware
+	}
+	return ""
+}
+
 // NewModel indexes a document's bindings.
 func NewModel(doc *Document) *Model {
 	m := &Model{Doc: doc, binds: map[string]string{}}
@@ -167,26 +195,131 @@ func (m *Model) NativeFor(canonical string) (string, bool) {
 	return k, ok
 }
 
-// Defaults returns the default value of every parameter.
+// Defaults returns the default value of every parameter; those taken from
+// the identity are empty.
 func (m *Model) Defaults() map[string]any {
 	out := make(map[string]any, len(m.Doc.State))
 	for k, p := range m.Doc.State {
 		out[k] = p.Default
+		if p.DefaultFrom != "" && p.Default == nil {
+			out[k] = ""
+		}
 	}
 	return out
 }
 
-// Canon resolves a canonical key from native values, falling back to the
-// stream defaults of the profile for media keys without a parameter.
+// DefaultsFor returns the defaults of a camera: those taken from its
+// identity are its own, cut to the parameter's length.
+func (m *Model) DefaultsFor(id CameraIdentity) map[string]any {
+	out := m.Defaults()
+	for k, p := range m.Doc.State {
+		if p.DefaultFrom == "" {
+			continue
+		}
+		v := id.field(p.DefaultFrom)
+		if p.MaxLength > 0 && utf8.RuneCountInString(v) > p.MaxLength {
+			v = string([]rune(v)[:p.MaxLength])
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// canonValue translates a vendor's value to the canonical one.
+func canonValue(p Param, v any) any {
+	if c, ok := p.Map[fmt.Sprint(v)]; ok {
+		return c
+	}
+	return v
+}
+
+// nativeValue translates a canonical value to the vendor's: the first of
+// the enum's values, or of the map's sorted keys, that maps to it.
+func nativeValue(p Param, v any) any {
+	if len(p.Map) == 0 {
+		return v
+	}
+	keys := make([]string, 0, len(p.Map))
+	for _, opt := range p.Values {
+		keys = append(keys, fmt.Sprint(opt))
+	}
+	if len(keys) == 0 {
+		for k := range p.Map {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+	}
+	for _, k := range keys {
+		if c, ok := p.Map[k]; ok && fmt.Sprint(c) == fmt.Sprint(v) {
+			return k
+		}
+	}
+	return v
+}
+
+// splitResolution reports whether a stream's resolution is split in a
+// width and a height parameter.
+func (m *Model) splitResolution(stream string) (width, height string, ok bool) {
+	width, okW := m.binds["media."+stream+".width"]
+	height, okH := m.binds["media."+stream+".height"]
+	return width, height, okW && okH
+}
+
+// Assign writes a canonical value through the parameters bound to it: the
+// value is translated to the vendor's, and a resolution goes to the width
+// and height parameters when the profile splits it. It returns the native
+// values to store, checked.
+func (m *Model) Assign(canon string, v any) (map[string]any, error) {
+	if native, ok := m.binds[canon]; ok {
+		p := m.Doc.State[native]
+		cv, err := Coerce(p, nativeValue(p, v))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{native: cv}, nil
+	}
+	parts := strings.Split(canon, ".")
+	if len(parts) == 3 && parts[0] == "media" && parts[2] == "resolution" {
+		if wk, hk, ok := m.splitResolution(parts[1]); ok {
+			w, h, cut := strings.Cut(fmt.Sprint(v), "x")
+			if !cut {
+				return nil, fmt.Errorf("must look like 1920x1080")
+			}
+			out := map[string]any{}
+			for key, raw := range map[string]string{wk: w, hk: h} {
+				p := m.Doc.State[key]
+				cv, err := Coerce(p, nativeValue(p, raw))
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", key, err)
+				}
+				out[key] = cv
+			}
+			return out, nil
+		}
+	}
+	return nil, ErrNotBound
+}
+
+// Canon resolves a canonical key from native values, translated to its
+// canonical value, falling back to the stream defaults of the profile for
+// media keys without a parameter. A resolution split in width and height
+// joins them.
 func (m *Model) Canon(key string, values map[string]any) (any, bool) {
 	if native, ok := m.binds[key]; ok {
 		v, ok := values[native]
 		if !ok {
 			v = m.Doc.State[native].Default
 		}
-		return v, true
+		return canonValue(m.Doc.State[native], v), true
 	}
 	parts := strings.Split(key, ".")
+	if len(parts) == 3 && parts[0] == "media" && parts[2] == "resolution" {
+		if _, _, ok := m.splitResolution(parts[1]); ok {
+			w, _ := m.Canon("media."+parts[1]+".width", values)
+			h, _ := m.Canon("media."+parts[1]+".height", values)
+			return fmt.Sprintf("%vx%v", w, h), true
+		}
+	}
 	if len(parts) == 3 && parts[0] == "media" {
 		s, ok := m.Doc.Media.Streams[parts[1]]
 		if !ok {
@@ -206,6 +339,23 @@ func (m *Model) Canon(key string, values map[string]any) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// CheckStreams checks that the streams the changed parameters drive hold
+// together with them: a codec the stream has, a width and a height it
+// supports. It returns the problem of each changed key, none when fine.
+func (m *Model) CheckStreams(values map[string]any, changed []string) map[string]string {
+	problems := map[string]string{}
+	for _, key := range changed {
+		parts := strings.Split(m.Doc.State[key].Bind, ".")
+		if len(parts) != 3 || parts[0] != "media" {
+			continue
+		}
+		if _, err := m.StreamFor(parts[1], values); err != nil {
+			problems[key] = err.Error()
+		}
+	}
+	return problems
 }
 
 // StreamSettings are the effective settings of a stream.
@@ -261,6 +411,9 @@ func (m *Model) StreamFor(stream string, values map[string]any) (StreamSettings,
 	}
 	if !contains(s.Codecs, out.Codec) {
 		return out, fmt.Errorf("stream %s does not support codec %s", stream, out.Codec)
+	}
+	if !contains(s.Resolutions, res) {
+		return out, fmt.Errorf("stream %s does not support %s", stream, res)
 	}
 	// Every MJPEG frame is a whole picture.
 	if out.Codec == "mjpeg" {

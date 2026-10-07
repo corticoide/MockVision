@@ -95,6 +95,13 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 		policy.Backoff = d
 	}
 	for transport, raw := range spec.Transports {
+		if transport == engine.TransportAttach {
+			// Whoever listens gets it: the transport reaches no target.
+			if deliver := subs[transport]; deliver != nil {
+				deliver(engine.Dispatch{Event: e, VendorName: vendor, Transport: raw, Policy: policy})
+			}
+			continue
+		}
 		var matched []engine.Target
 		for _, t := range targets {
 			if !slices.Contains(engine.TransportTargets[transport], t.Type) || !wantsType(t.EventTypes, e.Type) {

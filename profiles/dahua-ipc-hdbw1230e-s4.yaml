@@ -9,21 +9,21 @@
 # Sources: the "Dahua Network Camera Web 3.0" operation manual (v1.0.2),
 # the model's datasheet (two streams, H.265 or H.264, MJPEG on the sub
 # stream only; motion, tampering, scene change, network and storage events;
-# no audio, alarm contacts, SD card or smart analytics) and the public Dahua
-# HTTP API. Nothing was captured from a unit yet, so the verification level
-# is Draft: values marked "to confirm" are the likeliest ones and must be
-# checked against a capture.
+# no audio, alarm contacts, SD card or smart analytics; recording to a NAS)
+# and the public Dahua HTTP API. Nothing was captured from a unit yet, so
+# the verification level is Draft: values marked "to confirm" are the
+# likeliest ones and must be checked against a capture.
+#
+# Events leave the unit as Dahua's do over HTTP: a client keeps
+# eventManager.cgi?action=attach open and reads Code=VideoMotion;action=Start
+# lines. Codec and resolution translate Dahua's values (H.265, 1280 and 720)
+# into the stream's; an unknown parameter or a bad value answers Dahua's
+# Error / Bad Request!; the device name is the serial until renamed.
 #
 # What MockVision cannot do yet for this camera, all of it on the roadmap:
-# - Events leave a Dahua through eventManager.cgi attach, ONVIF or the
-#   private protocol (TCP 37777); none exists yet, so the events are
-#   declared with their Dahua codes and no transport.
-# - Codec and resolution answer and store Dahua's values (H.264, 1920 and
-#   1080), but the stream keeps its defaults until profiles can translate
-#   values; frame rate, bit rate and I-frame interval do drive the stream.
-# - ONVIF, HTTPS, the private protocol, discovery (Dahua's, UPnP, Bonjour),
-#   multicast, the first-boot initialization and error bodies of unknown
-#   parameters are not served as the unit serves them.
+# ONVIF, HTTPS, the private protocol (TCP 37777), discovery (Dahua's, UPnP,
+# Bonjour), multicast, the first-boot initialization, mediaFileFind.cgi
+# and the JSON data some events carry.
 #
 # MockVision is not affiliated with Dahua; the names are only descriptive.
 #
@@ -33,7 +33,7 @@ schema: 1
 
 profile:
   id: dahua/ipc-hdbw1230e-s4
-  version: 0.1.0
+  version: 0.2.0
   name: Dahua IPC-HDBW1230E-S4 (2 MP dome)
   vendor: Dahua
   model: IPC-HDBW1230E-S4
@@ -58,12 +58,12 @@ identity:
 
 state:
   # The device name is the serial number until the unit is renamed (to
-  # confirm): while it is empty, the API answers the serial.
+  # confirm).
   General.MachineName:
     type: string
-    default: ""
+    default_from: serial
     max_length: 63
-    description: Device name; empty answers the serial number.
+    description: Device name; the serial number until renamed.
 
   # Encoding, as configManager.cgi names it: Encode[0].MainFormat[0] is the
   # main stream, Encode[0].ExtraFormat[0] the sub stream. Frame rate, bit
@@ -76,20 +76,25 @@ state:
     type: enum
     values: [H.264, H.265]
     default: H.264
-    description: To confirm; the stream keeps its codec until profiles translate values.
+    bind: media.main.codec
+    map: { H.264: h264, H.265: h265 }
   "Encode[0].MainFormat[0].Video.Profile":
     type: enum
     values: [Baseline, Main, High]
     default: Main
     description: H.264B, H.264 and H.264H in the manual.
+  # Width and height together make the resolution: 1920x1080, 1280x960
+  # (1.3M) or 1280x720; a pair the stream lacks is refused.
   "Encode[0].MainFormat[0].Video.Width":
     type: enum
     values: [1920, 1280]
     default: 1920
+    bind: media.main.width
   "Encode[0].MainFormat[0].Video.Height":
     type: enum
     values: [1080, 960, 720]
     default: 1080
+    bind: media.main.height
   "Encode[0].MainFormat[0].Video.FPS":
     type: int
     default: 30
@@ -127,7 +132,8 @@ state:
     type: enum
     values: [H.264, H.265, MJPG]
     default: H.264
-    description: To confirm; the stream keeps its codec until profiles translate values.
+    bind: media.sub.codec
+    map: { H.264: h264, H.265: h265, MJPG: mjpeg }
   "Encode[0].ExtraFormat[0].Video.Profile":
     type: enum
     values: [Baseline, Main, High]
@@ -136,10 +142,12 @@ state:
     type: enum
     values: [704, 640, 352]
     default: 704
+    bind: media.sub.width
   "Encode[0].ExtraFormat[0].Video.Height":
     type: enum
     values: [480, 240]
     default: 480
+    bind: media.sub.height
   "Encode[0].ExtraFormat[0].Video.FPS":
     type: int
     default: 30
@@ -246,6 +254,10 @@ media:
       bitrate: { min: 32, max: 10240 }
       default: { codec: h264, resolution: 704x480, fps: 30, bitrate: 512, gop: 60 }
 
+# No SD slot: the unit records to a NAS share.
+storage:
+  nas: [nfs, smb]
+
 engines:
   rtsp:
     engine: rtsp@^1
@@ -256,11 +268,15 @@ engines:
     paths:
       main: /cam/realmonitor?channel=1&subtype=0
       sub: /cam/realmonitor?channel=1&subtype=1
+    # Recordings by time range:
+    # /cam/playback?channel=1&starttime=2026_10_07_14_30_00&endtime=2026_10_07_15_00_00
+    playback: { path: "/cam/playback?channel=1", start: starttime, end: endtime, time_format: "2006_01_02_15_04_05" }
 
   http:
     engine: http-api@^1
     port: 80
-    auth: { scheme: digest, realm: "Login to {{ .Camera.Serial }}" }
+    # Wrong credentials raise LoginFailure.
+    auth: { scheme: digest, realm: "Login to {{ .Camera.Serial }}", failure_event: "custom:login_failure" }
     routes:
       # Snapshot of the main stream: /cgi-bin/snapshot.cgi?channel=1.
       - id: snapshot
@@ -279,9 +295,7 @@ engines:
         action: { type: text/plain;charset=utf-8, body: "sn={{ .Camera.Serial }}\r\n" }
       - id: machine-name
         match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getMachineName } }
-        action:
-          type: text/plain;charset=utf-8
-          body: "name={{ with state \"General.MachineName\" }}{{ . }}{{ else }}{{ .Camera.Serial }}{{ end }}\r\n"
+        action: { type: text/plain;charset=utf-8, body: "name={{ state \"General.MachineName\" }}\r\n" }
       # The build date is to confirm.
       - id: software-version
         match: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSoftwareVersion } }
@@ -303,7 +317,8 @@ engines:
       # Configuration tables, for example
       #   /cgi-bin/configManager.cgi?action=getConfig&name=Encode
       #   /cgi-bin/configManager.cgi?action=setConfig&Encode[0].MainFormat[0].Video.FPS=15
-      # A table name answers its members, table.<key>=<value> per line.
+      # A table name answers its members, table.<key>=<value> per line; an
+      # unknown name, or a value the unit refuses, answers Dahua's error.
       - id: config-get
         match: { method: GET, path: /cgi-bin/configManager.cgi, query: { action: getConfig, name: "*" } }
         action:
@@ -312,7 +327,8 @@ engines:
           key: name
           then:
             type: text/plain;charset=utf-8
-            body: "{{ range .Result }}table.{{ .Key }}={{ if and (eq .Key \"General.MachineName\") (eq (print .Value) \"\") }}{{ $.Camera.Serial }}{{ else }}{{ .Value }}{{ end }}\r\n{{ end }}"
+            body: "{{ range .Result }}table.{{ .Key }}={{ .Value }}\r\n{{ end }}"
+          error: &bad { status: 400, type: text/plain;charset=utf-8, body: "Error\r\nBad Request!\r\n" }
       - id: config-set
         match: { method: GET, path: /cgi-bin/configManager.cgi, query: { action: setConfig } }
         roles: [admin, operator]
@@ -320,34 +336,71 @@ engines:
           handler: state.set
           from: query
           then: { type: text/plain;charset=utf-8, body: "OK\r\n" }
+          error: *bad
+
+      # Events as they happen, for example
+      #   /cgi-bin/eventManager.cgi?action=attach&codes=[All]&heartbeat=5
+      # Each event is a part of a multipart answer that never ends, with a
+      # Heartbeat part every heartbeat seconds.
+      - id: event-attach
+        match: { method: GET, path: /cgi-bin/eventManager.cgi, query: { action: attach } }
+        action: { handler: events.attach, params: { codes: codes, heartbeat: heartbeat }, boundary: myboundary }
 
       # Any other action of these programs is a bad request.
       - id: magicbox-bad-request
         match: { path: /cgi-bin/magicBox.cgi }
-        action: &bad { status: 400, type: text/plain;charset=utf-8, body: "Error\r\nBad Request!\r\n" }
+        action: *bad
       - id: global-bad-request
         match: { path: /cgi-bin/global.cgi }
         action: *bad
       - id: config-bad-request
         match: { path: /cgi-bin/configManager.cgi }
         action: *bad
+      - id: event-bad-request
+        match: { path: /cgi-bin/eventManager.cgi }
+        action: *bad
 
 events:
   # Dahua's event codes, as eventManager.cgi names them (to confirm with a
-  # capture). The unit raises them over eventManager.cgi attach, ONVIF or
-  # its private protocol; until MockVision serves one of them they have no
-  # transport, and the import warns about it.
-  motion: { vendor_name: VideoMotion }
-  tamper: { vendor_name: VideoBlind }
-  custom:scene_change: { vendor_name: SceneChange }
-  custom:net_abort: { vendor_name: NetAbort }
-  custom:ip_conflict: { vendor_name: IPConflict }
-  custom:login_failure: { vendor_name: LoginFailure }
-  custom:storage_not_exist: { vendor_name: StorageNotExist }
-  custom:storage_failure: { vendor_name: StorageFailure }
-  custom:storage_low_space: { vendor_name: StorageLowSpace }
+  # capture). Detections start and stop: the unit says Start, then Stop
+  # once the scene is quiet; the rest happen once (Pulse).
+  motion:
+    vendor_name: VideoMotion
+    transports:
+      attach: &lasting
+        body: "Code={{ .EventName }};action=Start;index=0"
+        stop: { after: 5s, body: "Code={{ .EventName }};action=Stop;index=0" }
+    # A snapshot and 10 seconds of the main stream, on the NAS share.
+    record: { snapshot: true, clip: 10s }
+  tamper:
+    vendor_name: VideoBlind
+    transports: { attach: *lasting }
+  custom:scene_change:
+    vendor_name: SceneChange
+    transports: { attach: *lasting }
+  # The device's own state, raised by faults and by its share.
+  network_lost:
+    vendor_name: NetAbort
+    transports: { attach: &pulse { body: "Code={{ .EventName }};action=Pulse;index=0" } }
+  ip_conflict:
+    vendor_name: IPConflict
+    transports: { attach: *pulse }
+  custom:login_failure:
+    vendor_name: LoginFailure
+    min_interval: 5s
+    transports: { attach: *pulse }
+  storage_missing:
+    vendor_name: StorageNotExist
+    transports: { attach: *pulse }
+  storage_failure:
+    vendor_name: StorageFailure
+    transports: { attach: *pulse }
+  storage_full:
+    vendor_name: StorageLowSpace
+    transports: { attach: *pulse }
 
 coverage:
-  rtsp: main and sub stream at Dahua's realmonitor paths, digest with the unit's realm
-  http-api: snapshot, device information (magicBox), clock reading, configuration tables (configManager getConfig and setConfig)
-  events: declared with Dahua's codes; no transport until eventManager.cgi attach
+  rtsp: main and sub stream at Dahua's realmonitor paths, digest with the unit's realm, playback of recordings by time range
+  http-api: snapshot, device information (magicBox), clock reading, configuration tables (configManager getConfig and setConfig) with Dahua's values and errors
+  events: eventManager.cgi attach with Dahua's codes, Start and Stop, and a heartbeat
+  storage: a snapshot and a 10 s clip of each motion on a NAS share (NFS or SMB)

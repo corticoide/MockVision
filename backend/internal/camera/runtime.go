@@ -361,7 +361,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	// resolver while it changes; later changes go through r.dns.
 	r.dns.set(cfg.DNS)
 	net.DefaultResolver = r.dns.resolver()
-	r.state = newStateStore(r.model, cfg.State, func(changes []engine.Change) {
+	r.state = newStateStore(r.model, cfg.Identity, cfg.State, func(changes []engine.Change) {
 		if err := r.conn.Notify(ipc.TypeStateChanged, ipc.StateChanged{Changes: changes}); err != nil {
 			r.log.Warn("cannot report state change", "error", err)
 		}

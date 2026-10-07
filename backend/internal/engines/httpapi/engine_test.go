@@ -37,11 +37,12 @@ type fakeHost struct {
 	accounts fakeAccounts
 	state    *fakeState
 	files    engine.Files
+	events   engine.Events
 }
 
 func (h fakeHost) Accounts() engine.Accounts   { return h.accounts }
 func (h fakeHost) State() engine.State         { return h.state }
-func (h fakeHost) Events() engine.Events       { return nil }
+func (h fakeHost) Events() engine.Events       { return h.events }
 func (h fakeHost) Media() engine.Media         { return fakeMedia{} }
 func (h fakeHost) Templates() engine.Templates { return tmpl.NewCompiler(tmpl.Env{State: h.state.Get}) }
 func (h fakeHost) Files() engine.Files         { return h.files }

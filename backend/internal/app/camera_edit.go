@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -303,16 +304,17 @@ func (s *Service) UpdateCameraStream(ctx context.Context, actor Actor, id, name 
 	values := b.values()
 	coerced := map[string]any{}
 	for _, w := range wanted {
-		key, ok := b.model.NativeFor(w.canon)
-		if !ok {
+		set, err := b.model.Assign(w.canon, w.raw)
+		if errors.Is(err, profile.ErrNotBound) {
 			return nil, domain.Invalid(w.field, "profile %s does not allow changing it", b.prof.ProfileID)
 		}
-		cv, err := profile.Coerce(b.doc.State[key], w.raw)
 		if err != nil {
 			return nil, domain.Invalid(w.field, "%v", err)
 		}
-		coerced[key] = cv
-		values[key] = cv
+		for key, cv := range set {
+			coerced[key] = cv
+			values[key] = cv
+		}
 	}
 	assetID := cur.AssetID
 	if in.AssetID != nil {
@@ -415,7 +417,7 @@ func (s *Service) ResetCamera(ctx context.Context, actor Actor, id, scope string
 		}
 		ports[p.EngineKey] = int64(port)
 	}
-	values := b.model.Defaults()
+	values := b.model.DefaultsFor(b.identity())
 	now := time.Now().UnixMilli()
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
 		if err := q.DeleteCameraState(ctx, id); err != nil {
@@ -525,13 +527,28 @@ func (s *Service) CloneCamera(ctx context.Context, actor Actor, srcID string, in
 		users = append(users, domain.CameraUser{Username: u.Username, Password: string(pw), Role: u.Role})
 	}
 	rules, triggers := copyVCA(b.rules, b.triggers)
+	serial := serialFor(id, b.doc.Identity.Serial)
+	// Parameters that still hold the identity's default take the copy's.
+	copyID := (&cameraBundle{cam: db.Camera{Serial: serial, Name: in.Name}, doc: b.doc, net: db.CameraNetwork{Mac: netw.mac, Ip: netw.ip}}).identity()
+	srcDefaults, copyDefaults := b.model.DefaultsFor(b.identity()), b.model.DefaultsFor(copyID)
+	state := make([]db.CameraState, len(b.state))
+	for i, st := range b.state {
+		state[i] = st
+		if b.doc.State[st.Key].DefaultFrom == "" {
+			continue
+		}
+		if raw, _ := json.Marshal(srcDefaults[st.Key]); st.ValueJson == string(raw) {
+			fresh, _ := json.Marshal(copyDefaults[st.Key])
+			state[i].ValueJson = string(fresh)
+		}
+	}
 	now := time.Now().UnixMilli()
 	err = s.insertCamera(ctx, newCamera{
 		row: db.InsertCameraParams{
-			ID: id, Name: in.Name, ProfileID: b.prof.ProfileID, ProfileVersion: b.prof.Version, Serial: serialFor(id, b.doc.Identity.Serial),
+			ID: id, Name: in.Name, ProfileID: b.prof.ProfileID, ProfileVersion: b.prof.Version, Serial: serial,
 			DesiredState: string(domain.DesiredStopped), Autostart: b.cam.Autostart, TagsJson: b.cam.TagsJson, CreatedAt: now, UpdatedAt: now,
 		},
-		netw: netw, state: b.state, protos: b.protos, users: users, streams: b.streams, targets: b.targets,
+		netw: netw, state: state, protos: b.protos, users: users, streams: b.streams, targets: b.targets,
 		rules: rules, triggers: triggers,
 	})
 	if err != nil {

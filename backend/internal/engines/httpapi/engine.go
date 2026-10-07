@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/corticoide/mockvision/backend/internal/engines/delivery"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
@@ -42,6 +43,11 @@ type Engine struct {
 	cfg  atomic.Pointer[compiledConfig]
 	srv  *http.Server
 	done chan struct{}
+
+	// attachHub holds the open events.attach requests.
+	attachHub       *attachHub
+	attachTemplates *delivery.Templates
+	unsubscribe     func()
 
 	state    atomic.Value // engine.HealthState
 	clients  atomic.Int64
@@ -67,6 +73,7 @@ func (e *Engine) Describe() engine.Descriptor {
 		Role:         engine.RoleServer,
 		ConfigSchema: json.RawMessage(configSchema),
 		Sockets:      []engine.SocketSpec{{Name: "http", Network: "tcp", DefaultPort: 80}},
+		Delivers:     []string{engine.TransportAttach},
 	}
 }
 
@@ -94,6 +101,7 @@ type compiledAction struct {
 	a    Action
 	body engine.Template
 	then *compiledAction
+	err  *compiledAction
 }
 
 type matcher func(values []string) bool
@@ -208,6 +216,13 @@ func (e *Engine) compileAction(name string, a Action) (*compiledAction, error) {
 		}
 		ca.then = then
 	}
+	if a.Error != nil {
+		errAct, err := e.compileAction(name, *a.Error)
+		if err != nil {
+			return nil, err
+		}
+		ca.err = errAct
+	}
 	return ca, nil
 }
 
@@ -223,6 +238,11 @@ func (e *Engine) Start(ctx context.Context, in engine.StartInput) error {
 		return err
 	}
 	e.cfg.Store(cc)
+	e.attachHub = newAttachHub()
+	if usesAttach(cc.cfg) && in.Host.Events() != nil {
+		e.attachTemplates = delivery.NewTemplates(in.Host.Templates())
+		e.unsubscribe = in.Host.Events().Subscribe(engine.TransportAttach, e.dispatchAttach)
+	}
 	e.srv = &http.Server{
 		Handler:           e,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -285,6 +305,11 @@ func (e *Engine) Stop(ctx context.Context) error {
 	if e.srv == nil {
 		return nil
 	}
+	if e.unsubscribe != nil {
+		e.unsubscribe()
+	}
+	// Open attach requests end first: they never turn idle.
+	e.attachHub.close()
 	err := e.srv.Shutdown(ctx)
 	if err != nil {
 		_ = e.srv.Close()
@@ -332,6 +357,11 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user, ok, stale := cc.auth.check(r)
 	if !ok {
 		routeID = "auth"
+		// Credentials sent and refused, not the challenge's first round.
+		if ev := cc.cfg.Auth.FailureEvent; ev != "" && !stale && r.Header.Get("Authorization") != "" && e.in.Host.Events() != nil {
+			_, _ = e.in.Host.Events().Emit(r.Context(), engine.Event{Type: ev, Trigger: "device",
+				Custom: map[string]any{"client": clientIP}})
+		}
 		cc.auth.challenge(cw, stale)
 		cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		cw.WriteHeader(http.StatusUnauthorized)
@@ -460,7 +490,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 		}
 		jpeg, err := e.in.Host.Media().Snapshot(stream)
 		if err != nil {
-			e.fail(w, http.StatusServiceUnavailable, "snapshot unavailable")
+			e.handlerError(w, r, a, data, failWith(http.StatusServiceUnavailable, "snapshot unavailable"))
 			return
 		}
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -471,7 +501,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 	case HandlerStateGet:
 		result, err := e.stateGet(r, a.a, data.Request)
 		if err != nil {
-			e.fail(w, http.StatusBadRequest, err.Error())
+			e.handlerError(w, r, a, data, err)
 			return
 		}
 		data.Result = result
@@ -485,7 +515,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 	case HandlerStateSet:
 		changes, err := e.stateSet(r, route, a.a, data.Request)
 		if err != nil {
-			e.fail(w, http.StatusBadRequest, err.Error())
+			e.handlerError(w, r, a, data, err)
 			return
 		}
 		data.Result = changes
@@ -497,7 +527,7 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 	case HandlerSDSearch:
 		found, err := e.sdSearch(r, a.a, data.Request)
 		if err != nil {
-			e.failErr(w, err)
+			e.handlerError(w, r, a, data, err)
 			return
 		}
 		data.Result = found
@@ -510,11 +540,30 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 		}
 	case HandlerSDDownload:
 		if err := e.sdDownload(w, r, a.a, data.Request); err != nil {
-			e.failErr(w, err)
+			e.handlerError(w, r, a, data, err)
 		}
+		return
+	case HandlerEventsAttach:
+		e.attach(w, r, a.a, data.Request)
 		return
 	}
 	e.respond(w, r, a.then, data)
+}
+
+// handlerError answers a handler's failure: with the action's error, in
+// the vendor's words, or plainly. Handlers fail with 400 unless they say.
+func (e *Engine) handlerError(w *countingWriter, r *http.Request, a *compiledAction, data engine.TemplateData, err error) {
+	status := http.StatusBadRequest
+	var es *errStatus
+	if errors.As(err, &es) {
+		status = es.status
+	}
+	if a.err == nil {
+		e.fail(w, status, err.Error())
+		return
+	}
+	data.Result = err.Error()
+	e.respondStatus(w, r, a.err, data, status)
 }
 
 // KV is a parameter exposed to templates as .Result of state.get.
@@ -630,6 +679,11 @@ func (e *Engine) stateSet(r *http.Request, route *compiledRoute, a Action, req *
 }
 
 func (e *Engine) respond(w *countingWriter, r *http.Request, a *compiledAction, data engine.TemplateData) {
+	e.respondStatus(w, r, a, data, http.StatusOK)
+}
+
+// respondStatus renders an action; status applies when it sets none.
+func (e *Engine) respondStatus(w *countingWriter, r *http.Request, a *compiledAction, data engine.TemplateData, status int) {
 	var out []byte
 	if a.body != nil {
 		b, err := a.body.Render(r.Context(), data)
@@ -650,25 +704,14 @@ func (e *Engine) respond(w *countingWriter, r *http.Request, a *compiledAction, 
 	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	status := a.a.Status
-	if status == 0 {
-		status = http.StatusOK
+	if a.a.Status != 0 {
+		status = a.a.Status
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(out)
 	}
-}
-
-// failErr answers a handler's error with its status.
-func (e *Engine) failErr(w *countingWriter, err error) {
-	var es *errStatus
-	if errors.As(err, &es) {
-		e.fail(w, es.status, es.msg)
-		return
-	}
-	e.fail(w, http.StatusInternalServerError, err.Error())
 }
 
 func (e *Engine) fail(w *countingWriter, status int, msg string) {
@@ -743,6 +786,9 @@ func (c *countingWriter) WriteHeader(status int) {
 	}
 	c.ResponseWriter.WriteHeader(status)
 }
+
+// Unwrap lets http.ResponseController reach the connection's writer.
+func (c *countingWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
 func (c *countingWriter) Write(b []byte) (int, error) {
 	c.wrote = true

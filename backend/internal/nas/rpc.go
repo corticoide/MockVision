@@ -114,7 +114,7 @@ func (c *rpcConn) call(ctx context.Context, proc uint32, args []byte) (*decoder,
 		if d.uint32() != msgAccepted {
 			return nil, errors.New("rpc: call denied: the server refused the credentials")
 		}
-		d.uint32()   // verifier flavor
+		d.uint32()    // verifier flavor
 		d.opaque(400) // verifier body
 		if st := d.uint32(); st != acceptSuccess {
 			if msg, ok := acceptErrors[st]; ok {
