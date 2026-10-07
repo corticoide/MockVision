@@ -338,24 +338,50 @@ and so is any setting that only that panel reads or changes.
 
 - `profiles/milesight-demo.yaml` is illustrative: its routes and payloads
   were not captured from a device.
+- `profiles/milesight-base.yaml` drafts the common part of Milesight's
+  2 MP cameras for model profiles to start from: the demo's API with
+  Milesight's values (`H.264`, `1920*1080`), basic motion and tampering
+  events, the device named after its model.
 - `profiles/dahua-ipc-hdbw1230e-s4.yaml` drafts a real model, the Dahua
   IPC-HDBW1230E-S4 (2 MP dome), from its manual, its datasheet and Dahua's
   public HTTP API. It serves RTSP at `/cam/realmonitor?channel=1&subtype=0`
-  (main) and `subtype=1` (sub), challenges with `Login to <serial>` as the
-  unit does, and answers `magicBox.cgi`, `snapshot.cgi`,
-  `global.cgi?action=getCurrentTime` and `configManager.cgi`:
-  `getConfig&name=Encode` reads a whole table and
-  `setConfig&Encode[0].MainFormat[0].Video.FPS=15` changes the stream. With
-  curl, `-g` sends the brackets as they are:
+  (main) and `subtype=1` (sub), plays recordings back at `/cam/playback`,
+  challenges with `Login to <serial>` as the unit does, and answers
+  `magicBox.cgi`, `snapshot.cgi`, `global.cgi?action=getCurrentTime` and
+  `configManager.cgi`: `getConfig&name=Encode` reads a whole table and
+  `setConfig&Encode[0].MainFormat[0].Video.Compression=H.265` changes the
+  stream, as do `Width`, `Height` and `FPS`; an unknown table or a value
+  the unit refuses answers Dahua's `Error` / `Bad Request!`. With curl, `-g`
+  sends the brackets as they are:
   `curl -g --digest -u admin:admin1234 'http://<ip>/cgi-bin/configManager.cgi?action=getConfig&name=Encode'`.
-  Its events have no transport yet: a Dahua sends them over
-  `eventManager.cgi?action=attach`, ONVIF or its private protocol, all on
-  the roadmap, like codec and resolution changes reaching the stream. The
-  file's header lists what else is missing.
+  Its events leave over `eventManager.cgi?action=attach&codes=[All]&heartbeat=5`
+  with Dahua's codes (`Code=VideoMotion;action=Start;index=0`, then `Stop`),
+  a wrong password raises `LoginFailure`, and motion records to a NAS share.
+  The file's header lists what is still missing.
 
 Engines repeat what the vendor shows on the wire: `auth.realm` may name the
 camera (`"Login to {{ .Camera.Serial }}"`) in the HTTP API and in RTSP, and
 the RTSP engine's `server` sets the `Server` header of its answers.
+
+**Vendor values.** A parameter speaks the vendor's language and drives the
+camera through its `bind`:
+
+- `map` translates the vendor's values into the canonical ones
+  (`map: { H.264: h264, H.265: h265, MJPG: mjpeg }`); the panel's choices
+  are written back in the vendor's.
+- A resolution may be two parameters, bound to `media.<stream>.width` and
+  `media.<stream>.height`; a pair the stream does not support is refused.
+- `default_from` takes a default from the camera's identity (`serial`,
+  `name`, `model`, `mac`, `ip` or `firmware`), as a device named after its
+  serial number.
+- A handler's `error` is its answer when it fails, in the vendor's words
+  (`.Result` is the reason), and `auth.failure_event` raises an event when
+  a client sends wrong credentials.
+- The handler `events.attach` keeps a request open and writes the events of
+  the `attach` transport as they happen, one part each of a
+  `multipart/x-mixed-replace` answer, filtered by `codes` and with a
+  heartbeat; an event's `attach` transport gives the part and, for those
+  that last, the one that ends it (`stop: { after: 5s, body: … }`).
 
 ### Network
 

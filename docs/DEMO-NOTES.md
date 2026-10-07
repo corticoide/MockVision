@@ -39,6 +39,7 @@ against the Docker image started with `compose.yaml`.
 | Event transports (v1) | linked to an MQTT broker on the client, the running camera connects at once, with its serial as client ID and its will, and says online; a line crossing reaches the broker (QoS 1), the FTP server (the snapshot under `<serial>/<date>/`, in passive mode through the camera's firewall) and the mail server (with the snapshot attached); a second crossing within 10 s skips the mail; each target passes its test from the camera; unlinked, the camera disconnects from the broker |
 | Faults (v1) | RTSP down: ffprobe fails while the HTTP API answers and the camera is degraded with the fault named; ended by hand, the stream is back. A 401 fault refuses the right password and expires on its own after 3 s. Network down: no ping, no ARP; `network_lost` fails to leave and reaches the target once back. None of them restarts the camera; a reboot takes it off the network for its boot time and back |
 | Storage (v1) | a 256 GB card is refused with code `disk` on a smaller disk; on a 64 MB card a line crossing records its snapshot and a 10 s clip; the client finds the clip by time through the camera's API, downloads it (ffprobe: H.264, 10 s, the same bytes as the panel's download) and plays the range back over RTSP; `sd_missing` sends `storage_missing` to the target and the search answers 503; with Samba on the client, the camera writes its recordings to an SMB share in a folder of its serial and the panel reads them through it |
+| Dahua profile (v1) | imported as a draft, a Dahua camera is named after its serial; a client attached to `eventManager.cgi` with `codes=[All]&heartbeat=2` reads `Code=VideoMotion;action=Start;index=0`, then `Stop`, and heartbeats; `setConfig` of `Compression=H.265`, `Width=1280` and `Height=720` turns the main stream into H.265 at 1280×720 (ffprobe), and a height the sub stream lacks gets `Error` / `Bad Request!`; a wrong password raises `LoginFailure` |
 | Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
@@ -104,14 +105,21 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   itself, since it has no manifest.
 - **The official catalog is not bundled** (D81): profiles are imported by
   hand, as the acceptance criteria ask.
-- **Values are not translated.** A bound parameter holds the canonical value
-  as it is (`h264`, `1920x1080`). A vendor that names them otherwise, such
-  as Dahua's `H.264` or its width and height apart, keeps those parameters
-  declarative: they answer and store the vendor's value but do not reach
-  the stream.
-- **Engine errors are fixed.** A `state.get` of an unknown parameter or a
-  `state.set` the parameter refuses answers `Error: <reason>` with a 400,
-  whatever the vendor answers.
+- **Vendor values** translate one by one (`map`) or as a width and a
+  height; a value with no translation, or a value that depends on several
+  parameters besides the resolution, is not supported. Defaults come from
+  six identity fields only.
+- **Vendor errors** are one answer per action: the reason (`.Result`) is
+  MockVision's words, and a request that sets several parameters fails as a
+  whole, never in part.
+- **events.attach** writes the `attach` transport's parts as they happen:
+  no backlog for a client that connects later, no JSON `data` of Dahua's
+  smart events, and a client that reads too slowly loses parts. Events with
+  only that transport have no delivery to log.
+- **The base profiles are drafts.** `milesight/base` and the Dahua
+  IPC-HDBW1230E-S4 come from manuals and public API documents, not from a
+  capture; the values marked *to confirm* in them await one, and
+  `extends` (feature 12) is needed for models to inherit from the base.
 
 ### Isolation
 

@@ -870,6 +870,49 @@ else
 	ok "no smbd on this machine: the NAS over SMB is left to the unit tests"
 fi
 
+step "Dahua profile: eventManager attach, Dahua's values and errors (D29)"
+level=$(api POST /packages -F "file=@$ROOT/profiles/dahua-ipc-hdbw1230e-s4.yaml" | json 'd["profile"]["level"]')
+[ "$level" = draft ] || fail "the Dahua draft: $level"
+DH_IP=10.77.0.13
+DH=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\": \"Hall\", \"profile_id\": \"dahua/ipc-hdbw1230e-s4\",
+	\"profile_version\": \"0.2.0\", \"network\": {\"ip\": \"$DH_IP\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
+wait_state "$DH" running 120
+DH_SERIAL=$(api GET "/cameras/$DH" | json 'd["serial"]')
+dh() { client curl -s --digest -u admin:admin1234 "http://$DH_IP$1"; }
+[ "$(dh '/cgi-bin/magicBox.cgi?action=getMachineName' | tr -d '\r')" = "name=$DH_SERIAL" ] || fail "the unit is not named after its serial"
+ok "the unit answers as Dahua's, named after its serial $DH_SERIAL"
+# A client keeps attach open; a motion reaches it as Start, then Stop.
+client curl -s -N --max-time 12 --digest -u admin:admin1234 \
+	"http://$DH_IP/cgi-bin/eventManager.cgi?action=attach&codes=%5BAll%5D&heartbeat=2" >"$WORK/attach.log" 2>/dev/null &
+ATTACH=$!
+sleep 1
+api POST "/cameras/$DH/events" -H 'Content-Type: application/json' -d '{"type":"motion"}' >/dev/null
+wait "$ATTACH" || true
+grep -q "Code=VideoMotion;action=Start;index=0" "$WORK/attach.log" || fail "no VideoMotion Start: $(head -c 400 "$WORK/attach.log")"
+grep -q "Code=VideoMotion;action=Stop;index=0" "$WORK/attach.log" || fail "no VideoMotion Stop"
+grep -q "Heartbeat" "$WORK/attach.log" || fail "no heartbeat"
+grep -q "^--myboundary" "$WORK/attach.log" || fail "not a multipart answer"
+ok "eventManager.cgi attach streamed VideoMotion Start and Stop and its heartbeats"
+# Dahua's values move the stream; a pair the stream lacks gets Dahua's error.
+out=$(dh '/cgi-bin/configManager.cgi?action=setConfig&Encode%5B0%5D.ExtraFormat%5B0%5D.Video.Height=240' | tr -d '\r' | tr '\n' ' ')
+[ "$out" = "Error Bad Request! " ] || fail "704x240: $out"
+out=$(dh '/cgi-bin/configManager.cgi?action=setConfig&Encode%5B0%5D.MainFormat%5B0%5D.Video.Compression=H.265&Encode%5B0%5D.MainFormat%5B0%5D.Video.Width=1280&Encode%5B0%5D.MainFormat%5B0%5D.Video.Height=720' | tr -d '\r')
+[ "$out" = OK ] || fail "setConfig: $out"
+probe_dh() { client timeout 10 ffprobe -v error -rtsp_transport tcp -select_streams v:0 -show_entries stream=codec_name,width,height -of csv=p=0 \
+	"rtsp://admin:admin1234@$DH_IP:554/cam/realmonitor?channel=1&subtype=0" 2>/dev/null; }
+for _ in $(seq 1 60); do [ "$(probe_dh)" = "hevc,1280,720" ] && break; sleep 1; done
+[ "$(probe_dh)" = "hevc,1280,720" ] || fail "the main stream after Dahua's H.265 at 1280x720: $(probe_dh)"
+ok "setConfig of Compression=H.265, Width=1280 and Height=720 turned the main stream into H.265 at 1280x720; 704x240 got Error / Bad Request!"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u admin:wrong "http://$DH_IP/cgi-bin/magicBox.cgi?action=getDeviceType")
+[ "$code" = 401 ] || fail "a wrong password answered $code"
+for _ in $(seq 1 20); do
+	[ "$(api GET "/events?camera_id=$DH&type=custom:login_failure" | json 'len(d["items"])')" -ge 1 ] && break
+	sleep 0.25
+done
+[ "$(api GET "/events?camera_id=$DH&type=custom:login_failure" | json 'len(d["items"])')" -ge 1 ] || fail "no LoginFailure"
+ok "a wrong password raised LoginFailure"
+api DELETE "/cameras/$DH" -o /dev/null
+
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null
 wait_state "$CID" stopped 20
