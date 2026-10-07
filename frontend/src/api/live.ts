@@ -123,6 +123,13 @@ export class LiveClient {
           this.qc.invalidateQueries({ queryKey: keys.faults });
           break;
         }
+        if (m.type === "storage") {
+          // The card or share changed: a recording, a format, a fault.
+          const id = (m.data as { camera_id: string }).camera_id;
+          this.qc.invalidateQueries({ queryKey: keys.storage(id) });
+          this.qc.invalidateQueries({ queryKey: keys.recordings(id) });
+          break;
+        }
         this.onCamera(m);
         break;
       case "events":
@@ -169,6 +176,8 @@ export class LiveClient {
       case "cameras":
         this.qc.invalidateQueries({ queryKey: keys.cameras });
         this.qc.invalidateQueries({ queryKey: keys.faults });
+        this.qc.invalidateQueries({ queryKey: ["storage"] });
+        this.qc.invalidateQueries({ queryKey: ["recordings"] });
         break;
       case "events":
         this.qc.invalidateQueries({ queryKey: ["events"] });

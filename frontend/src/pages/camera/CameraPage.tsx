@@ -23,6 +23,7 @@ import { NetworkTab } from "./NetworkTab";
 import { isRunning } from "./parts";
 import { ProtocolsTab } from "./ProtocolsTab";
 import { RulesTab } from "./RulesTab";
+import { StorageTab } from "./StorageTab";
 import { ManualEventForm, TriggersTab } from "./TriggersTab";
 import { UsersTab } from "./UsersTab";
 
@@ -35,6 +36,7 @@ const sections = [
   { id: "triggers", label: "Triggers" },
   { id: "users", label: "Users" },
   { id: "config", label: "Configuration" },
+  { id: "storage", label: "Storage" },
   { id: "faults", label: "Faults" },
   { id: "events", label: "Events" },
 ];
@@ -95,6 +97,7 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         {current === "triggers" && <TriggersTab camera={camera} />}
         {current === "users" && <UsersTab camera={camera} />}
         {current === "config" && <ConfigTab camera={camera} />}
+        {current === "storage" && <StorageTab camera={camera} />}
         {current === "faults" && <FaultsTab camera={camera} />}
         {current === "events" && <EventsTab camera={camera} />}
       </TabPanel>

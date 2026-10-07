@@ -21,6 +21,7 @@ import {
   type ManualEvent,
   type RuleInput,
   type Settings,
+  type StorageInput,
   type TriggerInput,
   type TargetInput,
   type TokenInput,
@@ -50,6 +51,8 @@ export const keys = {
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
   faults: ["faults"] as const,
   cameraFaults: (id: string) => ["faults", id] as const,
+  storage: (id: string) => ["storage", id] as const,
+  recordings: (id: string) => ["recordings", id] as const,
 };
 
 // --- Session ---
@@ -520,6 +523,50 @@ export function useRebootCamera() {
       unwrap(await api.POST("/cameras/{id}/actions/reboot", { params: { path: { id: v.id } }, body: v.seconds === undefined ? {} : { seconds: v.seconds } })),
     onSuccess: (camera) => patchCameraCache(qc, camera),
   });
+}
+
+// --- Storage ---
+
+/** Where a camera records and the state of its card or share. */
+export function useStorage(id: string) {
+  return useQuery({ queryKey: keys.storage(id), queryFn: async () => unwrap(await api.GET("/cameras/{id}/storage", { params: { path: { id } } })) });
+}
+
+/** The newest recordings of a camera's card or share. */
+export function useRecordings(id: string) {
+  return useQuery({
+    queryKey: keys.recordings(id),
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/recordings", { params: { path: { id } } })).items,
+  });
+}
+
+export function useUpdateStorage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; body: StorageInput }) =>
+      unwrap(await api.PUT("/cameras/{id}/storage", { params: { path: { id: v.id } }, body: v.body })),
+    onSuccess: (s, v) => {
+      qc.setQueryData(keys.storage(v.id), s);
+      qc.invalidateQueries({ queryKey: keys.recordings(v.id) });
+      qc.invalidateQueries({ queryKey: keys.faults });
+    },
+  });
+}
+
+export function useFormatStorage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => unwrap(await api.POST("/cameras/{id}/storage/actions/format", { params: { path: { id } } })),
+    onSuccess: (s, id) => {
+      qc.setQueryData(keys.storage(id), s);
+      qc.invalidateQueries({ queryKey: keys.recordings(id) });
+    },
+  });
+}
+
+/** Where the panel downloads a recording. */
+export function recordingURL(cameraId: string, recordingId: string): string {
+  return `/api/v1/cameras/${encodeURIComponent(cameraId)}/recordings/${encodeURIComponent(recordingId)}/download`;
 }
 
 // --- Events ---

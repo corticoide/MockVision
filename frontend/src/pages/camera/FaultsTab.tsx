@@ -1,7 +1,7 @@
 import { Bug, CircleOff, Power } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { ApiError, type Camera, errorMessage, type Fault, type FaultInput, type FaultKind } from "@/api/client";
-import { useCameraFaults, useEndFault, useInjectFault, useRebootCamera } from "@/api/queries";
+import { useCameraFaults, useEndFault, useInjectFault, useRebootCamera, useStorage } from "@/api/queries";
 import { Badge, Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,17 @@ export const faultKinds: Record<FaultKind, { label: string; hint: string }> = {
     hint: "The camera answers nobody, not even ARP, and reaches nobody; it raises network_lost, delivered once it is back if its retries last.",
   },
   ip_conflict: { label: "IP conflict", hint: "The camera sees another device with its address: it raises ip_conflict and keeps answering." },
+  sd_missing: { label: "SD card missing", hint: "The card is out of its slot: it raises storage_missing, records nothing and cannot be searched." },
+  sd_error: { label: "SD card error", hint: "The card fails: it raises storage_failure, records nothing and cannot be searched." },
+  sd_read_only: { label: "SD card read only", hint: "The card is locked: it raises storage_failure and records nothing; its recordings can still be searched." },
+  sd_full: { label: "SD card full", hint: "The card says it is full: it raises storage_full and records nothing." },
 };
 
 type FaultStatus = NonNullable<FaultInput["status"]>;
 const statuses: FaultStatus[] = [401, 403, 404, 500, 503];
 
 const kindOrder: FaultKind[] = ["service_down", "latency", "error_status", "clock_skew", "network_down", "ip_conflict"];
+const sdKinds: FaultKind[] = ["sd_missing", "sd_error", "sd_read_only", "sd_full"];
 
 /** How long a fault lasts; 0 lasts until ended (RN-14). */
 const durations = [
@@ -76,6 +81,8 @@ function useNow(ms: number): number {
 
 export function FaultsTab({ camera }: { camera: Camera }) {
   const { data: faults, isLoading, error } = useCameraFaults(camera.id);
+  const { data: storage } = useStorage(camera.id);
+  const sd = storage?.kind === "sd";
   const t = useT();
   const now = useNow(1000);
   const active = faults?.filter((f) => f.active) ?? [];
@@ -88,7 +95,7 @@ export function FaultsTab({ camera }: { camera: Camera }) {
         <p className="mb-3 text-[13px] text-muted">
           {t("Test how a client handles a camera that fails. Every fault ends on its own or by hand; while one is on, the camera shows as degraded.")}
         </p>
-        <InjectForm camera={camera} />
+        <InjectForm camera={camera} sd={sd} />
       </Card>
       <Card>
         {error && <Notice tone="error">{errorMessage(error)}</Notice>}
@@ -164,7 +171,7 @@ function FaultRow({ camera, fault: f, now }: { camera: Camera; fault: Fault; now
   );
 }
 
-function InjectForm({ camera }: { camera: Camera }) {
+function InjectForm({ camera, sd }: { camera: Camera; sd: boolean }) {
   const inject = useInjectFault();
   const t = useT();
   const servers = camera.protocols.filter((p) => p.role === "server" && p.enabled);
@@ -209,7 +216,7 @@ function InjectForm({ camera }: { camera: Camera }) {
     <form onSubmit={submit} className="grid grid-cols-4 items-end gap-x-4 gap-y-3">
       <Field label={t("Fault")} error={errors["kind"]}>
         <Select value={kind} onChange={(e) => setKind(e.target.value as FaultKind)}>
-          {kindOrder.map((k) => (
+          {(sd ? [...kindOrder, ...sdKinds] : kindOrder).map((k) => (
             <option key={k} value={k}>
               {t(faultKinds[k].label)}
             </option>

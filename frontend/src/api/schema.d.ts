@@ -494,6 +494,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cameras/{id}/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description Where the camera records, what its model offers, and the state of its card or share. */
+        get: operations["getStorage"];
+        /** @description Gives the camera an SD card, a NAS share or neither; fields left out stay. A card that is new or grows must fit on the node's disk with what the other cards promised (D91, rejected with code disk). Taking the card out wipes it, and a smaller card keeps the newest recordings that fit. A running camera gets the change at once. */
+        put: operations["updateStorage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/storage/actions/format": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Wipes the SD card, as the device's format does; a card out of its slot or read only cannot be formatted. */
+        post: operations["formatStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The newest recordings (200 at most) of the camera's current card or share. */
+        get: operations["listRecordings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/recordings/{recording}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                recording: string;
+            };
+            cookie?: never;
+        };
+        /** @description The recording's file: a JPEG snapshot or an MPEG-TS clip. Those on a NAS share are read through the camera, which must be running. */
+        get: operations["downloadRecording"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cameras/{id}/users": {
         parameters: {
             query?: never;
@@ -1606,10 +1684,10 @@ export interface components {
             camera?: string;
         };
         /**
-         * @description service_down: a protocol resets its connections and refuses new ones. latency: everything a protocol reads waits latency_ms. error_status: every request of the HTTP API or RTSP gets status (401 with a challenge). clock_skew: the camera's clock moves skew_s. network_down: the camera answers nobody, not even ARP, and reaches nobody; it raises network_lost. ip_conflict: it raises ip_conflict.
+         * @description service_down: a protocol resets its connections and refuses new ones. latency: everything a protocol reads waits latency_ms. error_status: every request of the HTTP API or RTSP gets status (401 with a challenge). clock_skew: the camera's clock moves skew_s. network_down: the camera answers nobody, not even ARP, and reaches nobody; it raises network_lost. ip_conflict: it raises ip_conflict. sd_missing, sd_error, sd_read_only and sd_full force the SD card's state (cameras with a card only) and raise storage_missing, storage_failure or storage_full; the card records nothing meanwhile, and a missing or failing one cannot be searched.
          * @enum {string}
          */
-        FaultKind: "service_down" | "latency" | "error_status" | "clock_skew" | "network_down" | "ip_conflict";
+        FaultKind: "service_down" | "latency" | "error_status" | "clock_skew" | "network_down" | "ip_conflict" | "sd_missing" | "sd_error" | "sd_read_only" | "sd_full";
         FaultInput: {
             kind: components["schemas"]["FaultKind"];
             /** @description The protocol's engine instance, as the profile names it (service_down, latency, error_status) */
@@ -1641,6 +1719,74 @@ export interface components {
             ended_by?: string;
             created_by: string;
             active: boolean;
+        };
+        StorageStatus: {
+            /** @enum {string} */
+            kind: "none" | "sd" | "nas";
+            /**
+             * @description Empty when the camera records nothing
+             * @enum {string}
+             */
+            state: "" | "present" | "full" | "absent" | "error" | "read_only";
+            /** @description The card's size; 0 for a share */
+            capacity_bytes: number;
+            used_bytes: number;
+            files: number;
+            overwrite: boolean;
+        };
+        Storage: {
+            /** @enum {string} */
+            kind: "none" | "sd" | "nas";
+            /** @description The card's capacity */
+            size_mb: number;
+            /** @description A full card replaces its oldest recordings (D69); off, it stops recording and raises storage_full */
+            overwrite: boolean;
+            nas_url: string;
+            nas_username: string;
+            has_nas_password: boolean;
+            /** @description Largest card the profile's model takes; 0 without a slot */
+            max_sd_mb: number;
+            nas_protocols: ("nfs" | "smb")[];
+            status: components["schemas"]["StorageStatus"];
+            /** @description Why the camera cannot reach its share */
+            nas_error?: string;
+            /** @description The events the profile records, and what */
+            records: {
+                event: string;
+                snapshot: boolean;
+                clip_s: number;
+                stream: string;
+            }[];
+        };
+        StorageInput: {
+            /** @enum {string} */
+            kind?: "none" | "sd" | "nas";
+            /** @description Up to the model's largest card; 1024 or the largest when a card is new */
+            size_mb?: number;
+            overwrite?: boolean;
+            /** @description nfs://host[:port]/export[?uid=N&gid=N] or smb://host[:port]/share[/dir] */
+            nas_url?: string;
+            /** @description SMB account, DOMAIN\user for a domain one */
+            nas_username?: string;
+            /** @description Replaces the share's password; empty clears it */
+            nas_password?: string;
+        };
+        Recording: {
+            id: string;
+            /** @description Its path on the card or the share, as 20261007/143000_motion_x7k2pq.ts */
+            name: string;
+            /** @enum {string} */
+            kind: "snapshot" | "clip";
+            stream?: string;
+            event_id?: string;
+            event_type: string;
+            size: number;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            /** @enum {string} */
+            location: "sd" | "nas";
         };
         /** @description A position on the picture, from 0 to 1 from its top left corner. */
         Point: {
@@ -2714,6 +2860,132 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Storage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Storage"];
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Storage"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    formatStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Formatted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Storage"];
+                };
+            };
+            409: components["responses"]["Problem"];
+        };
+    };
+    listRecordings: {
+        parameters: {
+            query?: {
+                kind?: "snapshot" | "clip";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recordings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Recording"][];
+                    };
+                };
+            };
+        };
+    };
+    downloadRecording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                recording: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "video/mp2t": string;
+                };
             };
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
