@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CircleHelp, KeyRound, RotateCw, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Camera, CameraState, EventItem } from "@/api/client";
-import { useCameras, useEvents, useFailedEvents, useJobs, useNode, useNodeHistory, useNodeMetrics, useTokens } from "@/api/queries";
+import type { Camera, CameraState, EventItem, Fault } from "@/api/client";
+import { useActiveFaults, useCameras, useEvents, useFailedEvents, useJobs, useNode, useNodeHistory, useNodeMetrics, useTokens } from "@/api/queries";
 import { Badge, DeliveryBadge, JobStatusBadge, Mono, StateBadge } from "@/components/badges";
 import { CopyButton } from "@/components/CopyButton";
 import { type Segment, Sparkline, StackedBar } from "@/components/Sparkline";
@@ -11,6 +11,7 @@ import { plural, type Translate, useT } from "@/lib/i18n";
 import { reasonText } from "@/lib/reasons";
 import { Link } from "@/lib/router";
 import { cn, formatBitRate, formatBytes, formatPercent, formatTime, sinceText } from "@/lib/utils";
+import { faultDetail, faultKinds } from "./camera/FaultsTab";
 
 // The order states are listed in, and the color of each in the bar.
 const stateOrder: { state: CameraState; className: string }[] = [
@@ -168,13 +169,14 @@ function Attention() {
   const { data: cameras } = useCameras();
   const { data: failed } = useFailedEvents();
   const { data: activeJobs } = useJobs({ status: "active" });
+  const { data: faults } = useActiveFaults();
   const troubled = (cameras ?? []).filter((c) => c.status.state === "error" || c.status.state === "degraded" || c.status.pending_restart.length > 0);
   const deliveries = failed?.items ?? [];
   const jobs = (activeJobs?.items ?? []).filter((j) => j.status === "waiting" || j.status === "interrupted");
   const nothing = troubled.length === 0 && deliveries.length === 0 && jobs.length === 0;
   return (
     <Card>
-      <CardHeader title={t("Needs attention")} description={t("Cameras in error or degraded, changes waiting for a restart, deliveries that gave up and jobs that need you.")} />
+      <CardHeader title={t("Needs attention")} description={t("Cameras in error or degraded by their faults, changes waiting for a restart, deliveries that gave up and jobs that need you.")} />
       {nothing ? (
         <Empty icon={<CheckCircle2 className="text-ok" />} title={t("Nothing needs attention")} />
       ) : (
@@ -193,7 +195,7 @@ function Attention() {
           ))}
           {troubled.map((c) => (
             <li key={c.id} className="flex items-center gap-3 px-4 py-2">
-              <CameraProblem camera={c} t={t} />
+              <CameraProblem camera={c} faults={(faults ?? []).filter((f) => f.camera_id === c.id)} t={t} />
             </li>
           ))}
           {deliveries.map((ev) => (
@@ -207,19 +209,22 @@ function Attention() {
   );
 }
 
-function CameraProblem({ camera, t }: { camera: Camera; t: Translate }) {
+function CameraProblem({ camera, faults, t }: { camera: Camera; faults: Fault[]; t: Translate }) {
   const state = camera.status.state;
   const pending = camera.status.pending_restart;
   const icon =
     state === "error" ? <XCircle className="text-error" /> : state === "degraded" ? <AlertTriangle className="text-warn" /> : <RotateCw className="text-warn" />;
-  const text =
-    state === "error" || state === "degraded"
+  // A degraded camera names its faults in the reader's language.
+  const faulted = state === "degraded" && faults.length > 0;
+  const text = faulted
+    ? faults.map((f) => [t(faultKinds[f.kind].label), faultDetail(f, t)].filter(Boolean).join(" ")).join(", ")
+    : state === "error" || state === "degraded"
       ? reasonText(camera.status, t) || t(capitalize(state))
       : t("Saved {what} changes apply after a restart", { what: pending.join(t(" and ")) });
   return (
     <>
       <span className="shrink-0 [&_svg]:size-4">{icon}</span>
-      <Link href={`/cameras/${camera.id}`} className="shrink-0 font-medium hover:underline">
+      <Link href={`/cameras/${camera.id}${faulted ? "/faults" : ""}`} className="shrink-0 font-medium hover:underline">
         {camera.name}
       </Link>
       <span className="min-w-0 flex-1 truncate text-muted" title={text}>

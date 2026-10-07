@@ -25,6 +25,8 @@ const reasons: Record<string, string> = {
   admission: "The node has no room to start it.",
   lease_restart: "Restarting with its new DHCP lease.",
   lease_lost: "Restarting: its DHCP lease expired.",
+  faults: "Faults injected into it are on.",
+  reboot: "Rebooting, as the real device does.",
 };
 
 interface Reason {

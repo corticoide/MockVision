@@ -436,6 +436,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cameras/{id}/actions/reboot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reboots a running camera as the real one does (D43): it leaves the network and comes back after its boot time, the profile's (30 s when it says none) unless seconds is given. Starting or stopping it meanwhile ends the wait. */
+        post: operations["rebootCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/faults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The camera's faults, those on first, then the last ended ones. */
+        get: operations["listCameraFaults"];
+        put?: never;
+        /** @description Injects a fault (D43). It applies at once on a running camera, which turns degraded; a stopped one gets it as it starts, while it lasts. Every fault ends when its duration is over or by hand (RN-14); a duration of 0 lasts until ended. A fault of the same kind on the same protocol replaces the one in place. */
+        post: operations["injectFault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/faults/{fault}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                fault: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["endFault"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cameras/{id}/users": {
         parameters: {
             query?: never;
@@ -790,6 +848,23 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["testTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/faults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The faults on in every camera. */
+        get: operations["listActiveFaults"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1529,6 +1604,43 @@ export interface components {
             from: "camera" | "node";
             /** @description Name of the camera the request left from */
             camera?: string;
+        };
+        /**
+         * @description service_down: a protocol resets its connections and refuses new ones. latency: everything a protocol reads waits latency_ms. error_status: every request of the HTTP API or RTSP gets status (401 with a challenge). clock_skew: the camera's clock moves skew_s. network_down: the camera answers nobody, not even ARP, and reaches nobody; it raises network_lost. ip_conflict: it raises ip_conflict.
+         * @enum {string}
+         */
+        FaultKind: "service_down" | "latency" | "error_status" | "clock_skew" | "network_down" | "ip_conflict";
+        FaultInput: {
+            kind: components["schemas"]["FaultKind"];
+            /** @description The protocol's engine instance, as the profile names it (service_down, latency, error_status) */
+            instance?: string;
+            /** @enum {integer} */
+            status?: 401 | 403 | 404 | 500 | 503;
+            latency_ms?: number;
+            /** @description Seconds the clock moves; not 0 */
+            skew_s?: number;
+            /** @description 0 lasts until ended by hand */
+            duration_s?: number;
+        };
+        Fault: {
+            id: string;
+            camera_id: string;
+            camera_name?: string;
+            kind: components["schemas"]["FaultKind"];
+            instance?: string;
+            status?: number;
+            latency_ms?: number;
+            skew_s?: number;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            expires_at: string | null;
+            /** Format: date-time */
+            ended_at: string | null;
+            /** @description expired, replaced, or who ended it */
+            ended_by?: string;
+            created_by: string;
+            active: boolean;
         };
         /** @description A position on the picture, from 0 to 1 from its top left corner. */
         Point: {
@@ -2502,6 +2614,111 @@ export interface operations {
             422: components["responses"]["Problem"];
         };
     };
+    rebootCamera: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    seconds?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Rebooting */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Camera"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listCameraFaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Faults */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Fault"][];
+                    };
+                };
+            };
+        };
+    };
+    injectFault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FaultInput"];
+            };
+        };
+        responses: {
+            /** @description Injected */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Fault"];
+                };
+            };
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    endFault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                fault: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     setCameraUsers: {
         parameters: {
             query?: never;
@@ -3173,6 +3390,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TargetTest"];
+                };
+            };
+        };
+    };
+    listActiveFaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Faults */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Fault"][];
+                    };
                 };
             };
         };

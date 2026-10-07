@@ -15,6 +15,7 @@ import { Link, navigate } from "@/lib/router";
 import { cameraIP } from "@/lib/network";
 import { reasonDetail, reasonText } from "@/lib/reasons";
 import { ConfigTab } from "./ConfigTab";
+import { FaultsTab } from "./FaultsTab";
 import { CloneDialog, ResetDialog } from "./dialogs";
 import { GeneralTab } from "./GeneralTab";
 import { MediaTab } from "./MediaTab";
@@ -34,6 +35,7 @@ const sections = [
   { id: "triggers", label: "Triggers" },
   { id: "users", label: "Users" },
   { id: "config", label: "Configuration" },
+  { id: "faults", label: "Faults" },
   { id: "events", label: "Events" },
 ];
 
@@ -70,6 +72,14 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
           </Notice>
         </div>
       )}
+      {camera.status.state === "degraded" && current !== "faults" && (
+        <div className="mb-3">
+          <Notice tone="warn">
+            {reasonText(camera.status, t)} <Link href={`/cameras/${id}/faults`} className="underline">{t("See the faults")}</Link>
+            {reasonDetail(camera.status) && <span className="mt-1 block font-mono text-xs opacity-80">{reasonDetail(camera.status)}</span>}
+          </Notice>
+        </div>
+      )}
       <Tabs
         label={t("Camera sections")}
         items={sections.map((s) => ({ id: s.id, label: t(s.label), badge: (pending as string[]).includes(s.id) }))}
@@ -85,6 +95,7 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         {current === "triggers" && <TriggersTab camera={camera} />}
         {current === "users" && <UsersTab camera={camera} />}
         {current === "config" && <ConfigTab camera={camera} />}
+        {current === "faults" && <FaultsTab camera={camera} />}
         {current === "events" && <EventsTab camera={camera} />}
       </TabPanel>
     </>

@@ -15,7 +15,7 @@ const origins = ["panel", "api", "camera", "system"] as const;
 type Origin = (typeof origins)[number];
 
 // Action families offered in the filter; the node matches them as prefixes.
-const actions = ["camera", "event", "target", "asset", "profile", "package", "settings", "token", "auth"];
+const actions = ["camera", "event", "fault", "target", "asset", "profile", "package", "settings", "token", "auth"];
 
 export function AuditPage() {
   const t = useT();

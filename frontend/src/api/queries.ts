@@ -13,6 +13,7 @@ import {
   type CloneCamera,
   type CreateCamera,
   type EventPage,
+  type FaultInput,
   type ImportResult,
   type Job,
   type JobDetail,
@@ -47,6 +48,8 @@ export const keys = {
   assets: ["assets"] as const,
   targets: ["targets"] as const,
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
+  faults: ["faults"] as const,
+  cameraFaults: (id: string) => ["faults", id] as const,
 };
 
 // --- Session ---
@@ -473,6 +476,49 @@ export function useTestTarget() {
   return useMutation({
     mutationFn: async (id: string) =>
       unwrap(await api.POST("/targets/{id}/actions/test", { params: { path: { id } } })),
+  });
+}
+
+// --- Faults ---
+
+/** The faults on in every camera. */
+export function useActiveFaults() {
+  return useQuery({ queryKey: keys.faults, queryFn: async () => unwrap(await api.GET("/faults")).items, refetchInterval: 15_000 });
+}
+
+/** A camera's faults: those on, then the last ended. */
+export function useCameraFaults(id: string) {
+  return useQuery({
+    queryKey: keys.cameraFaults(id),
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/faults", { params: { path: { id } } })).items,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useInjectFault() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; body: FaultInput }) =>
+      unwrap(await api.POST("/cameras/{id}/faults", { params: { path: { id: v.id } }, body: v.body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.faults }),
+  });
+}
+
+export function useEndFault() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; fault: string }) =>
+      unwrap(await api.DELETE("/cameras/{id}/faults/{fault}", { params: { path: v } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.faults }),
+  });
+}
+
+export function useRebootCamera() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; seconds?: number }) =>
+      unwrap(await api.POST("/cameras/{id}/actions/reboot", { params: { path: { id: v.id } }, body: v.seconds === undefined ? {} : { seconds: v.seconds } })),
+    onSuccess: (camera) => patchCameraCache(qc, camera),
   });
 }
 

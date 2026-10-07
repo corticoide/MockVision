@@ -119,6 +119,10 @@ export class LiveClient {
     this.seqs.set(m.topic, m.seq);
     switch (m.topic) {
       case "cameras":
+        if (m.type === "faults") {
+          this.qc.invalidateQueries({ queryKey: keys.faults });
+          break;
+        }
         this.onCamera(m);
         break;
       case "events":
@@ -164,6 +168,7 @@ export class LiveClient {
         break;
       case "cameras":
         this.qc.invalidateQueries({ queryKey: keys.cameras });
+        this.qc.invalidateQueries({ queryKey: keys.faults });
         break;
       case "events":
         this.qc.invalidateQueries({ queryKey: ["events"] });

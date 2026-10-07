@@ -609,8 +609,8 @@ export const es: Record<string, string> = {
   "{total} of {max} allowed on this node": "{total} de {max} permitidas en este nodo",
   "Cameras by state": "Cámaras por estado",
   "Needs attention": "Requiere atención",
-  "Cameras in error or degraded, changes waiting for a restart, deliveries that gave up and jobs that need you.":
-    "Cámaras con error o degradadas, cambios que esperan un reinicio, entregas que se dieron por perdidas y trabajos que te necesitan.",
+  "Cameras in error or degraded by their faults, changes waiting for a restart, deliveries that gave up and jobs that need you.":
+    "Cámaras en error o degradadas por sus fallas, cambios que esperan un reinicio, entregas que se dieron por perdidas y trabajos que te necesitan.",
   "Nothing needs attention": "Nada requiere atención",
   "{type} to {target} failed": "{type} a {target} falló",
   "Latest events": "Últimos eventos",
@@ -877,4 +877,66 @@ export const es: Record<string, string> = {
   "The node has no room to start it.": "El nodo no tiene lugar para arrancarla.",
   "Restarting with its new DHCP lease.": "Reiniciando con su nueva concesión DHCP.",
   "Restarting: its DHCP lease expired.": "Reiniciando: venció su concesión DHCP.",
+
+  // Faults
+  Faults: "Fallas",
+  "See the faults": "Ver las fallas",
+  "{instance} +{ms} ms": "{instance} +{ms} ms",
+  "{instance} answers {status}": "{instance} responde {status}",
+  "{s} s": "{s} s",
+  "Inject a fault": "Inyectar una falla",
+  "Test how a client handles a camera that fails. Every fault ends on its own or by hand; while one is on, the camera shows as degraded.":
+    "Prueba cómo maneja un cliente una cámara que falla. Cada falla termina sola o a mano; mientras alguna está activa, la cámara figura como degradada.",
+  "Loading faults…": "Cargando fallas…",
+  "No faults": "Sin fallas",
+  "The camera works as its profile describes.": "La cámara funciona como describe su perfil.",
+  Fault: "Falla",
+  Detail: "Detalle",
+  Ends: "Termina",
+  "in {time}": "en {time}",
+  "when ended": "al terminarla",
+  replaced: "reemplazada",
+  "ended by {user}": "terminada por {user}",
+  Ended: "Terminada",
+  Active: "Activa",
+  "its time was up": "se cumplió su tiempo",
+  End: "Terminar",
+  "Fault {kind} on": "Falla {kind} activa",
+  "Delay (ms)": "Demora (ms)",
+  "Skew (s)": "Desfase (s)",
+  "Negative: the clock is behind.": "Negativo: el reloj atrasa.",
+  Duration: "Duración",
+  "Injecting…": "Inyectando…",
+  Inject: "Inyectar",
+  "Reboot {name}? It leaves the network until it boots again.": "¿Reiniciar {name}? Sale de la red hasta que vuelva a arrancar.",
+  Reboot: "Reiniciar equipo",
+  "As the real device: the camera leaves the network and comes back after its boot time, with the faults still on. Empty: the profile's boot time.":
+    "Como el equipo real: la cámara sale de la red y vuelve tras su tiempo de arranque, con las fallas aún activas. Vacío: el tiempo de arranque del perfil.",
+  "Boot time (s)": "Tiempo de arranque (s)",
+  "profile's": "del perfil",
+  "Service down": "Servicio caído",
+  "Error status": "Estado de error",
+  "Clock skew": "Reloj desfasado",
+  "Network down": "Red caída",
+  "IP conflict": "Conflicto de IP",
+  "The protocol resets its connections and refuses new ones, as a service that crashed.":
+    "El protocolo corta sus conexiones y rechaza las nuevas, como un servicio que se cayó.",
+  "Everything the protocol reads waits this long: every answer comes late.":
+    "Todo lo que lee el protocolo espera este tiempo: cada respuesta llega tarde.",
+  "Every request gets this status; 401 challenges, as a device that refuses the credentials.":
+    "Cada pedido recibe este estado; 401 desafía, como un equipo que rechaza las credenciales.",
+  "The camera's clock moves: its events, answers and templates carry the moved time.":
+    "El reloj de la cámara se corre: sus eventos, respuestas y plantillas llevan la hora corrida.",
+  "The camera answers nobody, not even ARP, and reaches nobody; it raises network_lost, delivered once it is back if its retries last.":
+    "La cámara no responde a nadie, ni siquiera ARP, y no llega a nadie; genera network_lost, que se entrega al volver si sus reintentos alcanzan.",
+  "The camera sees another device with its address: it raises ip_conflict and keeps answering.":
+    "La cámara ve otro equipo con su dirección: genera ip_conflict y sigue respondiendo.",
+  "30 seconds": "30 segundos",
+  "1 minute": "1 minuto",
+  "5 minutes": "5 minutos",
+  "15 minutes": "15 minutos",
+  "1 hour": "1 hora",
+  "Until ended": "Hasta terminarla",
+  "Faults injected into it are on.": "Tiene fallas inyectadas activas.",
+  "Rebooting, as the real device does.": "Reiniciándose, como el equipo real.",
 };
