@@ -36,6 +36,10 @@ the outside; it does not replace one.
   SFTP server, a mail with the snapshot attached; with the device's
   retries, which each target can override. Every delivery is logged with
   its status and latency.
+- Faults, as a device fails: a protocol down or late, a status for every
+  request (401, 500…), a moved clock, the network down, an IP conflict,
+  and a simulated reboot. Every fault ends on its own or by hand, and the
+  camera shows as *degraded* while one is on.
 - Metrics for each camera (CPU, RAM, clients). A camera is refused, with the
   reason, when it would go over the camera limit or the node's resources.
 - A panel that updates live over a WebSocket.
@@ -256,6 +260,31 @@ The demo profile publishes its analytics events to
 `milesight/<serial>/event/<event>` and the counting report, retained, to
 `milesight/<serial>/counting`; uploads the snapshot to
 `<serial>/<date>/<time>_<event>.jpg`; and mails at most once every 10 s.
+
+### Faults
+
+The **Faults** tab of a camera injects the failures a client has to
+survive (D43). A fault applies at once, without restarting the camera, and
+the camera shows as *degraded*, naming its faults, until the last one ends;
+**Needs attention** on the dashboard lists them too. Every fault ends when
+its duration is over (30 s to 24 h) or by hand (RN-14); a stopped camera
+gets the faults still on as it starts.
+
+| Fault | What a client sees |
+| --- | --- |
+| Service down | The protocol (RTSP, the HTTP API…) resets its connections and refuses new ones; the others keep answering. |
+| Latency | Everything the protocol reads waits the delay: every answer comes late. |
+| Error status | Every request to the HTTP API or RTSP gets 401 (with a challenge, as refused credentials), 403, 404, 500 or 503. |
+| Clock skew | The camera's clock moves: its events, its answers and its templates carry the moved time. |
+| Network down | The camera answers nobody, not even ARP, and reaches nobody. It raises `network_lost`, which goes out once it is back if its retries last. |
+| IP conflict | The camera raises `ip_conflict` and keeps answering. |
+
+**Reboot** takes the camera off the network for its boot time (the
+profile's `identity.boot_time`, 30 s when it says none, or the seconds
+given), as the real one does, and it comes back with its faults. The API
+has the same: `POST /api/v1/cameras/{id}/faults`, `DELETE
+/api/v1/cameras/{id}/faults/{fault}`, `GET /api/v1/faults` and `POST
+/api/v1/cameras/{id}/actions/reboot`.
 
 ### Profiles
 

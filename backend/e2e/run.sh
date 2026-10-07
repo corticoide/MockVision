@@ -214,7 +214,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -503,7 +503,7 @@ metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.5.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.6.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
@@ -580,7 +580,7 @@ fi
 step "MAC probe: a camera does not start with a MAC another device has (RN-06)"
 CLIENT_MAC=$(client cat /sys/class/net/eth0/address)
 BAD=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
+	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
 	\"network\": {\"ip\": \"10.77.0.13\", \"mac\": \"$CLIENT_MAC\"}, \"start\": true}" | json 'd["id"]')
 for _ in $(seq 1 60); do
 	[ "$(api GET "/cameras/$BAD" | json 'd["status"]["state"]')" = error ] && break
@@ -594,7 +594,7 @@ ok "refused: $reason"
 
 step "DHCP: a new camera takes its factory address without a server, then leases one (D23, D24)"
 LID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.5.0",
+	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.6.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_state "$LID" running 90
 LMAC=$(api GET "/cameras/$LID" | json 'd["network"]["mac"]')
@@ -606,7 +606,7 @@ client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach 
 ok "no server answered: the camera took the profile's factory address 192.168.5.190, as a real one"
 # A second one finds the address taken, and takes it once the first stops.
 L2ID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.5.0",
+	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.6.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_status "$L2ID" 'd["status"].get("reason_code")' dhcp_factory_in_use 90
 ok "a second camera did not take 192.168.5.190 while Lobby holds it"
@@ -669,7 +669,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	ip link del mve2eiv
 	WMAC=$(cat "/sys/class/net/$WLAN/address")
 	IID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
+		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
 		\"network\": {\"mode\": \"ipvlan\", \"parent\": \"$WLAN\", \"ip\": \"10.78.0.10\", \"netmask\": \"255.255.255.0\"},
 		\"stream\": {\"resolution\": \"640x360\"}, \"start\": true}" | json 'd["id"]')
 	wait_state "$IID" running 60
@@ -678,7 +678,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	[ "$(api GET "/cameras/$IID" | json 'd["status"].get("mac")')" = "$WMAC" ] || fail "the status does not show the card's MAC"
 	ok "10.78.0.10 answers with the MAC of $WLAN, $WMAC"
 	code=$(api POST /cameras -H 'Content-Type: application/json' -o "$WORK/mix.json" -w '%{http_code}' -d "{
-		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.5.0\",
+		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
 		\"network\": {\"parent\": \"$WLAN\", \"ip\": \"10.78.0.11\", \"netmask\": \"255.255.255.0\"}}")
 	[ "$code" = 422 ] && grep -q "Wi-Fi 1" "$WORK/mix.json" || fail "a macvlan camera beside an ipvlan one: $code $(cat "$WORK/mix.json")"
 	ok "a macvlan camera on $WLAN is refused and the answer names Wi-Fi 1"
@@ -721,6 +721,55 @@ NEIGH=$(client ip neigh show "$CAM3_IP" | awk '{print $5}')
 [ -z "$(api GET "/cameras/$CID" | json '",".join(d["status"]["pending_restart"])')" ] || fail "still pending after the restart"
 ok "after the restart the camera answers on $CAM3_IP with its MAC $MAC"
 CAM_IP=$CAM3_IP
+
+step "faults: a protocol down, a status, the network down and a reboot (D43, RN-14)"
+fault() { api POST "/cameras/$CID/faults" -H 'Content-Type: application/json' -d "$1" | json 'd["id"]'; }
+probe_main() { client timeout 10 ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 "rtsp://admin:e2e-new-pw@$CAM_IP:554/main" 2>/dev/null; }
+PID=$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')
+FID=$(fault '{"kind":"service_down","instance":"rtsp","duration_s":120}') || fail "inject service_down"
+wait_status "$CID" 'd["status"]["state"]' degraded 10
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["reason"]')" = "faults on: rtsp down" ] || fail "reason: $(api GET "/cameras/$CID" | json 'd["status"]')"
+probe_main && fail "RTSP answered while down"
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u admin:e2e-new-pw "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 200 ] || fail "the HTTP API stopped with RTSP ($code)"
+api DELETE "/cameras/$CID/faults/$FID" -o /dev/null
+wait_status "$CID" 'd["status"]["state"]' running 10
+[ "$(probe_main)" = h264 ] || fail "RTSP did not come back"
+ok "RTSP down: ffprobe fails, the HTTP API still answers, the camera is degraded; ended by hand, the stream is back"
+fault '{"kind":"error_status","instance":"http","status":401,"duration_s":3}' >/dev/null
+sleep 0.5
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u admin:e2e-new-pw "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 401 ] || fail "the 401 fault answered $code"
+wait_status "$CID" 'd["status"]["state"]' running 10
+code=$(client curl -s -o /dev/null -w '%{http_code}' --digest -u admin:e2e-new-pw "http://$CAM_IP/snapshot.cgi")
+[ "$code" = 200 ] || fail "after the 401 fault expired: $code"
+ok "for 3 s the HTTP API refused the right password with 401, then the fault expired on its own"
+fault '{"kind":"network_down","duration_s":6}' >/dev/null
+wait_status "$CID" 'd["status"]["reason"]' "faults on: network down" 10
+client ip neigh flush dev eth0 >/dev/null 2>&1 || true
+client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the camera answered with its network down"
+EV=""
+for _ in $(seq 1 40); do
+	EV=$(api GET "/events?camera_id=$CID&type=network_lost" | json 'd["items"][0]["id"] if d["items"] else ""')
+	[ -n "$EV" ] && break
+	sleep 0.25
+done
+[ -n "$EV" ] || fail "no network_lost event"
+wait_status "$CID" 'd["status"]["state"]' running 15
+client ping -c 2 -W 2 "$CAM_IP" >/dev/null || fail "the camera did not come back on the network"
+wait_received "$EV"
+for _ in $(seq 1 40); do [ "$(api GET "/events/$EV" | json 'd["delivery_status"]')" = ok ] && break; sleep 0.5; done
+[ "$(api GET "/events/$EV" | json '[x["status"] for x in d["deliveries"]][0]')" = retry ] || fail "network_lost went out while the network was down"
+ok "network down for 6 s: no ping, no ARP; network_lost failed to leave and reached the target once back"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" = "$PID" ] || fail "a fault restarted the camera"
+api POST "/cameras/$CID/actions/reboot" -H 'Content-Type: application/json' -d '{"seconds":4}' | json 'd["status"]["state"]' | grep -qx restarting || fail "reboot"
+client ping -c 1 -W 1 "$CAM_IP" >/dev/null 2>&1 && fail "the camera answered while rebooting"
+sleep 2
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["state"]')" = restarting ] || fail "the reboot was cut short"
+wait_state "$CID" running 60
+client ping -c 2 -W 2 "$CAM_IP" >/dev/null || fail "no answer after the reboot"
+[ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" != "$PID" ] || fail "the reboot kept the process"
+ok "rebooted: off the network for its 4 s of boot, then back on $CAM_IP"
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

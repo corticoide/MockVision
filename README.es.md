@@ -37,6 +37,10 @@ reemplaza.
   FTP o SFTP, un correo con la instantánea adjunta; con los reintentos del
   equipo, que cada destino puede reemplazar. Cada entrega queda registrada
   con su estado y su latencia.
+- Fallas, como falla un equipo: un protocolo caído o lento, un estado para
+  cada pedido (401, 500…), el reloj corrido, la red caída, un conflicto de
+  IP y un reinicio simulado. Cada falla termina sola o a mano, y la cámara
+  figura como *degradada* mientras alguna está activa.
 - Métricas por cámara (CPU, RAM, clientes). Si una cámara superaría el
   máximo de cámaras o los recursos del nodo, se rechaza indicando el motivo.
 - Un panel que se actualiza en vivo por WebSocket.
@@ -268,6 +272,32 @@ El perfil demo publica sus eventos de analítica en
 `milesight/<serie>/counting`; sube la instantánea a
 `<serie>/<fecha>/<hora>_<evento>.jpg`; y envía a lo sumo un correo cada
 10 s.
+
+### Fallas
+
+La pestaña **Fallas** de una cámara inyecta las fallas que un cliente tiene
+que aguantar (D43). Una falla se aplica en el momento, sin reiniciar la
+cámara, y la cámara figura como *degradada*, nombrando sus fallas, hasta que
+termina la última; **Requiere atención** en el tablero también las lista.
+Cada falla termina cuando se cumple su duración (de 30 s a 24 h) o a mano
+(RN-14); una cámara detenida recibe al arrancar las fallas que sigan
+activas.
+
+| Falla | Qué ve un cliente |
+| --- | --- |
+| Servicio caído | El protocolo (RTSP, la API HTTP…) corta sus conexiones y rechaza las nuevas; los demás siguen respondiendo. |
+| Latencia | Todo lo que lee el protocolo espera la demora: cada respuesta llega tarde. |
+| Estado de error | Cada pedido a la API HTTP o a RTSP recibe 401 (con desafío, como credenciales rechazadas), 403, 404, 500 o 503. |
+| Reloj desfasado | El reloj de la cámara se corre: sus eventos, sus respuestas y sus plantillas llevan la hora corrida. |
+| Red caída | La cámara no responde a nadie, ni siquiera ARP, y no llega a nadie. Genera `network_lost`, que sale al volver si sus reintentos alcanzan. |
+| Conflicto de IP | La cámara genera `ip_conflict` y sigue respondiendo. |
+
+**Reiniciar equipo** saca a la cámara de la red durante su tiempo de
+arranque (el `identity.boot_time` del perfil, 30 s si no dice nada, o los
+segundos indicados), como la real, y vuelve con sus fallas. La API ofrece lo
+mismo: `POST /api/v1/cameras/{id}/faults`, `DELETE
+/api/v1/cameras/{id}/faults/{fault}`, `GET /api/v1/faults` y `POST
+/api/v1/cameras/{id}/actions/reboot`.
 
 ### Perfiles
 

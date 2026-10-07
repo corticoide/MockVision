@@ -37,6 +37,7 @@ against the Docker image started with `compose.yaml`.
 | The node reaches its cameras through the bridge (v1) | ping and snapshot from the node with the bridge on, not with it off |
 | Rules and triggers (v1) | a manual loitering on a region carries the rule's name and its only object class; a crossing the line does not report gets 422; the emulated API turns crossings off (409) and on; a random trigger sends a crossing every second or two, stops when disabled and fires once on request, without restarting the camera; its rule and trigger survive a node restart |
 | Event transports (v1) | linked to an MQTT broker on the client, the running camera connects at once, with its serial as client ID and its will, and says online; a line crossing reaches the broker (QoS 1), the FTP server (the snapshot under `<serial>/<date>/`, in passive mode through the camera's firewall) and the mail server (with the snapshot attached); a second crossing within 10 s skips the mail; each target passes its test from the camera; unlinked, the camera disconnects from the broker |
+| Faults (v1) | RTSP down: ffprobe fails while the HTTP API answers and the camera is degraded with the fault named; ended by hand, the stream is back. A 401 fault refuses the right password and expires on its own after 3 s. Network down: no ping, no ARP; `network_lost` fails to leave and reaches the target once back. None of them restarts the camera; a reboot takes it off the network for its boot time and back |
 | Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
@@ -182,11 +183,34 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   the per-link overrides of the schema (`camera_targets.overrides_json`)
   stay unused.
 
+### Faults
+
+- **The faults of D43 and the network's**: a protocol down, latency, a
+  status, a moved clock, the network down, an IP conflict, and a reboot.
+  Storage faults come with the simulated SD card (feature 10).
+- **A protocol down resets** each new connection once accepted, as the
+  kernel of a crashed service would answer; a client sees its connection
+  reset rather than refused.
+- **Latency delays every read** of the protocol's connections, so every
+  request waits it; a stream already playing goes on, since its client
+  hardly writes.
+- **The network down** is two nftables tables (ip and arp) in the camera's
+  namespace that drop everything but loopback: addresses and routes stay,
+  and nothing has to be restored. In local mode the camera process alone
+  refuses its clients and fails its deliveries. The event it raises is not
+  queued: its delivery retries as the profile says, and goes out if they
+  outlast the outage.
+- **Degraded** names the faults on; the health of an engine (a broker out
+  of reach) does not degrade the camera.
+- **A reboot** stops the process and starts a new one after the boot time,
+  with a new namespace; starting or stopping the camera meanwhile ends the
+  wait. Its state and counts start again, as a real device's after a
+  reboot.
+- Ended faults are kept 30 days.
+
 ### API and data
 
 - No `Idempotency-Key`.
-- No faults and no *degraded* state: the state exists in the model but
-  nothing sets it.
 - WebSocket topics: `node`, `cameras`, `camera:<id>`, `events` and
   `profiles`.
 - Settings are stored as one JSON document under a single key of the
@@ -204,9 +228,9 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 - No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
   runs under a CSP without `unsafe-inline`. The design tokens (colors,
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
-- Camera detail tabs for faults and logs come with their features of the
-  v1 plan; the detail page has General, Network, Protocols, Media, Rules,
-  Triggers, Users, Configuration and Events.
+- The camera tab for logs comes with its feature of the v1 plan; the
+  detail page has General, Network, Protocols, Media, Rules, Triggers,
+  Users, Configuration, Faults and Events.
 - The rule editor draws on the latest snapshot of the main stream, refreshed
   every 5 seconds; the camera page loads the first time a camera is opened.
 - The event log shows the latest 100 events; the API pages with a cursor.
