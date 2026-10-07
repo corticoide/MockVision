@@ -63,3 +63,44 @@ func TestDahuaDraftProfile(t *testing.T) {
 		t.Fatalf("name %v", d["General.MachineName"])
 	}
 }
+
+// Vendor values that cannot work are refused where they are written.
+func TestVendorValueProblems(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("..", "..", "..", "profiles", "dahua-ipc-hdbw1230e-s4.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := engines.Builtin()
+	cases := []struct {
+		name, old, new, at, step, want string
+	}{
+		{"map without bind", "    bind: media.main.codec\n    map: { H.264: h264, H.265: h265 }", "    map: { H.264: h264, H.265: h265 }",
+			"", profile.StepLint, "map translates the values of a bound parameter"},
+		{"map of a value the enum lacks", "map: { H.264: h264, H.265: h265 }", "map: { H.264: h264, H.265: h265, H.266: h265 }",
+			"", profile.StepLint, "H.266 is not one of the values"},
+		{"unknown identity field", "default_from: serial", "default_from: hostname", "default_from: hostname", profile.StepSchema, "value must be one of 'serial'"},
+		{"identity default of an int", "    type: string\n    default_from: serial", "    type: int\n    default_from: serial", "", profile.StepLint, "must be a string"},
+		{"width without its height", "    default: 1080\n    bind: media.main.height", "    default: 1080",
+			"", profile.StepLint, "splits the resolution of main: bind another parameter to media.main.height"},
+		{"defaults the stream lacks", "    values: [1920, 1280]\n    default: 1920", "    values: [1920, 1280]\n    default: 1280",
+			"", profile.StepLint, "the defaults make 1280x1080, which stream main does not support"},
+		{"attach without its route", "      - id: event-attach\n        match: { method: GET, path: /cgi-bin/eventManager.cgi, query: { action: attach } }\n" +
+			"        action: { handler: events.attach, params: { codes: codes, heartbeat: heartbeat }, boundary: myboundary }\n", "",
+			"", profile.StepLint, "no route of the HTTP API streams events: add one with handler: events.attach"},
+		{"failure event the profile lacks", `failure_event: "custom:login_failure"`, `failure_event: "custom:nope"`, "", profile.StepLint, "the profile does not define custom:nope events"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := replace(t, base, c.old, c.new)
+			res := profile.Validate(profile.Input{Data: data}, cat)
+			line := 0
+			if c.at != "" {
+				line = lineOf(data, c.at)
+			}
+			expectProblem(t, res, c.step, line, c.want)
+			if res.OK() {
+				t.Fatal("the profile must fail")
+			}
+		})
+	}
+}
