@@ -39,8 +39,14 @@ reemplaza.
   con su estado y su latencia.
 - Fallas, como falla un equipo: un protocolo caído o lento, un estado para
   cada pedido (401, 500…), el reloj corrido, la red caída, un conflicto de
-  IP y un reinicio simulado. Cada falla termina sola o a mano, y la cámara
-  figura como *degradada* mientras alguna está activa.
+  IP, la tarjeta SD fuera, con error, de solo lectura o llena, y un
+  reinicio simulado. Cada falla termina sola o a mano, y la cámara figura
+  como *degradada* mientras alguna está activa.
+- Grabaciones, como las guarda el equipo: cada evento que el perfil indica
+  graba su instantánea y un clip en una tarjeta SD simulada, con cuota y
+  sobrescritura cíclica, o en un recurso NAS por NFS o SMB. Los clientes las
+  buscan y descargan por la API de la cámara y las reproducen por RTSP por
+  rango de tiempo.
 - Métricas por cámara (CPU, RAM, clientes). Si una cámara superaría el
   máximo de cámaras o los recursos del nodo, se rechaza indicando el motivo.
 - Un panel que se actualiza en vivo por WebSocket.
@@ -238,7 +244,8 @@ calor**, sombrea dónde hubo objetos; **Reiniciar conteos** vuelve a cero.
 
 Los perfiles los sirven en el formato del fabricante con sus plantillas:
 `analytics` (todos los conteos), `lineCount "Gate" "A->B"`,
-`occupancy "Lot"` y `heatmap 32 18` (filas de celdas). El demo responde
+`occupancy "Lot"` y `heatmap 32 18` (filas de celdas); `storage` da la
+tarjeta SD o el recurso NAS. El demo responde
 `/cgi-bin/operator/operator.cgi?action=get.vca.counting` y
 `action=get.vca.heatmap`, y envía un reporte: un evento marcado
 `report: true` (`custom:people_counting`) lleva los conteos en lugar de un
@@ -291,6 +298,7 @@ activas.
 | Reloj desfasado | El reloj de la cámara se corre: sus eventos, sus respuestas y sus plantillas llevan la hora corrida. |
 | Red caída | La cámara no responde a nadie, ni siquiera ARP, y no llega a nadie. Genera `network_lost`, que sale al volver si sus reintentos alcanzan. |
 | Conflicto de IP | La cámara genera `ip_conflict` y sigue respondiendo. |
+| Tarjeta SD ausente, con error, de solo lectura o llena | Solo para una cámara con tarjeta. Fuerza su estado y genera `storage_missing`, `storage_failure` o `storage_full`; mientras tanto no graba nada, y en una tarjeta ausente o con error no se puede buscar. |
 
 **Reiniciar equipo** saca a la cámara de la red durante su tiempo de
 arranque (el `identity.boot_time` del perfil, 30 s si no dice nada, o los
@@ -298,6 +306,44 @@ segundos indicados), como la real, y vuelve con sus fallas. La API ofrece lo
 mismo: `POST /api/v1/cameras/{id}/faults`, `DELETE
 /api/v1/cameras/{id}/faults/{fault}`, `GET /api/v1/faults` y `POST
 /api/v1/cameras/{id}/actions/reboot`.
+
+### Almacenamiento
+
+La pestaña **Almacenamiento** le da a una cámara una tarjeta SD simulada o
+un recurso NAS (D68, D69), según lo que admite su modelo: el `storage` del
+perfil declara la tarjeta más grande que acepta y los protocolos NAS, y el
+`record` de cada evento qué guarda: la instantánea y un clip de un stream,
+de hasta 5 minutos. Los clips son MPEG-TS del bucle del stream, H.264 o
+H.265.
+
+- **Tarjeta SD.** Un directorio del nodo con cuota, de 64 MB hasta la
+  tarjeta más grande del modelo. La escribe el servicio y la cámara solo la
+  lee. Al llenarse sobrescribe las grabaciones más viejas, como las
+  cámaras; sin sobrescritura deja de grabar y genera `storage_full`. Una
+  tarjeta nueva, o que crece, tiene que entrar en el disco del nodo junto
+  con lo que las demás prometieron y todavía no usaron, o se rechaza (D91).
+  **Formatear** la borra; sacarla también, y una más chica conserva las
+  grabaciones más nuevas que entren.
+- **Recurso NAS.** `nfs://equipo[:puerto]/export[?uid=N&gid=N]` o
+  `smb://equipo[:puerto]/recurso[/carpeta]` con usuario y contraseña
+  (`DOMINIO\usuario` para una cuenta de dominio). La cámara se conecta y
+  escribe desde su propia dirección, en una carpeta con su número de serie;
+  su firewall abre el equipo del recurso. Un export NFS tiene que admitir
+  la dirección de la cámara y puertos por encima de 1023 (`insecure`),
+  porque las cámaras corren sin privilegios. La pestaña muestra por qué la
+  cámara no llega a su recurso.
+
+La API de la cámara busca y descarga las grabaciones con los manejadores
+`sd.search` (por tiempo, tipo y evento, con las palabras y el formato de
+hora del fabricante) y `sd.download`; la función de plantilla `storage` da
+el estado y el espacio de la tarjeta; y la ruta `playback` del motor `rtsp`
+reproduce los clips de un rango de tiempo. El demo responde
+`/cgi-bin/operator/operator.cgi?action=get.record.search&starttime=…&endtime=…&type=video`,
+`/cgi-bin/operator/download.cgi?file=…`, `action=get.storage.info` y
+`rtsp://…/playback?starttime=20261007T143000Z&endtime=20261007T150000Z`. El
+panel lista las grabaciones más nuevas y las descarga; la API tiene `GET` y
+`PUT /api/v1/cameras/{id}/storage`, `POST …/storage/actions/format`, `GET
+…/recordings` y `GET …/recordings/{recording}/download`.
 
 ### Perfiles
 
@@ -422,8 +468,9 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/i
   directamente como el usuario de cámaras, nunca como root, en un namespace
   de PID propio. Antes de leer cualquier entrada fija `no_new_privs` y un
   filtro seccomp (sin namespaces, montajes, trazas, módulos ni llaveros), y
-  Landlock limita sus archivos a sus streams y a lo que necesitan DNS y TLS.
-  Después sirve los motores de su perfil (`rtsp`, `http-api`, `http-push`),
+  Landlock limita sus archivos a sus streams, su tarjeta SD (solo lectura)
+  y lo que necesitan DNS y TLS. Después sirve los motores de su perfil
+  (`rtsp`, `http-api`, `http-push` y los demás), graba en su recurso NAS,
   corre sus disparadores aleatorios y habla con el servicio en líneas JSON;
   el servicio verifica lo que reporta contra el perfil, y guarda la regla y
   el disparador de un evento solo si son de esa cámara. Una cámara con DHCP
@@ -439,7 +486,7 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/i
   deja salir un único conjunto de dirección, protocolo y puerto: sus
   destinos y sus servidores DNS en el puerto 53; un segundo conjunto abre
   todos los puertos de los servidores FTP, por sus conexiones de datos en
-  modo pasivo. Los nombres de los destinos
+  modo pasivo, y de los recursos NAS. Los nombres de los destinos
   se vuelven a resolver cada minuto con los servidores DNS de la cámara, y
   una dirección vista en los últimos diez minutos sigue permitida, para los
   nombres que rotan. También pasan DHCP, las respuestas a sus clientes, el

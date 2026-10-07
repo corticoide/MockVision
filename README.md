@@ -38,8 +38,14 @@ the outside; it does not replace one.
   its status and latency.
 - Faults, as a device fails: a protocol down or late, a status for every
   request (401, 500…), a moved clock, the network down, an IP conflict,
-  and a simulated reboot. Every fault ends on its own or by hand, and the
-  camera shows as *degraded* while one is on.
+  the SD card out, failing, read only or full, and a simulated reboot.
+  Every fault ends on its own or by hand, and the camera shows as
+  *degraded* while one is on.
+- Recordings, as the device keeps them: each event the profile says
+  records its snapshot and a clip on a simulated SD card, with a quota and
+  cyclic overwrite, or on a NAS share over NFS or SMB. Clients search and
+  download them through the camera's API and play them back over RTSP by
+  time range.
 - Metrics for each camera (CPU, RAM, clients). A camera is refused, with the
   reason, when it would go over the camera limit or the node's resources.
 - A panel that updates live over a WebSocket.
@@ -228,7 +234,7 @@ returns them.
 
 Profiles serve them in the vendor's format through their templates:
 `analytics` (every count), `lineCount "Gate" "A->B"`, `occupancy "Lot"` and
-`heatmap 32 18` (rows of cells). The demo answers
+`heatmap 32 18` (rows of cells); `storage` gives the SD card or NAS share. The demo answers
 `/cgi-bin/operator/operator.cgi?action=get.vca.counting` and
 `action=get.vca.heatmap`, and pushes a report: an event marked `report: true`
 (`custom:people_counting`) carries the counts instead of an object; a
@@ -278,6 +284,7 @@ gets the faults still on as it starts.
 | Clock skew | The camera's clock moves: its events, its answers and its templates carry the moved time. |
 | Network down | The camera answers nobody, not even ARP, and reaches nobody. It raises `network_lost`, which goes out once it is back if its retries last. |
 | IP conflict | The camera raises `ip_conflict` and keeps answering. |
+| SD card missing, error, read only, full | Only for a camera with a card. Its state is forced and it raises `storage_missing`, `storage_failure` or `storage_full`; it records nothing meanwhile, and a missing or failing card cannot be searched. |
 
 **Reboot** takes the camera off the network for its boot time (the
 profile's `identity.boot_time`, 30 s when it says none, or the seconds
@@ -285,6 +292,42 @@ given), as the real one does, and it comes back with its faults. The API
 has the same: `POST /api/v1/cameras/{id}/faults`, `DELETE
 /api/v1/cameras/{id}/faults/{fault}`, `GET /api/v1/faults` and `POST
 /api/v1/cameras/{id}/actions/reboot`.
+
+### Storage
+
+The **Storage** tab gives a camera a simulated SD card or a NAS share
+(D68, D69), as its model allows: the profile's `storage` declares the
+largest card it takes and the NAS protocols, and each event's `record` what
+it keeps: the snapshot and a clip of a stream, up to 5 minutes. Clips are
+MPEG-TS of the stream's loop, H.264 or H.265.
+
+- **SD card.** A directory of the node with a quota, from 64 MB up to the
+  model's largest card. The service writes it and the camera only reads it.
+  When full it overwrites the oldest recordings, as cameras do; with
+  overwrite off it stops recording and raises `storage_full`. A new card,
+  or one that grows, must fit on the node's disk with what the other cards
+  promised and have not used yet, or it is refused (D91). **Format** wipes
+  it; taking it out wipes it too, and a smaller one keeps the newest
+  recordings that fit.
+- **NAS share.** `nfs://host[:port]/export[?uid=N&gid=N]` or
+  `smb://host[:port]/share[/folder]` with a username and password
+  (`DOMAIN\user` for a domain account). The camera connects and writes from
+  its own address, under a folder named after its serial; its firewall
+  opens the share's host. An NFS export must allow the camera's address and
+  ports above 1023 (`insecure`), since cameras run without privileges. The
+  tab shows why the camera cannot reach its share.
+
+The camera's API searches and downloads the recordings with the handlers
+`sd.search` (by time, kind and event, in the device's words and time
+format) and `sd.download`; the template function `storage` gives the card's
+state and space; and the `rtsp` engine's `playback` path plays the clips of
+a time range back. The demo answers
+`/cgi-bin/operator/operator.cgi?action=get.record.search&starttime=…&endtime=…&type=video`,
+`/cgi-bin/operator/download.cgi?file=…`, `action=get.storage.info` and
+`rtsp://…/playback?starttime=20261007T143000Z&endtime=20261007T150000Z`. The
+panel lists the newest recordings and downloads them; the API has `GET` and
+`PUT /api/v1/cameras/{id}/storage`, `POST …/storage/actions/format`, `GET
+…/recordings` and `GET …/recordings/{recording}/download`.
 
 ### Profiles
 
@@ -403,8 +446,9 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/i
   directly as the camera user, never as root, in a PID namespace of its own.
   Before reading any input it sets `no_new_privs` and a seccomp filter (no
   namespaces, mounts, tracing, modules or keyrings), and Landlock limits its
-  files to its streams and what DNS and TLS need. It then serves the
-  profile's engines (`rtsp`, `http-api`, `http-push`), runs its random
+  files to its streams, its SD card (read only) and what DNS and TLS need.
+  It then serves the profile's engines (`rtsp`, `http-api`, `http-push`
+  and the rest), records to its NAS share, runs its random
   triggers and talks to the service in JSON lines; the service checks what
   it reports against the profile, and keeps an event's rule and trigger
   only when they are the camera's own. A DHCP camera leases its address
@@ -419,7 +463,7 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/i
 - **Firewall.** Each camera's namespace has an nftables table that lets out
   one set of address, protocol and port: its targets, and its DNS servers
   on port 53; a second set opens every port of FTP servers, for their
-  passive data connections. Target names are resolved again every minute with the
+  passive data connections, and of NAS shares. Target names are resolved again every minute with the
   camera's DNS servers, and an address seen in the last ten minutes stays
   allowed, for names that rotate. DHCP, answers to its clients, RTP from
   its own ports and loopback pass too.

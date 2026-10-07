@@ -12,7 +12,8 @@
 # H.264, H.265 and MJPEG, API tokens
 # with bulk actions and the audit log, background jobs, the outbound
 # firewall, the MAC probe, DHCP with the factory address as fallback, the
-# node bridge, ipvlan where the kernel has it, clean stop, and cameras
+# node bridge, ipvlan where the kernel has it, faults, the SD card and a NAS
+# share (over SMB when the machine has Samba), clean stop, and cameras
 # coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl, ping and python3:
@@ -770,6 +771,104 @@ wait_state "$CID" running 60
 client ping -c 2 -W 2 "$CAM_IP" >/dev/null || fail "no answer after the reboot"
 [ "$(api GET "/cameras/$CID" | json 'd["status"]["pid"]')" != "$PID" ] || fail "the reboot kept the process"
 ok "rebooted: off the network for its 4 s of boot, then back on $CAM_IP"
+
+step "storage: an SD card and a NAS share, searched, downloaded and played back (D68, D69, D91)"
+# A card the node's disk cannot hold, with what the others promised, is
+# refused (when the disk is smaller than the model's largest card).
+free_mb=$(node_exec df -Pm "$( [ "$MODE" = compose ] && echo /data || echo "$WORK/data")" | awk 'NR==2 {print $4}')
+if [ "$free_mb" -lt 262144 ]; then
+	code=$(api PUT "/cameras/$CID/storage" -H 'Content-Type: application/json' -d '{"kind":"sd","size_mb":262144}' -o "$WORK/rej.json" -w '%{http_code}')
+	[ "$code" = 409 ] && [ "$(json 'd["code"]' <"$WORK/rej.json")" = disk ] || fail "a 256 GB card on $free_mb MB free: $code $(cat "$WORK/rej.json")"
+	ok "a 256 GB card does not fit in $free_mb MB of disk: refused with code disk"
+fi
+[ "$(api PUT "/cameras/$CID/storage" -H 'Content-Type: application/json' -d '{"kind":"sd","size_mb":64}' | json 'd["status"]["state"]')" = present ] ||
+	fail "a 64 MB card"
+EV=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' | json 'd["id"]')
+for _ in $(seq 1 40); do
+	[ "$(api GET "/cameras/$CID/recordings" | json 'len(d["items"])')" = 2 ] && break
+	sleep 0.25
+done
+RECS=$(api GET "/cameras/$CID/recordings")
+CLIP=$(echo "$RECS" | json '[r["name"] for r in d["items"] if r["kind"]=="clip"][0]')
+CLIP_ID=$(echo "$RECS" | json '[r["id"] for r in d["items"] if r["kind"]=="clip"][0]')
+[ "$(echo "$RECS" | json '[r["event_id"] for r in d["items"]] == ["'"$EV"'"] * 2')" = True ] || fail "recordings: $RECS"
+ok "line_crossing recorded its snapshot and a 10 s clip on the card"
+# The client searches the card through the camera's API, downloads the clip
+# and plays the range back over RTSP.
+START=$(echo "$RECS" | json '[r["start"] for r in d["items"] if r["kind"]=="clip"][0]')
+from=$(date -u -d "$START - 1 minute" '+%Y-%m-%d %H:%M:%S')
+to=$(date -u -d "$START + 1 minute" '+%Y-%m-%d %H:%M:%S')
+found=$(client curl -s -G --digest -u admin:e2e-new-pw "http://$CAM_IP/cgi-bin/operator/operator.cgi" --data-urlencode action=get.record.search \
+	--data-urlencode "starttime=$from" --data-urlencode "endtime=$to" --data-urlencode type=video)
+[ "$(echo "$found" | json 'd["records"][0]["file"]')" = "$CLIP" ] || fail "search: $found"
+code=$(client curl -s -o "$WORK/clip.ts" -w '%{http_code} %{content_type}' --digest -u admin:e2e-new-pw "http://$CAM_IP/cgi-bin/operator/download.cgi?file=$CLIP")
+[ "$code" = "200 video/mp2t" ] || fail "download: $code $(head -c 200 "$WORK/clip.ts")"
+out=$(ffprobe -v error -show_entries format=duration:stream=codec_name -of csv=p=0 "$WORK/clip.ts" | tr '\n' ' ') || fail "ffprobe of the clip"
+case "$out" in h264*" 10."* | h264*" 9.9"*) ;; *) fail "the downloaded clip: $out" ;; esac
+api GET "/cameras/$CID/recordings/$CLIP_ID/download" -o "$WORK/panel.ts"
+cmp -s "$WORK/clip.ts" "$WORK/panel.ts" || fail "the panel's download differs from the camera's"
+pb_from=$(date -u -d "$START - 1 minute" '+%Y%m%dT%H%M%SZ')
+pb_to=$(date -u -d "$START + 1 minute" '+%Y%m%dT%H%M%SZ')
+out=$(client timeout 20 ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 \
+	"rtsp://admin:e2e-new-pw@$CAM_IP:554/playback?starttime=$pb_from&endtime=$pb_to") || fail "RTSP playback"
+[ "$out" = h264 ] || fail "playback: $out"
+ok "the client found the clip by time, downloaded it ($(stat -c %s "$WORK/clip.ts") bytes of H.264, 10 s) and played the range back over RTSP"
+# The card goes missing: the device says so to its target and its search fails.
+FID=$(fault '{"kind":"sd_missing","duration_s":60}')
+for _ in $(seq 1 40); do grep -q '"eventType": *"SDCardMissing"' "$WORK/received.log" 2>/dev/null && break; sleep 0.25; done
+grep -q '"eventType": *"SDCardMissing"' "$WORK/received.log" || fail "storage_missing did not reach the target"
+code=$(client curl -s -o /dev/null -w '%{http_code}' -G --digest -u admin:e2e-new-pw "http://$CAM_IP/cgi-bin/operator/operator.cgi" --data-urlencode action=get.record.search)
+[ "$code" = 503 ] || fail "search without a card: $code"
+api DELETE "/cameras/$CID/faults/$FID" -o /dev/null
+wait_status "$CID" 'd["status"]["state"]' running 10
+ok "sd_missing: storage_missing reached the target, the search answered 503; ended, the card is back"
+# A NAS share on the client, over SMB, when the machine has Samba.
+if command -v smbd >/dev/null; then
+	SMB=$WORK/smb
+	mkdir -p "$SMB"/{share,private,lock,state,cache,ncalrpc,binddns}
+	cat >"$SMB/smb.conf" <<-CONF
+	[global]
+	interfaces = $CLIENT_IP/24
+	bind interfaces only = yes
+	private dir = $SMB/private
+	lock directory = $SMB/lock
+	state directory = $SMB/state
+	cache directory = $SMB/cache
+	pid directory = $SMB
+	ncalrpc dir = $SMB/ncalrpc
+	binddns dir = $SMB/binddns
+	log file = $SMB/log.smbd
+	passdb backend = tdbsam:$SMB/private/passdb.tdb
+	disable netbios = yes
+	server role = standalone server
+	[cams]
+	path = $SMB/share
+	read only = no
+	valid users = root
+	CONF
+	printf 'e2e-smb\ne2e-smb\n' | smbpasswd -c "$SMB/smb.conf" -a -s root >/dev/null
+	client smbd --foreground --no-process-group -s "$SMB/smb.conf" </dev/null >/dev/null 2>&1 &
+	for _ in $(seq 1 40); do client bash -c "echo >/dev/tcp/$CLIENT_IP/445" 2>/dev/null && break; sleep 0.25; done
+	[ "$(api PUT "/cameras/$CID/storage" -H 'Content-Type: application/json' \
+		-d "{\"kind\":\"nas\",\"nas_url\":\"smb://$CLIENT_IP/cams/recordings\",\"nas_username\":\"root\",\"nas_password\":\"e2e-smb\"}" | json 'd["kind"]')" = nas ] ||
+		fail "a NAS share"
+	sleep 1.1 # line_crossing's minimum interval
+	EV=$(api POST "/cameras/$CID/events" -H 'Content-Type: application/json' -d '{"type":"line_crossing"}' | json 'd["id"]')
+	for _ in $(seq 1 60); do
+		[ "$(api GET "/cameras/$CID/recordings" | json 'len([r for r in d["items"] if r["location"]=="nas"])')" = 2 ] && break
+		sleep 0.25
+	done
+	RECS=$(api GET "/cameras/$CID/recordings")
+	CLIP=$(echo "$RECS" | json '[r["name"] for r in d["items"] if r["kind"]=="clip"][0]')
+	[ -s "$SMB/share/recordings/$SERIAL/$CLIP" ] || fail "the clip is not on the share: $RECS $(api GET "/cameras/$CID/storage")"
+	CLIP_ID=$(echo "$RECS" | json '[r["id"] for r in d["items"] if r["kind"]=="clip"][0]')
+	api GET "/cameras/$CID/recordings/$CLIP_ID/download" -o "$WORK/nas.ts"
+	cmp -s "$WORK/nas.ts" "$SMB/share/recordings/$SERIAL/$CLIP" || fail "the panel read another file through the camera"
+	ok "the camera wrote its recordings to smb://$CLIENT_IP/cams as root, in a folder of its serial; the panel reads them through it"
+	api PUT "/cameras/$CID/storage" -H 'Content-Type: application/json' -d '{"kind":"none"}' -o /dev/null
+else
+	ok "no smbd on this machine: the NAS over SMB is left to the unit tests"
+fi
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

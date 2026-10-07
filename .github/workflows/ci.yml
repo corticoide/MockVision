@@ -22,8 +22,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install FFmpeg and Samba (the end-to-end test's NAS share)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg samba
       - name: Panel
         run: make frontend
       - name: Unit tests
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Install FFmpeg (the test client uses ffprobe)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install FFmpeg and Samba (the test client uses ffprobe and shares a NAS)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg samba
       - name: Build the image and run the acceptance criteria against it
         run: make e2e-compose

@@ -38,6 +38,7 @@ against the Docker image started with `compose.yaml`.
 | Rules and triggers (v1) | a manual loitering on a region carries the rule's name and its only object class; a crossing the line does not report gets 422; the emulated API turns crossings off (409) and on; a random trigger sends a crossing every second or two, stops when disabled and fires once on request, without restarting the camera; its rule and trigger survive a node restart |
 | Event transports (v1) | linked to an MQTT broker on the client, the running camera connects at once, with its serial as client ID and its will, and says online; a line crossing reaches the broker (QoS 1), the FTP server (the snapshot under `<serial>/<date>/`, in passive mode through the camera's firewall) and the mail server (with the snapshot attached); a second crossing within 10 s skips the mail; each target passes its test from the camera; unlinked, the camera disconnects from the broker |
 | Faults (v1) | RTSP down: ffprobe fails while the HTTP API answers and the camera is degraded with the fault named; ended by hand, the stream is back. A 401 fault refuses the right password and expires on its own after 3 s. Network down: no ping, no ARP; `network_lost` fails to leave and reaches the target once back. None of them restarts the camera; a reboot takes it off the network for its boot time and back |
+| Storage (v1) | a 256 GB card is refused with code `disk` on a smaller disk; on a 64 MB card a line crossing records its snapshot and a 10 s clip; the client finds the clip by time through the camera's API, downloads it (ffprobe: H.264, 10 s, the same bytes as the panel's download) and plays the range back over RTSP; `sd_missing` sends `storage_missing` to the target and the search answers 503; with Samba on the client, the camera writes its recordings to an SMB share in a folder of its serial and the panel reads them through it |
 | Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
@@ -50,8 +51,12 @@ the header's trigger dialog, in English and Spanish; and the analytics the
 profile declares: factory rules on a new camera, counts on each rule, the
 heat map and resetting the counts, a report fired by hand and as a trigger,
 and a camera without rules, whose crossings cannot be fired and whose ⚡
-leaves the camera list. No console errors besides the expected 401 before
-login, and no CSP violations.
+leaves the camera list. Since feature 10, also the Storage tab: an SD card
+given, an event's snapshot and clip listed live and downloaded, the card
+taken out by a fault (its format refused) and back, formatted, and a NAS
+share the camera cannot reach, with its reason, in English and Spanish. No
+console errors besides the expected 401 before login and the 409 of a
+refused action, and no CSP violations.
 
 Not verified: VLC playback (ffprobe is), a Raspberry Pi, a physical switch,
 and the systemd unit on a real host (it passes `systemd-analyze verify`).
@@ -186,8 +191,8 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 ### Faults
 
 - **The faults of D43 and the network's**: a protocol down, latency, a
-  status, a moved clock, the network down, an IP conflict, and a reboot.
-  Storage faults come with the simulated SD card (feature 10).
+  status, a moved clock, the network down, an IP conflict, the SD card's
+  states, and a reboot.
 - **A protocol down resets** each new connection once accepted, as the
   kernel of a crashed service would answer; a client sees its connection
   reset rather than refused.
@@ -207,6 +212,34 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   wait. Its state and counts start again, as a real device's after a
   reboot.
 - Ended faults are kept 30 days.
+
+### Storage
+
+- **Recordings are written as the event arrives**: the clip covers the 10
+  seconds after the event (its `end` is in the future for that long) and
+  is the stream's loop, so no pre-event buffer is simulated. Clips are
+  MPEG-TS; an MJPEG stream records snapshots only.
+- **The service writes the SD card** and the camera reads it: a camera
+  process, which faces the LAN, cannot fill the node's disk. The NAS share
+  is written by the camera itself, from its address and through its
+  firewall, as the device does.
+- **The NFS client is MockVision's own** (version 3 over TCP, AUTH_SYS,
+  the portmapper or a fixed port); SMB uses go-smb2 (SMB 2 and 3, NTLM).
+  Kernel NFS servers need `insecure` on the export, since cameras bind no
+  privileged port.
+- **The index of recordings is the service's**: the API's search, the
+  panel and RTSP playback read it; a recording removed from the share by
+  hand stays listed and fails to download. Changing the share forgets the
+  old one's recordings, which stay on it.
+- **Playback** plays the stream of the clips for as long as they last in
+  the range, stamped with their recording time, and then ends the session;
+  it does not seek or change speed. No ONVIF Profile G (D68, v2).
+- **The disk check** counts what the cards promised and have not used, at
+  each new or larger card; recordings that fill the node's disk for other
+  reasons are not watched.
+- **A full card** with overwrite off stops recording below 2 MB of free
+  space or when a recording does not fit; a format, a larger card or
+  overwrite on lifts it.
 
 ### API and data
 
@@ -230,7 +263,7 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
 - The camera tab for logs comes with its feature of the v1 plan; the
   detail page has General, Network, Protocols, Media, Rules, Triggers,
-  Users, Configuration, Faults and Events.
+  Users, Configuration, Storage, Faults and Events.
 - The rule editor draws on the latest snapshot of the main stream, refreshed
   every 5 seconds; the camera page loads the first time a camera is opened.
 - The event log shows the latest 100 events; the API pages with a cursor.
