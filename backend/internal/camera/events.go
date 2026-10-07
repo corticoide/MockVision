@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -12,13 +13,6 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/ipc"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
-
-// transportTargets maps event transports to the target type they reach.
-var transportTargets = map[string]string{
-	"http_push": "http",
-	"mqtt":      "mqtt",
-	"ftp":       "ftp",
-}
 
 // eventBus implements engine.Events: every event is logged with the service
 // and routed to the engines that deliver its transports.
@@ -107,7 +101,7 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 		}
 		var matched []engine.Target
 		for _, t := range targets {
-			if t.Type != transportTargets[transport] || !wantsType(t.EventTypes, e.Type) {
+			if !slices.Contains(engine.TransportTargets[transport], t.Type) || !wantsType(t.EventTypes, e.Type) {
 				continue
 			}
 			matched = append(matched, t.Target)
@@ -141,6 +135,20 @@ func (b *eventBus) Subscribe(transport string, fn func(engine.Dispatch)) func() 
 		delete(b.subs, transport)
 		b.mu.Unlock()
 	}
+}
+
+// Targets implements engine.Events.
+func (b *eventBus) Targets(transport string) []engine.Target {
+	types := engine.TransportTargets[transport]
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []engine.Target
+	for _, t := range b.targets {
+		if slices.Contains(types, t.Type) {
+			out = append(out, t.Target)
+		}
+	}
+	return out
 }
 
 func (b *eventBus) Report(r engine.DeliveryReport) {

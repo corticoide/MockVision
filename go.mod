@@ -11,6 +11,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20260901064844-234b97448fae
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pion/rtp v1.10.5
+	github.com/pkg/sftp v1.13.11
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/vishvananda/netlink v1.3.1
@@ -29,6 +30,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/josharian/native v1.1.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.5.0 // indirect

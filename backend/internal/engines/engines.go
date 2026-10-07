@@ -10,9 +10,12 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
+	"github.com/corticoide/mockvision/backend/internal/engines/ftpupload"
 	"github.com/corticoide/mockvision/backend/internal/engines/httpapi"
 	"github.com/corticoide/mockvision/backend/internal/engines/httppush"
+	"github.com/corticoide/mockvision/backend/internal/engines/mqttpub"
 	"github.com/corticoide/mockvision/backend/internal/engines/rtsp"
+	"github.com/corticoide/mockvision/backend/internal/engines/smtpmail"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
@@ -24,9 +27,12 @@ type Catalog struct {
 // Builtin returns the engines compiled into MockVision.
 func Builtin() *Catalog {
 	return &Catalog{factories: map[string]engine.Factory{
-		rtsp.Name:     rtsp.New,
-		httpapi.Name:  httpapi.New,
-		httppush.Name: httppush.New,
+		rtsp.Name:      rtsp.New,
+		httpapi.Name:   httpapi.New,
+		httppush.Name:  httppush.New,
+		mqttpub.Name:   mqttpub.New,
+		ftpupload.Name: ftpupload.New,
+		smtpmail.Name:  smtpmail.New,
 	}}
 }
 

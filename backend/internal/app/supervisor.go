@@ -1299,25 +1299,13 @@ func (s *Service) ipcTargets(b *cameraBundle) ([]ipc.Target, error) {
 		if !store.Bool(t.Enabled) {
 			continue
 		}
-		var cfg targetConfig
-		if err := json.Unmarshal([]byte(t.ConfigJson), &cfg); err != nil {
+		target, err := s.engineTarget(t.ID, t.Name, t.Type, t.ConfigJson, t.SecretEnc)
+		if err != nil {
 			return nil, err
-		}
-		var pw string
-		if len(t.SecretEnc) > 0 {
-			p, err := s.box.Open(t.SecretEnc, "targets:"+t.ID)
-			if err != nil {
-				return nil, fmt.Errorf("cannot decrypt the secret of target %s", t.Name)
-			}
-			pw = string(p)
 		}
 		var types []string
 		_ = json.Unmarshal([]byte(t.EventTypesJson), &types)
-		out = append(out, ipc.Target{
-			Target: engine.Target{ID: t.ID, Name: t.Name, Type: t.Type, URL: cfg.URL, Method: cfg.Method,
-				Headers: cfg.Headers, Username: cfg.Username, Password: pw},
-			EventTypes: types,
-		})
+		out = append(out, ipc.Target{Target: target, EventTypes: types})
 	}
 	return out, nil
 }

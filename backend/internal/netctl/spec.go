@@ -69,12 +69,16 @@ type Firewall struct {
 	DNS   []string      `json:"dns"`
 }
 
-// Destination is a host and port a camera may connect to.
+// Destination is a host and port a camera may connect to; AnyPort opens
+// every port of the host, as FTP's passive data connections need.
 type Destination struct {
 	IP    string `json:"ip"`
 	Port  int    `json:"port"`
 	Proto string `json:"proto"` // tcp or udp
 }
+
+// AnyPort is the port of a destination open on every port.
+const AnyPort = 0
 
 // maxFirewallRules bounds the destinations of a firewall.
 const maxFirewallRules = 512
@@ -91,7 +95,7 @@ func (f *Firewall) Validate() error {
 		if a, err := netip.ParseAddr(d.IP); err != nil || !a.Is4() {
 			return fmt.Errorf("invalid firewall address %q", d.IP)
 		}
-		if d.Port < 1 || d.Port > 65535 {
+		if d.Port < AnyPort || d.Port > 65535 {
 			return fmt.Errorf("invalid firewall port %d", d.Port)
 		}
 		if d.Proto != "tcp" && d.Proto != "udp" {

@@ -17,6 +17,11 @@ const firewallTable = "mockvision"
 // address . protocol . port: its targets and its DNS servers.
 const allowedSet = "allowed"
 
+// hostsSet holds the hosts the camera may reach on any port of a protocol,
+// as address . protocol: FTP servers, whose passive data connections go
+// to ports they choose.
+const hostsSet = "allowed_hosts"
+
 // applyFirewall replaces the firewall of a camera namespace in one
 // transaction. What the camera starts only leaves toward the node's event
 // targets, its DNS servers and DHCP servers; answers to its clients and the
@@ -46,12 +51,19 @@ func applyFirewall(nsfd int, sockets []SocketSpec, dhcp bool, fw *Firewall) erro
 	if err := c.AddSet(set, allowedElements(fw)); err != nil {
 		return fmt.Errorf("nftables set: %w", err)
 	}
+	hosts := &nftables.Set{
+		Table: t, Name: hostsSet, Concatenation: true,
+		KeyType: nftables.MustConcatSetType(nftables.TypeIPAddr, nftables.TypeInetProto),
+	}
+	if err := c.AddSet(hosts, hostElements(fw)); err != nil {
+		return fmt.Errorf("nftables set: %w", err)
+	}
 	policy := nftables.ChainPolicyDrop
 	out := c.AddChain(&nftables.Chain{
 		Name: "output", Table: t, Type: nftables.ChainTypeFilter,
 		Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &policy,
 	})
-	for _, r := range firewallRules(sockets, dhcp, set) {
+	for _, r := range firewallRules(sockets, dhcp, set, hosts) {
 		c.AddRule(&nftables.Rule{Table: t, Chain: out, Exprs: r})
 	}
 	if err := c.Flush(); err != nil {
@@ -73,9 +85,35 @@ func allowedElements(fw *Firewall) []nftables.SetElement {
 		}
 	}
 	for _, d := range fw.Allow {
-		out = append(out, nftables.SetElement{Key: allowedKey(d.IP, d.Proto, d.Port)})
+		if d.Port != AnyPort {
+			out = append(out, nftables.SetElement{Key: allowedKey(d.IP, d.Proto, d.Port)})
+		}
 	}
 	return out
+}
+
+// hostElements are the keys of the hosts set: the destinations open on
+// any port.
+func hostElements(fw *Firewall) []nftables.SetElement {
+	if fw == nil {
+		return nil
+	}
+	var out []nftables.SetElement
+	for _, d := range fw.Allow {
+		if d.Port == AnyPort {
+			out = append(out, nftables.SetElement{Key: hostKey(d.IP, d.Proto)})
+		}
+	}
+	return out
+}
+
+// hostKey is an address . protocol key.
+func hostKey(ip, proto string) []byte {
+	a := netip.MustParseAddr(ip).As4()
+	key := make([]byte, 8)
+	copy(key[0:4], a[:])
+	key[4] = protoNumber(proto)
+	return key
 }
 
 // allowedKey is an address . protocol . port key. Each field of a
@@ -90,7 +128,7 @@ func allowedKey(ip, proto string, port int) []byte {
 }
 
 // firewallRules builds the output chain, in order.
-func firewallRules(sockets []SocketSpec, dhcp bool, set *nftables.Set) [][]expr.Any {
+func firewallRules(sockets []SocketSpec, dhcp bool, set, hosts *nftables.Set) [][]expr.Any {
 	accept := []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}
 	rules := [][]expr.Any{
 		// oifname "lo" accept
@@ -118,6 +156,12 @@ func firewallRules(sockets []SocketSpec, dhcp bool, set *nftables.Set) [][]expr.
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: reg32(1)},
 		&expr.Payload{DestRegister: reg32(2), Base: expr.PayloadBaseTransportHeader, Offset: dstPort, Len: 2},
 		&expr.Lookup{SourceRegister: 1, SetName: set.Name, SetID: set.ID},
+	}, accept))
+	// ip daddr . meta l4proto @allowed_hosts accept
+	rules = append(rules, rule([]expr.Any{
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 16, Len: 4},
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: reg32(1)},
+		&expr.Lookup{SourceRegister: 1, SetName: hosts.Name, SetID: hosts.ID},
 	}, accept))
 	// counter drop: the policy drops too, but a counter shows what was
 	// refused (nft list ruleset inside the namespace).

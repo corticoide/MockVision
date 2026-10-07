@@ -315,6 +315,20 @@ type TargetView struct {
 	Enabled     bool              `json:"enabled"`
 	CameraCount int               `json:"camera_count"`
 	CreatedAt   time.Time         `json:"created_at"`
+	// http
+	Auth string `json:"auth,omitempty"`
+	// mqtt
+	Topic    string `json:"topic,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	// sftp
+	HostKey string `json:"host_key,omitempty"`
+	// smtp
+	TLS  string   `json:"tls,omitempty"`
+	From string   `json:"from,omitempty"`
+	To   []string `json:"to"`
+	// mqtt and smtp
+	Insecure bool                     `json:"insecure"`
+	Delivery *domain.DeliveryOverride `json:"delivery,omitempty"`
 }
 
 // DeliveryView is one delivery attempt.

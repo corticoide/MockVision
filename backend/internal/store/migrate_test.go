@@ -138,3 +138,71 @@ func TestMigrationClearsStandInRuleAndTrigger(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Feature 8 rebuilds targets and deliveries to widen their CHECKs: the
+// rows and the camera links survive, the foreign keys still hold, and the
+// new types and the skipped status are accepted.
+func TestMigrationWidensTargetsAndDeliveries(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+	w, _ := dsn(path)
+	conn, err := sql.Open("sqlite", w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	migrations, _ := fs.Sub(database.Migrations, "migrations")
+	provider, err := goose.NewProvider(goose.DialectSQLite3, conn, migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 8); err != nil {
+		t.Fatal(err)
+	}
+	exec := func(qs ...string) {
+		t.Helper()
+		for _, q := range qs {
+			if _, err := conn.ExecContext(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+	}
+	exec(
+		`INSERT INTO packages (id, kind, pkg_id, version, sha256, signature_status, manifest_json, installed_at) VALUES ('p', 'profile', 'v/m', '1.0.0', 'x', 'unsigned', '{}', 1)`,
+		`INSERT INTO profiles (id, package_id, profile_id, version, name, vendor, model, resolved_json, level, created_at) VALUES ('pr', 'p', 'v/m', '1.0.0', 'n', 'v', 'm', '{}', 'draft', 1)`,
+		`INSERT INTO cameras (id, name, profile_id, profile_version, serial, desired_state, created_at, updated_at) VALUES ('c', 'Cam', 'v/m', '1.0.0', 's', 'stopped', 1, 1)`,
+		`INSERT INTO targets (id, name, type, config_json, created_at) VALUES ('t', 'VMS', 'http', '{"url":"http://x"}', 1)`,
+		`INSERT INTO camera_targets (camera_id, target_id) VALUES ('c', 't')`,
+		`INSERT INTO events (id, camera_id, type, at, data_json, received_at) VALUES ('e', 'c', 'motion', 1, '{}', 1)`,
+		`INSERT INTO deliveries (id, event_id, target_id, attempt, at, status) VALUES ('d', 'e', 't', 1, 1, 'ok')`,
+	)
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM targets) + (SELECT count(*) FROM camera_targets) + (SELECT count(*) FROM deliveries)`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("%d rows after the migration (%v), want 3", n, err)
+	}
+	exec(
+		`INSERT INTO targets (id, name, type, config_json, created_at) VALUES ('m', 'Broker', 'mqtt', '{"url":"mqtt://x"}', 1)`,
+		`INSERT INTO deliveries (id, event_id, target_id, attempt, at, status) VALUES ('d2', 'e', 'm', 1, 1, 'skipped')`,
+	)
+	// A target still cannot go while a camera uses it, and deleting the
+	// event still deletes its deliveries.
+	if _, err := conn.ExecContext(ctx, `DELETE FROM targets WHERE id = 't'`); err == nil {
+		t.Error("a target in use was deleted")
+	}
+	exec(`DELETE FROM events WHERE id = 'e'`)
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM deliveries`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d deliveries left (%v)", n, err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO targets (id, name, type, config_json, created_at) VALUES ('x', 'X', 'snmp', '{}', 1)`); err == nil {
+		t.Error("an unknown target type was accepted")
+	}
+	if _, err := provider.DownTo(ctx, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM targets`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d targets after going down (%v), want the http one", n, err)
+	}
+}

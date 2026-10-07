@@ -13,6 +13,7 @@ import (
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/ipc"
+	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -120,18 +121,25 @@ const (
 
 // expectedDeliveries counts the targets an event of a type goes to: the
 // enabled targets of the camera that accept the type, through a transport
-// the profile defines for it.
-func expectedDeliveries(b *cameraBundle, typ string) int {
+// the profile defines for it and an enabled engine of the camera delivers.
+func (s *Service) expectedDeliveries(b *cameraBundle, typ string) int {
 	spec, ok := b.doc.Events[typ]
 	if !ok {
 		return 0
 	}
+	delivered := s.deliveredTransports(b)
 	n := 0
 	for _, t := range b.targets {
 		if !store.Bool(t.Enabled) {
 			continue
 		}
-		if _, ok := spec.Transports[transportOf(t.Type)]; !ok {
+		reached := false
+		for transport := range spec.Transports {
+			if delivered[transport] && slices.Contains(engine.TransportTargets[transport], t.Type) {
+				reached = true
+			}
+		}
+		if !reached {
 			continue
 		}
 		var types []string
@@ -143,12 +151,31 @@ func expectedDeliveries(b *cameraBundle, typ string) int {
 	return n
 }
 
-// transportOf names the event transport that reaches a type of target.
-func transportOf(targetType string) string {
-	if targetType == string(domain.TargetHTTP) {
-		return "http_push"
+// deliveredTransports are the transports the camera's enabled engines
+// deliver.
+func (s *Service) deliveredTransports(b *cameraBundle) map[string]bool {
+	enabled := map[string]bool{}
+	for _, p := range b.protos {
+		enabled[p.EngineKey] = store.Bool(p.Enabled)
 	}
-	return targetType
+	out := map[string]bool{}
+	for inst, section := range b.doc.Engines {
+		if on, known := enabled[inst]; known && !on {
+			continue
+		}
+		name, rng, err := profile.EngineName(section)
+		if err != nil {
+			continue
+		}
+		eng, err := s.catalog.Resolve(name, rng)
+		if err != nil {
+			continue
+		}
+		for _, t := range eng.Describe().Delivers {
+			out[t] = true
+		}
+	}
+	return out
 }
 
 // recordEvent stores an event reported by a camera (RN-13), once it is
@@ -189,7 +216,7 @@ func (s *Service) recordEvent(ctx context.Context, cameraID string, e engine.Eve
 	err = s.store.W().InsertEvent(ctx, db.InsertEventParams{
 		ID: e.ID, CameraID: cameraID, Type: e.Type, At: e.At.UnixMilli(), DataJson: string(data),
 		RuleID: store.NullString(ruleID), TriggerID: store.NullString(triggerID),
-		ReceivedAt: now.UnixMilli(), ExpectedDeliveries: int64(expectedDeliveries(b, e.Type)),
+		ReceivedAt: now.UnixMilli(), ExpectedDeliveries: int64(s.expectedDeliveries(b, e.Type)),
 	})
 	if err != nil {
 		s.log.Warn("cannot store event", "camera", cameraID, "error", err)
@@ -220,7 +247,7 @@ func (s *Service) recordDelivery(ctx context.Context, cameraID string, d engine.
 	}
 	status := d.Status
 	switch status {
-	case engine.DeliveryOK, engine.DeliveryRetry, engine.DeliveryFailed:
+	case engine.DeliveryOK, engine.DeliveryRetry, engine.DeliveryFailed, engine.DeliverySkipped:
 	default:
 		status = engine.DeliveryFailed
 	}
@@ -341,8 +368,8 @@ func eventView(r db.GetEventRow, dels []DeliveryView) EventView {
 }
 
 // deliveryStatus summarizes the latest attempt of every target: ok,
-// failed, pending (retrying or not reported yet) or none (no target wanted
-// the event). expected is how many targets the event went to, -1 when
+// failed, pending (retrying or not reported yet), skipped (the camera chose
+// not to send to any) or none (no target wanted the event). expected is how many targets the event went to, -1 when
 // unknown (events stored before it was recorded); an unknown event with no
 // delivery is taken as one no target wanted (audit B5).
 func deliveryStatus(dels []DeliveryView, expected int) string {
@@ -358,17 +385,24 @@ func deliveryStatus(dels []DeliveryView, expected int) string {
 			latest[d.TargetID] = d
 		}
 	}
-	status := "ok"
+	status, skipped := "ok", 0
 	for _, d := range latest {
 		switch d.Status {
 		case engine.DeliveryFailed:
 			return "failed"
 		case engine.DeliveryRetry:
 			status = "pending"
+		case engine.DeliverySkipped:
+			skipped++
 		}
 	}
 	if len(latest) < expected {
 		return "pending"
+	}
+	if skipped == len(latest) {
+		// Every target was left out on purpose, as mails within the
+		// camera's interval.
+		return "skipped"
 	}
 	return status
 }

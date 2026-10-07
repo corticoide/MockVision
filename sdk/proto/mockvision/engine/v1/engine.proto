@@ -40,6 +40,9 @@ service Host {
   rpc EventEmit(EventEmitRequest) returns (EventEmitResponse);
   rpc EventSubscribe(EventSubscribeRequest) returns (stream Dispatch);
   rpc DeliveryReport(DeliveryReportRequest) returns (DeliveryReportResponse);
+  // The targets the camera delivers a transport to now, for engines that
+  // keep connections open to them (an MQTT client and its broker).
+  rpc EventTargets(EventSubscribeRequest) returns (EventTargetsResponse);
   // Media
   rpc MediaStreams(MediaStreamsRequest) returns (MediaStreamsResponse);
   rpc MediaSnapshot(MediaSnapshotRequest) returns (MediaSnapshotResponse);
@@ -213,9 +216,11 @@ message EventEmitResponse {
 }
 
 message EventSubscribeRequest {
-  string transport = 1; // http_push, mqtt, ftp...
+  string transport = 1; // http_push, mqtt, ftp or smtp
 }
 
+// Target is an event receiver; which fields apply depends on its type:
+// http, mqtt, ftp, sftp or smtp.
 message Target {
   string id = 1;
   string name = 2;
@@ -225,6 +230,27 @@ message Target {
   map<string, string> headers = 6;
   string username = 7;
   string password = 8;
+  string auth = 9;       // http: basic | digest
+  string topic = 10;     // mqtt: template replacing the profile's topic
+  string client_id = 11; // mqtt: template replacing the profile's client ID
+  string host_key = 12;  // sftp: SHA256 fingerprint of the server key
+  string tls = 13;       // smtp: none | starttls | tls
+  bool insecure = 14;    // mqtts, smtp: accept a certificate that does not verify
+  string from = 15;      // smtp
+  repeated string to = 16; // smtp
+  DeliveryOverride delivery = 17;
+}
+
+// DeliveryOverride replaces parts of the profile's delivery policy for one
+// target; unset fields keep the profile's.
+message DeliveryOverride {
+  optional int64 timeout_ms = 1;
+  optional int32 retries = 2;
+  optional int64 backoff_ms = 3;
+}
+
+message EventTargetsResponse {
+  repeated Target targets = 1;
 }
 
 message Dispatch {

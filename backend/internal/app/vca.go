@@ -391,7 +391,7 @@ func (s *Service) firedView(b *cameraBundle, res ipc.TriggerResult, triggerID st
 	data, _ := json.Marshal(res.Event)
 	v := &EventView{
 		ID: res.Event.ID, CameraID: b.cam.ID, CameraName: b.cam.Name, Type: res.Event.Type, At: res.Event.At,
-		Data: data, TriggerID: triggerID, Deliveries: []DeliveryView{}, DeliveryStatus: deliveryStatus(nil, expectedDeliveries(b, res.Event.Type)),
+		Data: data, TriggerID: triggerID, Deliveries: []DeliveryView{}, DeliveryStatus: deliveryStatus(nil, s.expectedDeliveries(b, res.Event.Type)),
 	}
 	if r := res.Event.Rule; r != nil && b.hasRule(r.ID) {
 		v.RuleID = r.ID

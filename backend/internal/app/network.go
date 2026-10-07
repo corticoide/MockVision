@@ -3,15 +3,12 @@ package app
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"net"
 	"net/netip"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -196,29 +193,14 @@ func (s *Service) destinations(ctx context.Context, dns []string, fresh time.Dur
 		return nil, err
 	}
 	type hostPort struct {
-		host string
-		port int
+		host  string
+		ports []int
 	}
 	var targets []hostPort
 	for _, t := range rows {
-		var cfg targetConfig
-		if json.Unmarshal([]byte(t.ConfigJson), &cfg) != nil {
-			continue
+		if host, ports, ok := targetPorts(t.Type, t.ConfigJson); ok {
+			targets = append(targets, hostPort{host, ports})
 		}
-		u, err := url.Parse(cfg.URL)
-		if err != nil || u.Hostname() == "" {
-			continue
-		}
-		port := 80
-		if u.Scheme == "https" {
-			port = 443
-		}
-		if p := u.Port(); p != "" {
-			if port, err = strconv.Atoi(p); err != nil {
-				continue
-			}
-		}
-		targets = append(targets, hostPort{u.Hostname(), port})
 	}
 	ips := make([][]string, len(targets))
 	sem := make(chan struct{}, resolveWorkers)
@@ -234,9 +216,11 @@ func (s *Service) destinations(ctx context.Context, dns []string, fresh time.Dur
 	var out []netctl.Destination
 	for i, t := range targets {
 		for _, ip := range ips[i] {
-			d := netctl.Destination{IP: ip, Port: t.port, Proto: "tcp"}
-			if !slices.Contains(out, d) && len(out) < maxDestinations {
-				out = append(out, d)
+			for _, port := range t.ports {
+				d := netctl.Destination{IP: ip, Port: port, Proto: "tcp"}
+				if !slices.Contains(out, d) && len(out) < maxDestinations {
+					out = append(out, d)
+				}
 			}
 		}
 	}

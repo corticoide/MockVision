@@ -276,7 +276,10 @@
         "transports": {
           "type": "object",
           "properties": {
-            "http_push": { "$ref": "#/$defs/http_push" }
+            "http_push": { "$ref": "#/$defs/http_push" },
+            "mqtt": { "$ref": "#/$defs/mqtt" },
+            "ftp": { "$ref": "#/$defs/ftp" },
+            "smtp": { "$ref": "#/$defs/smtp" }
           },
           "additionalProperties": { "type": "object" }
         },
@@ -303,6 +306,56 @@
         "body": { "type": "string" },
         "path": { "type": "string" },
         "image": { "type": "boolean" }
+      },
+      "oneOf": [
+        { "required": ["template"] },
+        { "required": ["body"] }
+      ]
+    },
+    "mqtt": {
+      "description": "Event published to an MQTT broker (mqtt-publish). The payload is body (inline template) or template (file in the package); a target may replace the topic.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topic"],
+      "properties": {
+        "topic": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Template of the topic." },
+        "qos": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "retain": { "type": "boolean" },
+        "template": { "type": "string" },
+        "body": { "type": "string" },
+        "image": { "type": "boolean", "description": "The payload embeds the snapshot (b64 snapshot): up to 8 MB." }
+      },
+      "oneOf": [
+        { "required": ["template"] },
+        { "required": ["body"] }
+      ]
+    },
+    "ftp": {
+      "description": "File uploaded to an FTP or SFTP server for the event (ftp-upload): the snapshot of a stream, or a document the profile renders. path and file are templates; the directory goes under the target's.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "maxLength": 1024, "description": "Template of the directory, relative to the target's." },
+        "file": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Template of the file name." },
+        "content": { "enum": ["snapshot", "body"], "description": "snapshot (default) or the rendered body." },
+        "stream": { "type": "string", "description": "Stream of the snapshot; main when omitted." },
+        "template": { "type": "string" },
+        "body": { "type": "string" }
+      }
+    },
+    "smtp": {
+      "description": "Mail sent for the event (smtp-mail) to the recipients of each smtp target, with the snapshot attached when snapshot is true.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject"],
+      "properties": {
+        "subject": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Template of the subject." },
+        "template": { "type": "string" },
+        "body": { "type": "string", "description": "Template of the text." },
+        "content_type": { "enum": ["text/plain", "text/html"] },
+        "snapshot": { "type": "boolean" },
+        "stream": { "type": "string", "description": "Stream of the snapshot; main when omitted." },
+        "attachment": { "type": "string", "maxLength": 255, "description": "Template of the attachment's file name." }
       },
       "oneOf": [
         { "required": ["template"] },

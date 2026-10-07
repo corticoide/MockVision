@@ -677,36 +677,69 @@ func (v *validator) lintStream(name string, s Stream) {
 	}
 }
 
-// eventTemplates compiles the http_push templates of every event.
+// transportTemplates lists the fields of each transport that hold a
+// template.
+var transportTemplates = map[string][]string{
+	"http_push": {"body"},
+	"mqtt":      {"topic", "body"},
+	"ftp":       {"path", "file", "body"},
+	"smtp":      {"subject", "body", "attachment"},
+}
+
+// eventTemplates compiles the templates of every event's transports and
+// checks the streams their snapshots come from.
 func (v *validator) eventTemplates(doc *Document) {
 	for _, typ := range SortedKeys(doc.Events) {
-		raw, ok := doc.Events[typ].Transports["http_push"]
-		if !ok {
-			continue
-		}
-		var hp HTTPPush
-		if err := json.Unmarshal(raw, &hp); err != nil {
-			continue
-		}
-		ptr := "/events/" + escapePointer(typ) + "/transports/http_push/body"
-		if hp.Template != "" {
-			ptr = "/events/" + escapePointer(typ) + "/transports/http_push/template"
-		}
-		if err := tmpl.Check(typ, hp.Body); err != nil {
-			var se *tmpl.SyntaxError
-			inner := 0
-			msg := err.Error()
-			if errors.As(err, &se) {
-				inner, msg = se.Line, se.Message
-			}
-			line := v.valueLine(ptr, inner)
-			if hp.Template != "" {
-				v.res.Problems = append(v.res.Problems, Problem{Step: StepTemplates, Severity: SeverityError, File: hp.Template, Line: inner, Pointer: ptr, Message: msg})
+		for _, transport := range SortedKeys(doc.Events[typ].Transports) {
+			fields, known := transportTemplates[transport]
+			if !known {
 				continue
 			}
-			v.res.Problems = append(v.res.Problems, Problem{Step: StepTemplates, Severity: SeverityError, File: v.in.File, Line: line, Pointer: ptr, Message: msg})
+			var section map[string]any
+			if err := json.Unmarshal(doc.Events[typ].Transports[transport], &section); err != nil {
+				continue
+			}
+			base := "/events/" + escapePointer(typ) + "/transports/" + escapePointer(transport)
+			file, _ := section["template"].(string)
+			for _, field := range fields {
+				text, ok := section[field].(string)
+				if !ok {
+					continue
+				}
+				v.checkTemplate(typ, base+"/"+field, text, field == "body" && file != "", file)
+			}
+			if stream, ok := section["stream"].(string); ok {
+				if _, exists := doc.Media.Streams[stream]; !exists {
+					v.errorf(StepLint, base+"/stream", "the profile has no stream %q", stream)
+				}
+			}
+			if transport == "ftp" && section["content"] == "body" && section["body"] == nil {
+				v.errorf(StepLint, base, "content: body needs body or template")
+			}
 		}
 	}
+}
+
+// checkTemplate compiles a template of the profile, reporting errors on
+// the line of the profile file, or of the package's template file the
+// body came from.
+func (v *validator) checkTemplate(name, ptr, text string, fromFile bool, file string) {
+	err := tmpl.Check(name, text)
+	if err == nil {
+		return
+	}
+	var se *tmpl.SyntaxError
+	inner := 0
+	msg := err.Error()
+	if errors.As(err, &se) {
+		inner, msg = se.Line, se.Message
+	}
+	if fromFile {
+		ptr = strings.TrimSuffix(ptr, "/body") + "/template"
+		v.res.Problems = append(v.res.Problems, Problem{Step: StepTemplates, Severity: SeverityError, File: file, Line: inner, Pointer: ptr, Message: msg})
+		return
+	}
+	v.res.Problems = append(v.res.Problems, Problem{Step: StepTemplates, Severity: SeverityError, File: v.in.File, Line: v.valueLine(ptr, inner), Pointer: ptr, Message: msg})
 }
 
 func contains(list []string, s string) bool {

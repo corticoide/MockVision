@@ -1575,13 +1575,17 @@ components:
         camera_count: { type: integer }
         created_at: { type: string, format: date-time }
     Target:
+      description: >
+        An event receiver shared by cameras (D45). Which fields apply depends
+        on its type: http (method, headers, auth), mqtt (topic, client_id,
+        insecure), ftp and sftp (host_key), smtp (tls, from, to, insecure).
       type: object
-      required: [id, name, type, url, method, headers, username, has_password, enabled, camera_count, created_at]
+      required: [id, name, type, url, method, headers, username, has_password, enabled, camera_count, created_at, to, insecure]
       properties:
         id: { type: string }
         name: { type: string }
-        type: { type: string, enum: [http] }
-        url: { type: string }
+        type: { $ref: "#/components/schemas/TargetType" }
+        url: { type: string, description: "http(s)://, mqtt(s)://host[:port], ftp://host[:port]/dir, sftp://host[:port]/dir or smtp(s)://host[:port]" }
         method: { type: string }
         headers: { type: object, additionalProperties: { type: string } }
         username: { type: string }
@@ -1589,23 +1593,54 @@ components:
         enabled: { type: boolean }
         camera_count: { type: integer }
         created_at: { type: string, format: date-time }
+        auth: { type: string, enum: [basic, digest], description: "http: Basic, or Digest answering the target's challenge" }
+        topic: { type: string, description: "mqtt: template replacing the profile's topic" }
+        client_id: { type: string, description: "mqtt: template replacing the profile's client ID" }
+        host_key: { type: string, description: "sftp: SHA256 fingerprint the server key must have; empty accepts any" }
+        tls: { type: string, enum: [none, starttls, tls] }
+        from: { type: string }
+        to: { type: array, items: { type: string } }
+        insecure: { type: boolean, description: "mqtts and smtp: accept a TLS certificate that does not verify" }
+        delivery: { $ref: "#/components/schemas/DeliveryOverride" }
+    TargetType:
+      type: string
+      enum: [http, mqtt, ftp, sftp, smtp]
+    DeliveryOverride:
+      description: The target's own delivery policy; what it leaves out comes from the profile (D42). An empty object goes back to the profile's.
+      type: object
+      properties:
+        timeout_ms: { type: integer, minimum: 100, maximum: 120000 }
+        retries: { type: integer, minimum: 0, maximum: 10 }
+        backoff_ms: { type: integer, minimum: 0, maximum: 600000 }
     TargetInput:
       type: object
       properties:
         name: { type: string }
-        type: { type: string, enum: [http] }
+        type: { $ref: "#/components/schemas/TargetType" }
         url: { type: string }
         method: { type: string, enum: [GET, POST, PUT] }
         headers: { type: object, additionalProperties: { type: string } }
         username: { type: string }
         password: { type: string, writeOnly: true }
         enabled: { type: boolean }
+        auth: { type: string, enum: [basic, digest] }
+        topic: { type: string }
+        client_id: { type: string }
+        host_key: { type: string }
+        tls: { type: string, enum: [none, starttls, tls] }
+        from: { type: string }
+        to: { type: array, items: { type: string }, maxItems: 5 }
+        insecure: { type: boolean }
+        delivery: { $ref: "#/components/schemas/DeliveryOverride" }
     TargetTest:
       type: object
       description: >
-        The request leaves from a running camera that uses the target, across
+        The test leaves from a running camera that uses the target, across
         the same network as its deliveries; with none running it leaves from
-        the node, which refuses its own and link-local addresses.
+        the node, which refuses its own and link-local addresses. An http
+        target gets a request; an mqtt one a session; ftp and sftp a login
+        and the target's directory, created if missing; smtp the sender and
+        recipients, without any mail.
       required: [ok, latency_ms, from]
       properties:
         ok: { type: boolean }
@@ -1779,7 +1814,7 @@ components:
         target_name: { type: string }
         attempt: { type: integer }
         at: { type: string, format: date-time }
-        status: { type: string, enum: [ok, retry, failed] }
+        status: { type: string, enum: [ok, retry, failed, skipped], description: "skipped: the camera chose not to send, as a mail within its interval" }
         http_status: { type: integer }
         latency_ms: { type: integer }
         error: { type: string }
@@ -1796,7 +1831,7 @@ components:
         rule_id: { type: string, description: The camera's rule behind the event }
         trigger_id: { type: string, description: The camera's stored trigger behind the event }
         deliveries: { type: array, items: { $ref: "#/components/schemas/Delivery" } }
-        delivery_status: { type: string, enum: [ok, failed, pending, none] }
+        delivery_status: { type: string, enum: [ok, failed, pending, skipped, none] }
         latency_ms: { type: [integer, "null"] }
     EventPage:
       type: object

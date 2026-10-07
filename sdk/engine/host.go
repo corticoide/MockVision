@@ -91,7 +91,36 @@ type State interface {
 	Watch(fn func([]Change)) (cancel func())
 }
 
-// Target is an event receiver as seen by a delivering engine.
+// Target types: the kind of receiver, which decides the transports that
+// reach it.
+const (
+	TargetHTTP = "http"
+	TargetMQTT = "mqtt"
+	TargetFTP  = "ftp"
+	TargetSFTP = "sftp"
+	TargetSMTP = "smtp"
+)
+
+// Transports of events: the sections of a profile event, each delivered by
+// an engine to the targets of its types.
+const (
+	TransportHTTPPush = "http_push"
+	TransportMQTT     = "mqtt"
+	TransportFTP      = "ftp"
+	TransportSMTP     = "smtp"
+)
+
+// TransportTargets lists the target types each transport reaches: an FTP
+// upload goes to FTP and SFTP servers alike.
+var TransportTargets = map[string][]string{
+	TransportHTTPPush: {TargetHTTP},
+	TransportMQTT:     {TargetMQTT},
+	TransportFTP:      {TargetFTP, TargetSFTP},
+	TransportSMTP:     {TargetSMTP},
+}
+
+// Target is an event receiver as seen by a delivering engine. Which fields
+// apply depends on its type.
 type Target struct {
 	ID       string            `json:"id"`
 	Name     string            `json:"name"`
@@ -101,6 +130,27 @@ type Target struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 	Username string            `json:"username,omitempty"`
 	Password string            `json:"password,omitempty"`
+	// Auth is how the camera authenticates to an http target: basic, or
+	// digest, answering the target's challenge.
+	Auth string `json:"auth,omitempty"`
+	// Topic and ClientID replace the profile's for an mqtt target. Both
+	// are templates, so one broker serves many cameras.
+	Topic    string `json:"topic,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	// HostKey pins the key of an sftp server by its SHA256 fingerprint;
+	// empty accepts any key, as most cameras do.
+	HostKey string `json:"host_key,omitempty"`
+	// TLS is how an smtp target is reached: none, starttls or tls.
+	TLS string `json:"tls,omitempty"`
+	// Insecure accepts a TLS certificate that does not verify (mqtts and
+	// smtp), as a test server's self-signed one.
+	Insecure bool `json:"insecure,omitempty"`
+	// From and To are the sender and recipients of an smtp target.
+	From string   `json:"from,omitempty"`
+	To   []string `json:"to,omitempty"`
+	// Delivery replaces parts of the profile's delivery policy for this
+	// target (D42).
+	Delivery *DeliveryOverride `json:"delivery,omitempty"`
 }
 
 // DeliveryPolicy mimics how the real device retries (D42).
@@ -110,6 +160,31 @@ type DeliveryPolicy struct {
 	Backoff time.Duration `json:"backoff"`
 }
 
+// DeliveryOverride is a target's own delivery policy; nil fields keep the
+// profile's.
+type DeliveryOverride struct {
+	Timeout *time.Duration `json:"timeout,omitempty"`
+	Retries *int           `json:"retries,omitempty"`
+	Backoff *time.Duration `json:"backoff,omitempty"`
+}
+
+// With returns the policy with a target's override applied.
+func (p DeliveryPolicy) With(o *DeliveryOverride) DeliveryPolicy {
+	if o == nil {
+		return p
+	}
+	if o.Timeout != nil {
+		p.Timeout = *o.Timeout
+	}
+	if o.Retries != nil {
+		p.Retries = *o.Retries
+	}
+	if o.Backoff != nil {
+		p.Backoff = *o.Backoff
+	}
+	return p
+}
+
 // Dispatch is an event handed to a delivering engine.
 type Dispatch struct {
 	Event Event
@@ -117,15 +192,22 @@ type Dispatch struct {
 	VendorName string
 	// Transport is the profile's section for the transport.
 	Transport json.RawMessage
-	Policy    DeliveryPolicy
-	Targets   []Target
+	// Policy is the profile's; each target may override parts of it.
+	Policy  DeliveryPolicy
+	Targets []Target
 }
+
+// PolicyFor is the delivery policy toward one of the dispatch's targets.
+func (d Dispatch) PolicyFor(t Target) DeliveryPolicy { return d.Policy.With(t.Delivery) }
 
 // Delivery statuses reported for each attempt.
 const (
 	DeliveryOK     = "ok"
 	DeliveryRetry  = "retry"
 	DeliveryFailed = "failed"
+	// DeliverySkipped is an event the device chose not to send, such as a
+	// mail within its interval.
+	DeliverySkipped = "skipped"
 )
 
 // DeliveryReport is the outcome of one delivery attempt.
@@ -145,10 +227,15 @@ type Events interface {
 	// Emit logs a canonical event and dispatches it to every transport the
 	// profile defines for its type. ID and At are filled when empty.
 	Emit(ctx context.Context, e Event) (Event, error)
-	// Subscribe registers the engine that delivers a transport (http_push).
+	// Subscribe registers the engine that delivers a transport (http_push,
+	// mqtt, ftp or smtp).
 	Subscribe(transport string, fn func(Dispatch)) (cancel func())
 	// Report records the outcome of a delivery attempt.
 	Report(r DeliveryReport)
+	// Targets returns the targets the camera delivers a transport to now,
+	// for engines that keep a connection open to them, as an MQTT client
+	// does with its broker. They change while the camera runs.
+	Targets(transport string) []Target
 }
 
 // StreamInfo describes one video stream of the camera: main, sub or third.

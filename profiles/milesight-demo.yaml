@@ -4,9 +4,10 @@
 # streams (main and sub in H.264 or H.265, third in MJPEG), three HTTP
 # features (snapshot, device information, reading and writing a parameter)
 # and video analytics: line and region rules whose events are pushed over
-# HTTP, the counts the camera keeps from them (people counting per line,
-# occupancy per region, a heat map) served over HTTP and pushed as a
-# periodic report.
+# HTTP, published to an MQTT broker, uploaded as snapshots to FTP and SFTP
+# servers and mailed with the snapshot attached; the counts the camera
+# keeps from them (people counting per line, occupancy per region, a heat
+# map) are served over HTTP and pushed as a periodic report.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -18,7 +19,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.4.0
+  version: 0.5.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -242,17 +243,38 @@ engines:
   push:
     engine: http-push@^1
 
+  # The camera as an MQTT client: it connects to each broker as soon as it
+  # runs, announces itself online (birth) and leaves a will the broker
+  # publishes if it vanishes.
+  mqtt:
+    engine: mqtt-publish@^1
+    client_id: "{{ .Camera.Serial }}"
+    keepalive: 60s
+    birth: { topic: "milesight/{{ .Camera.Serial }}/status", body: "online", qos: 1, retain: true }
+    will: { topic: "milesight/{{ .Camera.Serial }}/status", body: "offline", qos: 1, retain: true }
+
+  # Snapshots of each event to FTP and SFTP servers.
+  ftp:
+    engine: ftp-upload@^1
+
+  # Mail with the snapshot attached, one every 10 seconds at most to each
+  # server, as the device's e-mail interval.
+  mail:
+    engine: smtp-mail@^1
+    interval: 10s
+    mailer: Milesight-Demo
+
 events:
   # Every analytics event travels the same way; the body names the event
   # with its vendor name (.EventName) and the rule that raised it.
   line_crossing:
     vendor_name: LineCrossing
     min_interval: 1s
-    transports:
+    transports: &transports
       http_push: &push
         method: POST
         content_type: application/json
-        body: |
+        body: &event_body |
           {
             "eventType": {{ json .EventName }},
             "eventId": {{ json .Event.ID }},
@@ -267,26 +289,47 @@ events:
             "direction": {{ with .Event.Direction }}{{ json . }}{{ else }}null{{ end }},
             "object": {{ with .Event.Object }}{"class": {{ json .Class }}, "color": {{ json .Color }}, "confidence": {{ json .Confidence }}, "box": {{ json .Box }}}{{ else }}null{{ end }}
           }
+      # The same document on the broker, under the camera's topic.
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *event_body
+      # The snapshot, in a folder per camera and day.
+      ftp:
+        path: '{{ .Camera.Serial }}/{{ fmtTime .Event.At "2006-01-02" }}'
+        file: '{{ fmtTime .Event.At "150405" }}_{{ .EventName }}.jpg'
+      smtp:
+        subject: '{{ .EventName }} on {{ state "System.DeviceName" }}'
+        snapshot: true
+        attachment: '{{ .EventName }}_{{ fmtTime .Event.At "20060102150405" }}.jpg'
+        body: |
+          Event: {{ .EventName }}
+          Time: {{ fmtTime .Event.At "rfc3339" }}
+          Device: {{ state "System.DeviceName" }} ({{ .Camera.Model }}, serial {{ .Camera.Serial }})
+          Address: {{ .Camera.IP }}
+          {{ with .Event.Rule }}Rule: {{ .Name }}
+          {{ end }}{{ with .Event.Object }}Object: {{ .Class }}
+          {{ end }}
     delivery: &delivery { timeout: 5s, retries: 3, backoff: 2s }
   region_entrance:
     vendor_name: RegionEntrance
     min_interval: 1s
-    transports: { http_push: *push }
+    transports: *transports
     delivery: *delivery
   region_exit:
     vendor_name: RegionExiting
     min_interval: 1s
-    transports: { http_push: *push }
+    transports: *transports
     delivery: *delivery
   loitering:
     vendor_name: Loitering
     min_interval: 1s
-    transports: { http_push: *push }
+    transports: *transports
     delivery: *delivery
   intrusion:
     vendor_name: Intrusion
     min_interval: 1s
-    transports: { http_push: *push }
+    transports: *transports
     delivery: *delivery
   # A report: what the camera counted, pushed by a trigger with a fixed
   # interval (the same shortest and longest wait).
@@ -298,7 +341,7 @@ events:
       http_push:
         method: POST
         content_type: application/json
-        body: |
+        body: &report_body |
           {{ $a := analytics }}{
             "eventType": {{ json .EventName }},
             "eventId": {{ json .Event.ID }},
@@ -308,6 +351,12 @@ events:
             "lines": [{{ range $i, $l := $a.Lines }}{{ if $i }}, {{ end }}{"name": {{ json $l.Name }}, "in": {{ $l.AToB }}, "out": {{ $l.BToA }}}{{ end }}],
             "regions": [{{ range $i, $r := $a.Regions }}{{ if $i }}, {{ end }}{"name": {{ json $r.Name }}, "occupancy": {{ $r.Occupancy }}}{{ end }}]
           }
+      # The latest counts stay on the broker for whoever subscribes.
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/counting"
+        qos: 0
+        retain: true
+        body: *report_body
     delivery: *delivery
 
 vca:
@@ -328,3 +377,6 @@ coverage:
   rtsp: main stream only
   http-api: snapshot, device information, parameters, counting and heat map
   http_push: line_crossing, region_entrance, region_exit, loitering, intrusion and a people counting report
+  mqtt: the same events and the counting report, with birth and will messages
+  ftp: the snapshot of each analytics event
+  smtp: a mail with the snapshot of each analytics event
