@@ -19,7 +19,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.5.0
+  version: 0.6.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -34,6 +34,8 @@ identity:
   device:
     firmware: "demo-1.0.0"
     hardware: "V1.0"
+  # A reboot keeps the camera off the network this long.
+  boot_time: 20s
 
 state:
   System.DeviceName:
@@ -358,6 +360,38 @@ events:
         retain: true
         body: *report_body
     delivery: *delivery
+  # The device's own state: raised by the faults injected into it. While
+  # the network is down the push fails; its retries outlast a short outage.
+  network_lost:
+    vendor_name: NetworkDisconnected
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: &system_body |
+          {
+            "eventType": {{ json .EventName }},
+            "eventId": {{ json .Event.ID }},
+            "time": {{ json (fmtTime .Event.At "rfc3339ms") }},
+            "device": {"name": {{ json (state "System.DeviceName") }}, "serialNumber": {{ json .Camera.Serial }}, "macAddress": {{ json (upper .Camera.MAC) }}, "ipAddress": {{ json .Camera.IP }}}
+          }
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *system_body
+    delivery: { timeout: 5s, retries: 6, backoff: 5s }
+  ip_conflict:
+    vendor_name: IPConflict
+    transports:
+      http_push:
+        method: POST
+        content_type: application/json
+        body: *system_body
+      mqtt:
+        topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
+        qos: 1
+        body: *system_body
+    delivery: *delivery
 
 vca:
   rules: [line, region]
@@ -380,3 +414,4 @@ coverage:
   mqtt: the same events and the counting report, with birth and will messages
   ftp: the snapshot of each analytics event
   smtp: a mail with the snapshot of each analytics event
+  system: network_lost and ip_conflict, raised by faults

@@ -396,6 +396,14 @@ func (ss *session) run(b *cameraBundle) {
 		return
 	}
 	ss.setState(domain.StateRunning, "", "")
+	// The faults it started with: its new namespace goes off the network
+	// if one says so, and it turns degraded.
+	if open, err := s.openFaults(ctx, ss.id); err == nil && len(open) > 0 {
+		if slices.ContainsFunc(open, func(f domain.Fault) bool { return f.Kind == domain.FaultNetworkDown }) {
+			s.setOffline(ctx, ss)
+		}
+		ss.settle(ctx)
+	}
 	s.log.Info("camera running", "camera", ss.id, "name", ss.name, "ip", ip, "netns", launched.Netns, "pid", launched.PID)
 	if ss.takeStale() {
 		s.goBackground(func(ctx context.Context) { ss.sync(ctx) })
@@ -1137,6 +1145,7 @@ func (s *Service) buildConfigure(b *cameraBundle, streams []ipc.Stream, ip strin
 	}
 	cfg.Targets = targets
 	cfg.VCA = vcaConfig(b)
+	cfg.Faults = s.startFaults(s.baseCtx, b.cam.ID)
 	return cfg, nil
 }
 

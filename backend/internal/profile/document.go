@@ -47,6 +47,8 @@ type Identity struct {
 	OUI     string            `json:"oui,omitempty"`
 	Factory Factory           `json:"factory"`
 	Device  map[string]string `json:"device,omitempty"`
+	// BootTime is how long the device takes to come back from a reboot.
+	BootTime Duration `json:"boot_time,omitempty"`
 }
 
 // Factory values are what a camera gets when reset to factory defaults.

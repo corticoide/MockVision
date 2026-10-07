@@ -984,3 +984,65 @@ func (s *Server) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, ev)
 }
+
+// --- Faults ---
+
+func (s *Server) handleRebootCamera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Seconds *int `json:"seconds"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &body); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	v, err := s.svc.RebootCamera(ctx, actor(r), r.PathValue("id"), body.Seconds)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, v)
+}
+
+func (s *Server) handleListFaults(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListFaults(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
+	var in app.FaultInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	f, err := s.svc.InjectFault(r.Context(), actor(r), r.PathValue("id"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, f)
+}
+
+func (s *Server) handleEndFault(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.EndFault(r.Context(), actor(r), r.PathValue("id"), r.PathValue("fault")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleActiveFaults(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ActiveFaults(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}

@@ -94,11 +94,6 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 		policy.Backoff = d
 	}
 	for transport, raw := range spec.Transports {
-		deliver := subs[transport]
-		if deliver == nil {
-			b.rt.tel.Log(slog.LevelWarn, "no engine delivers transport", "transport", transport)
-			continue
-		}
 		var matched []engine.Target
 		for _, t := range targets {
 			if !slices.Contains(engine.TransportTargets[transport], t.Type) || !wantsType(t.EventTypes, e.Type) {
@@ -107,6 +102,12 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 			matched = append(matched, t.Target)
 		}
 		if len(matched) == 0 {
+			continue
+		}
+		deliver := subs[transport]
+		if deliver == nil {
+			// Its engine is disabled on this camera.
+			b.rt.tel.Log(slog.LevelWarn, "no engine delivers transport", "transport", transport)
 			continue
 		}
 		deliver(engine.Dispatch{Event: e, VendorName: vendor, Transport: raw, Policy: policy, Targets: matched})

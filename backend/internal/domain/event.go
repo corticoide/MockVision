@@ -24,12 +24,16 @@ const (
 	EventLPR            EventType = "lpr"
 	EventSpeed          EventType = "speed"
 	EventTamper         EventType = "tamper"
+	// System events: the device's own state, as its faults raise them.
+	EventNetworkLost EventType = "network_lost"
+	EventIPConflict  EventType = "ip_conflict"
 )
 
 // CanonicalEventTypes lists the built-in canonical types.
 var CanonicalEventTypes = []EventType{
 	EventLineCrossing, EventRegionEntrance, EventRegionExit, EventLoitering,
 	EventIntrusion, EventMotion, EventLPR, EventSpeed, EventTamper,
+	EventNetworkLost, EventIPConflict,
 }
 
 // CustomEventPrefix marks vendor specific types: custom:<name>.

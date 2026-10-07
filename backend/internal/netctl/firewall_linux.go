@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
 
@@ -224,4 +226,64 @@ func native32(v uint32) []byte {
 	b := make([]byte, 4)
 	binary.NativeEndian.PutUint32(b, v)
 	return b
+}
+
+// offlineTable is the table that takes a camera off the network.
+const offlineTable = "mockvision_offline"
+
+// setOffline takes a camera namespace off the network, or back: an ip
+// table drops everything in and out but loopback, and its interface stops
+// speaking ARP, so the camera answers nobody, not even ARP, and reaches
+// nobody, as a device whose cable was pulled. Its addresses and routes
+// stay as they were.
+func setOffline(nsfd int, offline bool) error {
+	c, err := nftables.New(nftables.WithNetNSFd(nsfd))
+	if err != nil {
+		return err
+	}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	if err != nil {
+		return fmt.Errorf("nftables unavailable: %w", err)
+	}
+	for _, t := range tables {
+		if t.Name == offlineTable {
+			c.DelTable(t)
+		}
+	}
+	if offline {
+		t := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: offlineTable})
+		policy := nftables.ChainPolicyDrop
+		for _, hook := range []*nftables.ChainHook{nftables.ChainHookInput, nftables.ChainHookOutput} {
+			name, iface := "input", expr.MetaKeyIIFNAME
+			if hook == nftables.ChainHookOutput {
+				name, iface = "output", expr.MetaKeyOIFNAME
+			}
+			ch := c.AddChain(&nftables.Chain{
+				Name: name, Table: t, Type: nftables.ChainTypeFilter,
+				Hooknum: hook, Priority: nftables.ChainPriorityFilter, Policy: &policy,
+			})
+			// meta iifname/oifname "lo" accept
+			c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
+				&expr.Meta{Key: iface, Register: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname("lo")},
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			}})
+		}
+	}
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("nftables: %w", err)
+	}
+	nh, err := netlink.NewHandleAt(netns.NsHandle(nsfd))
+	if err != nil {
+		return err
+	}
+	defer nh.Close()
+	eth, err := nh.LinkByName("eth0")
+	if err != nil {
+		return err
+	}
+	if offline {
+		return nh.LinkSetARPOff(eth)
+	}
+	return nh.LinkSetARPOn(eth)
 }

@@ -22,6 +22,18 @@ type Host interface {
 	// Files is the camera's simulated SD card; nil when the camera has none.
 	Files() Files
 	Telemetry() Telemetry
+	// Faults are the failures injected into the camera (D43); nil when the
+	// host injects none.
+	Faults() Faults
+}
+
+// Faults are the failures injected into a camera. Engines that answer
+// requests ask them on every request, so a fault applies at once.
+type Faults interface {
+	// Status is the status every request to an engine instance gets while
+	// a fault is on, such as 401 or 500; 0 when none. A 401 comes with the
+	// engine's usual challenge, as a device that refuses the credentials.
+	Status(instance string) int
 }
 
 // Accounts are the camera's user accounts (D11): at least one

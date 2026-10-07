@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -24,10 +25,12 @@ type stateStore struct {
 	next     int
 
 	report func([]engine.Change)
+	// skew moves the clock, as a clock_skew fault does.
+	skew func() time.Duration
 }
 
-func newStateStore(m *profile.Model, initial map[string]any, report func([]engine.Change)) *stateStore {
-	s := &stateStore{model: m, values: m.Defaults(), watchers: map[int]func([]engine.Change){}, report: report}
+func newStateStore(m *profile.Model, initial map[string]any, report func([]engine.Change), skew func() time.Duration) *stateStore {
+	s := &stateStore{model: m, values: m.Defaults(), watchers: map[int]func([]engine.Change){}, report: report, skew: skew}
 	for k, v := range initial {
 		p, ok := m.Doc.State[k]
 		if !ok {
@@ -117,10 +120,19 @@ func (s *stateStore) Set(_ context.Context, in map[string]any, origin engine.Ori
 	return changes, nil
 }
 
+// Canon implements engine.State. time.offset, the camera clock's offset
+// in seconds, includes a clock_skew fault.
 func (s *stateStore) Canon(key string) (any, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.model.Canon(key, s.values)
+	v, ok := s.model.Canon(key, s.values)
+	s.mu.RUnlock()
+	if key == "time.offset" && s.skew != nil {
+		if d := s.skew(); d != 0 {
+			secs, _ := v.(int64)
+			return secs + int64(d/time.Second), true
+		}
+	}
+	return v, ok
 }
 
 func (s *stateStore) Watch(fn func([]engine.Change)) func() {

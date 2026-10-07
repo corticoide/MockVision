@@ -255,6 +255,10 @@ func (s *Server) Handler() http.Handler {
 	auth("POST /api/v1/cameras/{id}/actions/{action}", s.handleCameraAction)
 	auth("POST /api/v1/cameras/{id}/actions/factory-reset", s.handleResetCamera)
 	auth("POST /api/v1/cameras/{id}/actions/clone", s.handleCloneCamera)
+	auth("POST /api/v1/cameras/{id}/actions/reboot", s.handleRebootCamera)
+	auth("GET /api/v1/cameras/{id}/faults", s.handleListFaults)
+	auth("POST /api/v1/cameras/{id}/faults", s.handleInjectFault)
+	auth("DELETE /api/v1/cameras/{id}/faults/{fault}", s.handleEndFault)
 	auth("PUT /api/v1/cameras/{id}/users", s.handleSetCameraUsers)
 	auth("PUT /api/v1/cameras/{id}/protocols", s.handleSetCameraProtocols)
 	auth("PATCH /api/v1/cameras/{id}/streams/{stream}", s.handleUpdateCameraStream)
@@ -283,6 +287,8 @@ func (s *Server) Handler() http.Handler {
 	auth("PATCH /api/v1/targets/{id}", s.handleUpdateTarget)
 	auth("DELETE /api/v1/targets/{id}", s.handleDeleteTarget)
 	auth("POST /api/v1/targets/{id}/actions/test", s.handleTestTarget)
+
+	auth("GET /api/v1/faults", s.handleActiveFaults)
 
 	auth("GET /api/v1/events", s.handleListEvents)
 	auth("GET /api/v1/events/{id}", s.handleGetEvent)

@@ -105,7 +105,7 @@ func newTestServiceRuntime(t *testing.T, ffmpeg string, wrap func(netctl.Runtime
 func createCamera(t *testing.T, svc *Service, name string, start bool) *CameraView {
 	t.Helper()
 	v, err := svc.CreateCamera(context.Background(), testActor, CreateCameraInput{
-		Name: name, ProfileID: "milesight/demo", ProfileVersion: "0.5.0", Start: start,
+		Name: name, ProfileID: "milesight/demo", ProfileVersion: "0.6.0", Start: start,
 	})
 	if err != nil {
 		t.Fatal(err)

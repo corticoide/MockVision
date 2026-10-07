@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/corticoide/mockvision/sdk/engine"
@@ -164,8 +165,18 @@ func WithDialer(ctx context.Context, d *net.Dialer) context.Context {
 	return context.WithValue(ctx, dialerKey{}, d)
 }
 
+// offline is set while the camera is off the network: it reaches nobody.
+var offline atomic.Bool
+
+// SetOffline takes the camera's outgoing connections off the network, or
+// back, as a network_down fault does.
+func SetOffline(v bool) { offline.Store(v) }
+
 // Dial opens a connection to a target, with the dialer of ctx if it has one.
 func Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if offline.Load() {
+		return nil, fmt.Errorf("dial %s %s: %w", network, address, syscall.ENETUNREACH)
+	}
 	d, ok := ctx.Value(dialerKey{}).(*net.Dialer)
 	if !ok {
 		d = Dialer

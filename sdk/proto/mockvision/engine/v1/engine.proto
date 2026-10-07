@@ -52,6 +52,10 @@ service Host {
   rpc FilePut(stream FileChunk) returns (FilePutResponse);
   rpc FileGet(FileGetRequest) returns (stream FileChunk);
   // Telemetry
+  // The status every request to an engine instance gets while an injected
+  // fault is on; 0 when none.
+  rpc FaultStatus(FaultStatusRequest) returns (FaultStatusResponse);
+
   rpc Log(LogRequest) returns (LogResponse);
   rpc RequestStat(RequestStatRequest) returns (RequestStatResponse);
   rpc Gap(GapRequest) returns (GapResponse);
@@ -344,3 +348,11 @@ message GapRequest {
 }
 
 message GapResponse {}
+
+message FaultStatusRequest {
+  string instance = 1;
+}
+
+message FaultStatusResponse {
+  int32 status = 1;
+}

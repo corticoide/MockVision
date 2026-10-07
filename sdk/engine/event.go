@@ -8,8 +8,8 @@ type Event struct {
 	ID   string    `json:"id"`
 	Type string    `json:"type"`
 	At   time.Time `json:"at"`
-	// Trigger is what produced the event: manual, random, schedule, script
-	// or external.
+	// Trigger is what produced the event: manual, random, schedule, script,
+	// external, or fault for a failure injected into the camera.
 	Trigger   string         `json:"trigger,omitempty"`
 	Rule      *Rule          `json:"rule,omitempty"`
 	Direction string         `json:"direction,omitempty"`

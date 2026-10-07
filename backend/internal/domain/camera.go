@@ -29,7 +29,7 @@ var transitions = map[CameraState][]CameraState{
 	StateProvisioning: {StateStarting, StateError, StateStopping},
 	StateStarting:     {StateRunning, StateError, StateStopping},
 	StateRunning:      {StateDegraded, StateRestarting, StateStopping, StateError},
-	StateDegraded:     {StateRunning, StateStopping, StateError},
+	StateDegraded:     {StateRunning, StateRestarting, StateStopping, StateError},
 	StateRestarting:   {StateStarting, StateStopping, StateError},
 	StateStopping:     {StateStopped, StateError},
 	StateError:        {StateProvisioning, StateStopping, StateStopped},

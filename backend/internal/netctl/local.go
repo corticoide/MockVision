@@ -151,6 +151,11 @@ func (l *LocalRuntime) SetAddress(context.Context, AddressSpec) error {
 	return errorf(CodeUnsupported, "local mode has no DHCP")
 }
 
+// SetOffline implements Runtime; local cameras share the node's network,
+// which stays: the camera process alone refuses its clients and fails its
+// deliveries.
+func (l *LocalRuntime) SetOffline(context.Context, string, bool) error { return nil }
+
 // SetFirewall implements Runtime; local cameras share the node's network
 // and have no firewall of their own.
 func (l *LocalRuntime) SetFirewall(context.Context, string, Firewall) error { return nil }

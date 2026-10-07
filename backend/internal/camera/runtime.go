@@ -76,6 +76,7 @@ type Runtime struct {
 	tel       *telemetry
 	identity  engine.Identity
 	accounts  accountStore
+	faults    *faultSet
 
 	dhcp *dhcpClient
 	dns  dnsServers
@@ -106,6 +107,7 @@ func NewRuntime(opts Options) *Runtime {
 		stopReq:    make(chan time.Duration, 1),
 	}
 	rt.events = newEventBus(rt)
+	rt.faults = newFaultSet(rt)
 	rt.vca = newVCA(rt)
 	rt.events.observe = rt.vca.observe
 	rt.tel = newTelemetry(rt)
@@ -133,6 +135,9 @@ func (r *Runtime) Files() engine.Files { return nil }
 
 // Telemetry implements engine.Host.
 func (r *Runtime) Telemetry() engine.Telemetry { return r.tel }
+
+// Faults implements engine.Host.
+func (r *Runtime) Faults() engine.Faults { return r.faults }
 
 // now is the camera clock.
 func (r *Runtime) now() time.Time {
@@ -298,8 +303,23 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, err
 		}
 		return r.probeTarget(ctx, tt.Target), nil
-	case ipc.TypeFaultStart, ipc.TypeFaultStop:
-		return nil, ipc.Errorf("unsupported", "fault injection is not available in this version")
+	case ipc.TypeFaultStart:
+		var f ipc.Fault
+		if err := msg.Decode(&f); err != nil {
+			return nil, err
+		}
+		if r.model == nil {
+			return nil, ipc.Errorf("state", "camera not configured")
+		}
+		r.faults.start(ctx, f, true)
+		return nil, nil
+	case ipc.TypeFaultStop:
+		var f ipc.FaultStop
+		if err := msg.Decode(&f); err != nil {
+			return nil, err
+		}
+		r.faults.stop(f.ID)
+		return nil, nil
 	}
 	return nil, ipc.Errorf("unsupported", "unknown message type %q", msg.Type)
 }
@@ -320,7 +340,9 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		if err := r.conn.Notify(ipc.TypeStateChanged, ipc.StateChanged{Changes: changes}); err != nil {
 			r.log.Warn("cannot report state change", "error", err)
 		}
-	})
+	}, r.faults.skew)
+	// Faults on as the camera starts apply before any engine listens.
+	r.faults.set(cfg.Faults)
 	r.vca.setCaps(doc.VCACaps())
 	r.templates = tmpl.NewCompiler(tmpl.Env{
 		State:    r.state.Get,
@@ -451,7 +473,7 @@ func (r *Runtime) startEngine(ctx context.Context, instance string, section []by
 			if err != nil {
 				return nil, err
 			}
-			in.Listeners[spec.Name] = ln
+			in.Listeners[spec.Name] = &gatedListener{Listener: ln, instance: instance, faults: r.faults}
 		case "udp":
 			if sock == nil {
 				continue // optional: RTSP falls back to TCP

@@ -23,6 +23,7 @@ const (
 
 	msgAddress  = "camera.address"
 	msgFirewall = "camera.firewall"
+	msgOffline  = "camera.offline"
 	msgBridge   = "node.bridge"
 )
 

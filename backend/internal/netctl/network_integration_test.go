@@ -531,3 +531,51 @@ func TestIPvlan(t *testing.T) {
 		t.Fatalf("expected ip_in_use from the parent's probe, got %v", err)
 	}
 }
+
+// Off the network, a camera answers nobody, not even ARP, and reaches
+// nobody; back, it works as before, with its address and routes.
+func TestOffline(t *testing.T) {
+	host := requireRoot(t)
+	testParent(t, "mvtest5")
+	dev := lanDevice(t, "mvtest5", "sim-itest-dev5", "10.96.2.20", nil)
+	listen(t, dev.fd, "10.96.2.20:9000")
+	spec := testSpec("01J8Z3QK0000000000000F0005", "10.96.2.10")
+	spec.Parent = "mvtest5"
+	ns, err := createNamespace(spec.Netns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ns.delete()
+	if _, err := setupInterface(host, ns, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	listen(t, ns.fd, ":80")
+	if err := dial(dev.fd, "10.96.2.10:80"); err != nil {
+		t.Fatalf("before: %v", err)
+	}
+	if err := setOffline(int(ns.fd), true); err != nil {
+		t.Fatal(err)
+	}
+	// The device forgets the camera's MAC: it has to ask again by ARP.
+	if nh, err := netlink.NewHandleAt(dev.fd); err == nil {
+		if l, err := nh.LinkByName("eth0"); err == nil {
+			_ = nh.NeighDel(&netlink.Neigh{LinkIndex: l.Attrs().Index, IP: net.ParseIP("10.96.2.10")})
+		}
+		nh.Close()
+	}
+	if err := dial(dev.fd, "10.96.2.10:80"); err == nil {
+		t.Fatal("a client reached the camera off the network")
+	}
+	if err := dial(ns.fd, "10.96.2.20:9000"); err == nil {
+		t.Fatal("the camera reached a device off the network")
+	}
+	if err := setOffline(int(ns.fd), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := dial(dev.fd, "10.96.2.10:80"); err != nil {
+		t.Fatalf("back on the network: %v", err)
+	}
+	if err := dial(ns.fd, "10.96.2.20:9000"); err != nil {
+		t.Fatalf("the camera cannot reach the device once back: %v", err)
+	}
+}

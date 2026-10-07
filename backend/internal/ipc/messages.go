@@ -125,6 +125,21 @@ type Configure struct {
 	VCA      VCA             `json:"vca"`
 	// DNS servers of the camera; empty means the node's.
 	DNS []string `json:"dns,omitempty"`
+	// Faults are the ones on as the camera starts; they raise no event.
+	Faults []Fault `json:"faults,omitempty"`
+}
+
+// Fault is a failure injected into the camera (D43), sent with
+// fault.start; the camera raises the fault's event, if any, as it starts.
+type Fault struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	domain.FaultParams
+}
+
+// FaultStop ends a fault.
+type FaultStop struct {
+	ID string `json:"id"`
 }
 
 // Reload replaces parts of the configuration; nil fields stay as they are.

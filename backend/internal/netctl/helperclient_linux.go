@@ -162,6 +162,11 @@ func (r *HelperRuntime) SetFirewall(ctx context.Context, cameraID string, f Fire
 	return r.request(ctx, msgFirewall, firewallRequest{ID: cameraID, Firewall: f}, nil, nil)
 }
 
+// SetOffline implements Runtime.
+func (r *HelperRuntime) SetOffline(ctx context.Context, cameraID string, offline bool) error {
+	return r.request(ctx, msgOffline, offlineRequest{ID: cameraID, Offline: offline}, nil, nil)
+}
+
 // SetBridge implements Runtime.
 func (r *HelperRuntime) SetBridge(ctx context.Context, b BridgeSpec) (BridgeState, error) {
 	var st BridgeState

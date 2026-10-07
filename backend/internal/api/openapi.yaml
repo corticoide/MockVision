@@ -32,6 +32,8 @@ tags:
   - name: assets
   - name: targets
   - name: events
+  - name: faults
+    description: Failures injected into a camera (D43) and its simulated reboot
 
 paths:
   /auth/setup:
@@ -442,6 +444,74 @@ paths:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/reboot:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [faults]
+      operationId: rebootCamera
+      description: >
+        Reboots a running camera as the real one does (D43): it leaves the
+        network and comes back after its boot time, the profile's (30 s
+        when it says none) unless seconds is given. Starting or stopping it
+        meanwhile ends the wait.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seconds: { type: integer, minimum: 0, maximum: 600 }
+      responses:
+        "202": { description: Rebooting, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/faults:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [faults]
+      operationId: listCameraFaults
+      description: The camera's faults, those on first, then the last ended ones.
+      responses:
+        "200":
+          description: Faults
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Fault" } }
+    post:
+      tags: [faults]
+      operationId: injectFault
+      description: >
+        Injects a fault (D43). It applies at once on a running camera, which
+        turns degraded; a stopped one gets it as it starts, while it lasts.
+        Every fault ends when its duration is over or by hand (RN-14); a
+        duration of 0 lasts until ended. A fault of the same kind on the
+        same protocol replaces the one in place.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FaultInput" }
+      responses:
+        "201": { description: Injected, content: { application/json: { schema: { $ref: "#/components/schemas/Fault" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/faults/{fault}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: fault, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [faults]
+      operationId: endFault
+      responses:
+        "204": { description: Ended }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /cameras/{id}/users:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -832,6 +902,22 @@ paths:
       operationId: testTarget
       responses:
         "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/TargetTest" } } } }
+
+  /faults:
+    get:
+      tags: [faults]
+      operationId: listActiveFaults
+      description: The faults on in every camera.
+      responses:
+        "200":
+          description: Faults
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Fault" } }
 
   /events:
     get:
@@ -1649,6 +1735,44 @@ components:
         error: { type: string }
         from: { type: string, enum: [camera, node] }
         camera: { type: string, description: Name of the camera the request left from }
+    FaultKind:
+      type: string
+      enum: [service_down, latency, error_status, clock_skew, network_down, ip_conflict]
+      description: >
+        service_down: a protocol resets its connections and refuses new
+        ones. latency: everything a protocol reads waits latency_ms.
+        error_status: every request of the HTTP API or RTSP gets status
+        (401 with a challenge). clock_skew: the camera's clock moves skew_s.
+        network_down: the camera answers nobody, not even ARP, and reaches
+        nobody; it raises network_lost. ip_conflict: it raises ip_conflict.
+    FaultInput:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/FaultKind" }
+        instance: { type: string, description: "The protocol's engine instance, as the profile names it (service_down, latency, error_status)" }
+        status: { type: integer, enum: [401, 403, 404, 500, 503] }
+        latency_ms: { type: integer, minimum: 1, maximum: 30000 }
+        skew_s: { type: integer, description: Seconds the clock moves; not 0, at most a year either way }
+        duration_s: { type: integer, minimum: 0, maximum: 86400, description: 0 lasts until ended by hand }
+    Fault:
+      type: object
+      required: [id, camera_id, kind, started_at, expires_at, ended_at, created_by, active]
+      properties:
+        id: { type: string }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        kind: { $ref: "#/components/schemas/FaultKind" }
+        instance: { type: string }
+        status: { type: integer }
+        latency_ms: { type: integer }
+        skew_s: { type: integer }
+        started_at: { type: string, format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        ended_by: { type: string, description: "expired, replaced, or who ended it" }
+        created_by: { type: string }
+        active: { type: boolean }
     Point:
       description: A position on the picture, from 0 to 1 from its top left corner.
       type: object

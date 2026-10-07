@@ -314,6 +314,20 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cc.cfg.Server != "" {
 		cw.Header().Set("Server", cc.cfg.Server)
 	}
+	// An injected fault answers every request with its status; a 401
+	// challenges the client, as a device that refuses its credentials.
+	if f := e.in.Host.Faults(); f != nil {
+		if st := f.Status(e.in.Instance); st != 0 {
+			routeID = "fault"
+			if st == http.StatusUnauthorized {
+				cc.auth.challenge(cw, false)
+			}
+			cw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			cw.WriteHeader(st)
+			_, _ = fmt.Fprintf(cw, "%d %s\n", st, http.StatusText(st))
+			return
+		}
+	}
 
 	user, ok, stale := cc.auth.check(r)
 	if !ok {

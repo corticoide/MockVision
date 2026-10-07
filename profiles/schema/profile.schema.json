@@ -90,6 +90,10 @@
           "description": "Device data exposed to templates, such as firmware or hardware versions.",
           "type": "object",
           "additionalProperties": { "type": "string" }
+        },
+        "boot_time": {
+          "description": "How long the device takes to come back from a reboot; 30s when omitted.",
+          "$ref": "#/$defs/duration"
         }
       }
     },

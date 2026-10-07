@@ -205,6 +205,7 @@ func (s *Service) Run(ctx context.Context) error {
 	s.goLoop(s.publishNodeMetrics)
 	s.goLoop(s.watchExits)
 	s.goLoop(s.retentionLoop)
+	s.goLoop(s.faultLoop)
 	s.goLoop(func(ctx context.Context) {
 		if _, err := s.ensureBuiltinAsset(ctx); err != nil && ctx.Err() == nil {
 			s.log.Warn("cannot create the built-in test pattern", "error", err)

@@ -294,6 +294,9 @@ type Runtime interface {
 	SetFirewall(ctx context.Context, cameraID string, f Firewall) error
 	// SetBridge turns the node's access to its cameras on or off (D26).
 	SetBridge(ctx context.Context, b BridgeSpec) (BridgeState, error)
+	// SetOffline takes a running camera off the network, or back: it
+	// answers nobody and reaches nobody (a network_down fault).
+	SetOffline(ctx context.Context, cameraID string, offline bool) error
 }
 
 // Error codes returned by runtimes.

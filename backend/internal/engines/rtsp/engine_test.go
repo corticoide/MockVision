@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,9 +25,20 @@ import (
 
 // fakeHost is the smallest camera the engine runs in: one stream and the
 // accounts the test asks for.
+// fakeFaults answers every instance with one status; nil answers none.
+type fakeFaults struct{ status atomic.Int32 }
+
+func (f *fakeFaults) Status(string) int {
+	if f == nil {
+		return 0
+	}
+	return int(f.status.Load())
+}
+
 type fakeHost struct {
-	src   *engine.VideoSource
-	users fakeAccounts
+	faults *fakeFaults
+	src    *engine.VideoSource
+	users  fakeAccounts
 }
 
 func (h fakeHost) Accounts() engine.Accounts   { return h.users }
@@ -35,6 +47,7 @@ func (h fakeHost) Events() engine.Events       { return nil }
 func (h fakeHost) Media() engine.Media         { return fakeMedia{h.src} }
 func (h fakeHost) Templates() engine.Templates { return tmpl.NewCompiler(tmpl.Env{}) }
 func (h fakeHost) Files() engine.Files         { return nil }
+func (h fakeHost) Faults() engine.Faults       { return h.faults }
 func (h fakeHost) Telemetry() engine.Telemetry { return fakeTelemetry{} }
 
 type fakeAccounts []engine.User
@@ -230,4 +243,38 @@ func TestChallengeNamesTheCamera(t *testing.T) {
 		}
 	}
 	playURL(t, "rtsp://admin:secret@"+addr+"/sub", 1)
+}
+
+// An injected fault answers every request with its status; a 401 comes
+// with the camera's challenge.
+func TestFaultStatus(t *testing.T) {
+	faults := &fakeFaults{}
+	h := fakeHost{src: gop(25, 10), faults: faults}
+	addr := startEngineWith(t, h, engine.Identity{}, `{"engine": "rtsp@^1", "auth": {"scheme": "none"}, "paths": {"sub": "/sub"}}`)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	describe := func(cseq int) base.Response {
+		fmt.Fprintf(conn, "DESCRIBE rtsp://%s/sub RTSP/1.0\r\nCSeq: %d\r\n\r\n", addr, cseq)
+		var res base.Response
+		if err := res.Unmarshal(br); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	faults.status.Store(503)
+	if res := describe(1); res.StatusCode != base.StatusServiceUnavailable {
+		t.Fatalf("503 fault: %d", res.StatusCode)
+	}
+	faults.status.Store(401)
+	if res := describe(2); res.StatusCode != base.StatusUnauthorized || len(res.Header["WWW-Authenticate"]) == 0 {
+		t.Fatalf("401 fault: %d %v", res.StatusCode, res.Header)
+	}
+	faults.status.Store(0)
+	if res := describe(3); res.StatusCode != base.StatusOK {
+		t.Fatalf("after the fault: %d", res.StatusCode)
+	}
 }

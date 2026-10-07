@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,7 +22,18 @@ import (
 )
 
 // fakeHost is the smallest camera an engine can run in.
+// fakeFaults answers every instance with one status; nil answers none.
+type fakeFaults struct{ status atomic.Int32 }
+
+func (f *fakeFaults) Status(string) int {
+	if f == nil {
+		return 0
+	}
+	return int(f.status.Load())
+}
+
 type fakeHost struct {
+	faults   *fakeFaults
 	accounts fakeAccounts
 	state    *fakeState
 }
@@ -32,6 +44,7 @@ func (h fakeHost) Events() engine.Events       { return nil }
 func (h fakeHost) Media() engine.Media         { return fakeMedia{} }
 func (h fakeHost) Templates() engine.Templates { return tmpl.NewCompiler(tmpl.Env{State: h.state.Get}) }
 func (h fakeHost) Files() engine.Files         { return nil }
+func (h fakeHost) Faults() engine.Faults       { return h.faults }
 func (h fakeHost) Telemetry() engine.Telemetry { return fakeTelemetry{} }
 
 type fakeAccounts []engine.User
@@ -123,7 +136,16 @@ func startEngine(t *testing.T) string {
 
 func startEngineWith(t *testing.T, config string, id engine.Identity) string {
 	t.Helper()
+	base, _ := startEngineFaults(t, config, id)
+	return base
+}
+
+// startEngineFaults starts the engine with faults the test can turn on.
+func startEngineFaults(t *testing.T, config string, id engine.Identity) (string, *fakeFaults) {
+	t.Helper()
+	faults := &fakeFaults{}
 	h := fakeHost{
+		faults: faults,
 		accounts: fakeAccounts{
 			{Username: "admin", Password: "a", Role: RoleAdmin},
 			{Username: "op", Password: "o", Role: RoleOperator},
@@ -144,7 +166,7 @@ func startEngineWith(t *testing.T, config string, id engine.Identity) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.Stop(context.Background()) })
-	return "http://" + ln.Addr().String()
+	return "http://" + ln.Addr().String(), faults
 }
 
 func md5s(s string) string {
@@ -292,5 +314,34 @@ func TestRealmValidation(t *testing.T) {
 		if (want == "") != (len(got) == 0) || want != "" && !strings.Contains(strings.Join(got, "; "), want) {
 			t.Errorf("realm %s: problems %q, want %q", realm, got, want)
 		}
+	}
+}
+
+// An injected fault answers every request with its status, before the
+// credentials are checked; a 401 challenges, as a device refusing them.
+func TestFaultStatus(t *testing.T) {
+	base, faults := startEngineFaults(t, testConfig, engine.Identity{})
+	auth := digestHeader(t, base, "GET", "/snapshot.cgi", "/snapshot.cgi", "admin", "a", 1)
+	if code, _ := send(t, base, "GET", "/snapshot.cgi", auth, ""); code != http.StatusOK {
+		t.Fatalf("before the fault: %d", code)
+	}
+	faults.status.Store(500)
+	auth = digestHeader(t, base, "GET", "/snapshot.cgi", "/snapshot.cgi", "admin", "a", 2)
+	if code, body := send(t, base, "GET", "/snapshot.cgi", auth, ""); code != http.StatusInternalServerError || body != "500 Internal Server Error\n" {
+		t.Fatalf("500 fault: %d %q", code, body)
+	}
+	faults.status.Store(401)
+	resp, err := http.Get(base + "/snapshot.cgi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Digest ") {
+		t.Fatalf("401 fault: %d %q", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+	}
+	faults.status.Store(0)
+	auth = digestHeader(t, base, "GET", "/snapshot.cgi", "/snapshot.cgi", "admin", "a", 3)
+	if code, _ := send(t, base, "GET", "/snapshot.cgi", auth, ""); code != http.StatusOK {
+		t.Fatalf("after the fault: %d", code)
 	}
 }

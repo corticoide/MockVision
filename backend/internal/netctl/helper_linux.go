@@ -161,6 +161,11 @@ func (h *Helper) handle(env *ipc.Envelope, fds []int) {
 		if err = json.Unmarshal(env.Data, &req); err == nil {
 			err = h.setFirewall(&req)
 		}
+	case msgOffline:
+		var req offlineRequest
+		if err = json.Unmarshal(env.Data, &req); err == nil {
+			err = h.setOffline(&req)
+		}
 	case msgBridge:
 		var req BridgeSpec
 		if err = json.Unmarshal(env.Data, &req); err == nil {
@@ -387,6 +392,28 @@ func (h *Helper) setFirewall(req *firewallRequest) error {
 	}
 	defer cp.op.Unlock()
 	return applyFirewall(int(cp.ns.fd), cp.spec.Sockets, cp.spec.DHCP(), &req.Firewall)
+}
+
+// offlineRequest takes a running camera off the network, or back.
+type offlineRequest struct {
+	ID      string `json:"id"`
+	Offline bool   `json:"offline"`
+}
+
+func (h *Helper) setOffline(req *offlineRequest) error {
+	if !idPattern.MatchString(req.ID) {
+		return errorf(CodeInvalid, "invalid camera id %q", req.ID)
+	}
+	cp, err := h.camera(req.ID)
+	if err != nil {
+		return err
+	}
+	defer cp.op.Unlock()
+	if err := setOffline(int(cp.ns.fd), req.Offline); err != nil {
+		return err
+	}
+	h.opts.Log.Info("camera network", "id", req.ID, "offline", req.Offline)
+	return nil
 }
 
 // setBridge turns the node's access to its cameras on or off (D26).

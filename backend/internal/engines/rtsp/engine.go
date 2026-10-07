@@ -432,6 +432,28 @@ func (e *Engine) authorize(conn *gortsplib.ServerConn, req *base.Request) *base.
 	}
 }
 
+// faulted is the answer an injected fault gives every request, nil when
+// none: a 401 challenges as usual, so the client takes its credentials as
+// refused.
+func (e *Engine) faulted(conn *gortsplib.ServerConn) *base.Response {
+	f := e.in.Host.Faults()
+	if f == nil {
+		return nil
+	}
+	st := f.Status(e.in.Instance)
+	if st == 0 {
+		return nil
+	}
+	res := &base.Response{StatusCode: base.StatusCode(st)}
+	if st == int(base.StatusUnauthorized) {
+		e.mu.RLock()
+		realm := e.realm
+		e.mu.RUnlock()
+		res.Header = base.Header{"WWW-Authenticate": auth.GenerateWWWAuthenticate(authMethods(e.cfg.Auth.Scheme), realm, e.nonce(conn))}
+	}
+	return res
+}
+
 // nonce is the digest nonce of a connection, made at its first request.
 func (e *Engine) nonce(conn *gortsplib.ServerConn) string {
 	if n, ok := e.nonces.Load(conn); ok {
@@ -472,6 +494,9 @@ func (e *Engine) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 
 // OnDescribe implements gortsplib.ServerHandlerOnDescribe.
 func (e *Engine) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Response, *gortsplib.ServerStream, error) {
+	if res := e.faulted(ctx.Conn); res != nil {
+		return res, nil, nil
+	}
 	if res := e.authorize(ctx.Conn, ctx.Request); res != nil {
 		return res, nil, nil
 	}
@@ -485,6 +510,9 @@ func (e *Engine) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 
 // OnSetup implements gortsplib.ServerHandlerOnSetup.
 func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
+	if res := e.faulted(ctx.Conn); res != nil {
+		return res, nil, nil
+	}
 	if res := e.authorize(ctx.Conn, ctx.Request); res != nil {
 		return res, nil, nil
 	}
@@ -508,6 +536,9 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 // (OnResponse): a frame sent in between would reach the viewer before
 // its keyframe.
 func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
+	if res := e.faulted(ctx.Conn); res != nil {
+		return res, nil
+	}
 	sess := stateOf(ctx.Session)
 	sess.mu.Lock()
 	authorized := sess.authorized

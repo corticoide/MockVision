@@ -126,7 +126,7 @@ func TestRulesAndTriggers(t *testing.T) {
 		kinds[e.Type] = e
 	}
 	if kinds["line_crossing"].Rule != "line" || kinds["loitering"].Rule != "region" || !kinds["custom:people_counting"].Report ||
-		kinds["custom:people_counting"].Rule != "" || len(cam.EventTypes) != 6 {
+		kinds["custom:people_counting"].Rule != "" || kinds["network_lost"].Rule != "" || len(cam.EventTypes) != 8 {
 		t.Fatalf("event types %+v", cam.EventTypes)
 	}
 
@@ -363,12 +363,12 @@ func TestRulesFollowTheProfile(t *testing.T) {
 		Direction: domain.CrossBoth}}, vcaCaps(&bare)); err == nil {
 		t.Fatal("a profile without analytics accepted a line")
 	}
-	d, err := svc.GetProfile(ctx, "milesight/demo", "0.5.0")
+	d, err := svc.GetProfile(ctx, "milesight/demo", "0.6.0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.VCA.Rules) != 2 || len(d.EventSpecs) != 6 || d.EventSpecs[2].Type != "line_crossing" || d.EventSpecs[2].MinIntervalMS != 1000 ||
-		!slices.Equal(d.EventSpecs[2].Transports, []string{"ftp", "http_push", "mqtt", "smtp"}) || d.EventSpecs[2].Rule != "line" || !d.EventSpecs[0].Report || d.EventSpecs[0].Rule != "" {
+	if len(d.VCA.Rules) != 2 || len(d.EventSpecs) != 8 || d.EventSpecs[3].Type != "line_crossing" || d.EventSpecs[3].MinIntervalMS != 1000 ||
+		!slices.Equal(d.EventSpecs[3].Transports, []string{"ftp", "http_push", "mqtt", "smtp"}) || d.EventSpecs[3].Rule != "line" || !d.EventSpecs[0].Report || d.EventSpecs[0].Rule != "" {
 		t.Fatalf("profile detail vca %+v, events %+v", d.VCA, d.EventSpecs)
 	}
 

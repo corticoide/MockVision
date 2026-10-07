@@ -151,6 +151,18 @@ type Event struct {
 	ExpectedDeliveries int64
 }
 
+type Fault struct {
+	ID         string
+	CameraID   string
+	Kind       string
+	ParamsJson string
+	StartedAt  int64
+	ExpiresAt  sql.NullInt64
+	EndedAt    sql.NullInt64
+	EndedBy    string
+	CreatedBy  string
+}
+
 type Job struct {
 	ID             string
 	Type           string

@@ -25,6 +25,8 @@ type Host struct {
 	T      testing.TB
 	Ident  engine.Identity
 	Params map[string]any
+	// FaultStatus is what Faults().Status answers.
+	FaultStatus int
 
 	mu      sync.Mutex
 	subs    map[string]func(engine.Dispatch)
@@ -137,6 +139,17 @@ func (h *Host) Templates() engine.Templates {
 
 // Files implements engine.Host.
 func (h *Host) Files() engine.Files { return nil }
+
+// Faults implements engine.Host: the status of FaultStatus, for every
+// instance.
+func (h *Host) Faults() engine.Faults { return h }
+
+// Status implements engine.Faults.
+func (h *Host) Status(string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.FaultStatus
+}
 
 // Telemetry implements engine.Host.
 func (h *Host) Telemetry() engine.Telemetry { return h }
