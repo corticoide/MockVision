@@ -9,7 +9,8 @@ Sirve para probar software que consume cámaras sin comprarlas y sin tocar
 equipos en producción. Simula lo que una cámara hace hacia afuera; no la
 reemplaza.
 
-> **Estado: v1 en desarrollo.** Por ahora un perfil de fabricante;
+> **Estado: v1 en desarrollo.** Por ahora un perfil de demo y el borrador
+> de un modelo real (un domo Dahua);
 > [docs/DEMO-NOTES.md](docs/DEMO-NOTES.md) lista lo que sigue simplificado.
 > Read in English: [README.md](README.md).
 
@@ -234,6 +235,35 @@ Los perfiles los sirven en el formato del fabricante con sus plantillas:
 `report: true` (`custom:people_counting`) lleva los conteos en lugar de un
 objeto; un disparador con la misma espera mínima y máxima envía uno a
 intervalo fijo.
+
+### Perfiles
+
+Un perfil describe lo que un modelo de cámara hace en la red, tal como lo
+ven sus clientes: sus streams y rutas RTSP, su API HTTP, los eventos que
+envía y cómo los envía. El panel web propio del equipo queda fuera, y
+también todo ajuste que solo ese panel lee o cambia.
+
+- `profiles/milesight-demo.yaml` es ilustrativo: sus rutas y cuerpos no se
+  capturaron de un equipo.
+- `profiles/dahua-ipc-hdbw1230e-s4.yaml` es el borrador de un modelo real,
+  la Dahua IPC-HDBW1230E-S4 (domo de 2 MP), hecho con su manual, su hoja
+  técnica y la API HTTP pública de Dahua. Sirve RTSP en
+  `/cam/realmonitor?channel=1&subtype=0` (principal) y `subtype=1`
+  (secundario), desafía con `Login to <serie>` como el equipo, y responde
+  `magicBox.cgi`, `snapshot.cgi`, `global.cgi?action=getCurrentTime` y
+  `configManager.cgi`: `getConfig&name=Encode` lee una tabla entera y
+  `setConfig&Encode[0].MainFormat[0].Video.FPS=15` cambia el stream. Con
+  curl, `-g` envía los corchetes tal cual:
+  `curl -g --digest -u admin:admin1234 'http://<ip>/cgi-bin/configManager.cgi?action=getConfig&name=Encode'`.
+  Sus eventos todavía no tienen transporte: una Dahua los envía por
+  `eventManager.cgi?action=attach`, ONVIF o su protocolo privado, todos en
+  el roadmap, igual que los cambios de códec y resolución que llegan al
+  stream. La cabecera del archivo lista lo demás que falta.
+
+Los motores repiten lo que el fabricante muestra en la red: `auth.realm`
+puede nombrar a la cámara (`"Login to {{ .Camera.Serial }}"`) en la API HTTP
+y en RTSP, y `server` del motor RTSP fija la cabecera `Server` de sus
+respuestas.
 
 ### Red
 

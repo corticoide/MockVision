@@ -33,6 +33,9 @@ const (
 // MaxBodyBytes bounds request bodies read by the emulated API.
 const MaxBodyBytes = 1 << 20
 
+// maxRealmBytes bounds a rendered authentication realm.
+const maxRealmBytes = 256
+
 // Engine serves a profile-defined HTTP API for one camera.
 type Engine struct {
 	in   engine.StartInput
@@ -128,7 +131,11 @@ func (e *Engine) compile(raw json.RawMessage) (*compiledConfig, error) {
 		}
 		return e.in.Host.Accounts().List()
 	}
-	cc.auth = newAuthenticator(c.Auth.Scheme, c.Auth.Realm, users)
+	realm, err := e.realm(c.Auth.Realm)
+	if err != nil {
+		return nil, err
+	}
+	cc.auth = newAuthenticator(c.Auth.Scheme, realm, users)
 	for _, r := range c.Routes {
 		cr := &compiledRoute{route: r, segments: splitPath(r.Match.Path), query: map[string]matcher{}, headers: map[string]matcher{}}
 		for k, v := range r.Match.Query {
@@ -152,6 +159,28 @@ func (e *Engine) compile(raw json.RawMessage) (*compiledConfig, error) {
 		cc.unknown = act
 	}
 	return cc, nil
+}
+
+// realm renders the authentication realm. It may name the camera, as
+// vendors do (Dahua challenges with "Login to <serial>"); it is rendered
+// when the engine starts or reloads.
+func (e *Engine) realm(text string) (string, error) {
+	realm := text
+	if strings.Contains(text, "{{") {
+		t, err := e.in.Host.Templates().Compile("realm", text, maxRealmBytes)
+		if err != nil {
+			return "", fmt.Errorf("auth realm: %w", err)
+		}
+		out, err := t.Render(context.Background(), engine.TemplateData{Camera: e.cameraData(), Now: e.now()})
+		if err != nil {
+			return "", fmt.Errorf("auth realm: %w", err)
+		}
+		realm = strings.TrimSpace(string(out))
+	}
+	if err := checkRealm(realm); err != nil {
+		return "", err
+	}
+	return realm, nil
 }
 
 func hasErrors(probs []engine.Problem) bool {
@@ -501,7 +530,9 @@ func (e *Engine) stateGet(r *http.Request, a Action, req *engine.RequestData) ([
 			}
 			continue
 		}
-		matches := st.List(name + ".")
+		// A group name reads its members, as name.member or, for vendors
+		// that index their groups (Dahua's Encode[0]...), name[index].
+		matches := append(st.List(name+"."), st.List(name+"[")...)
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("unknown parameter %s", name)
 		}

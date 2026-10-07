@@ -25,9 +25,9 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/headers"
-	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 	"github.com/pion/rtp"
 
+	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
 
@@ -43,7 +43,12 @@ type Config struct {
 	Port   int    `json:"port,omitempty"`
 	Auth   struct {
 		Scheme string `json:"scheme"`
+		// Realm is the realm of the challenge, ipcam if empty. It may
+		// name the camera, as Dahua's "Login to {{ .Camera.Serial }}".
+		Realm string `json:"realm,omitempty"`
 	} `json:"auth"`
+	// Server is the Server header of the responses, gortsplib if empty.
+	Server string `json:"server,omitempty"`
 	// Paths maps stream names to request paths. A path may carry a query,
 	// as Dahua does: /cam/realmonitor?channel=1&subtype=0.
 	Paths map[string]string `json:"paths"`
@@ -60,8 +65,12 @@ const configSchema = `{
     "auth": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"scheme": {"enum": ["digest", "basic", "none"]}}
+      "properties": {
+        "scheme": {"enum": ["digest", "basic", "none"]},
+        "realm": {"type": "string", "maxLength": 64}
+      }
     },
+    "server": {"type": "string", "maxLength": 128},
     "paths": {
       "type": "object",
       "minProperties": 1,
@@ -77,11 +86,14 @@ type Engine struct {
 	cfg    Config
 	server *gortsplib.Server
 
-	mu      sync.RWMutex
-	streams map[string]*streamer // by stream name
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	unwatch func()
+	mu         sync.RWMutex
+	streams    map[string]*streamer // by stream name
+	realm      string
+	serverName string
+	nonces     sync.Map // digest nonce by *gortsplib.ServerConn
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	unwatch    func()
 
 	state    atomic.Value
 	sessions atomic.Int64
@@ -141,7 +153,53 @@ func (e *Engine) Validate(config json.RawMessage) []engine.Problem {
 		}
 		seen[p] = name
 	}
+	if strings.Contains(c.Auth.Realm, "{{") {
+		if err := tmpl.Check("realm", c.Auth.Realm); err != nil {
+			probs = append(probs, engine.Problem{Path: "/auth/realm", Message: err.Error()})
+		}
+	} else if err := checkRealm(c.Auth.Realm); err != nil {
+		probs = append(probs, engine.Problem{Path: "/auth/realm", Message: err.Error()})
+	}
 	return probs
+}
+
+// defaultRealm is the realm of cameras whose profile names none.
+const defaultRealm = "ipcam"
+
+// renderRealm renders the realm of the challenge, which may name the
+// camera; it is rendered when the engine starts or reloads.
+func (e *Engine) renderRealm(text string) (string, error) {
+	realm := text
+	if strings.Contains(text, "{{") {
+		t, err := e.in.Host.Templates().Compile("realm", text, 256)
+		if err != nil {
+			return "", fmt.Errorf("rtsp: auth realm: %w", err)
+		}
+		id := e.in.Identity
+		out, err := t.Render(context.Background(), engine.TemplateData{Now: time.Now(), Camera: engine.CameraData{
+			ID: id.CameraID, Name: id.Name, IP: id.IP, MAC: id.MAC, Serial: id.Serial,
+			Vendor: id.Vendor, Model: id.Model, Firmware: id.Firmware,
+		}})
+		if err != nil {
+			return "", fmt.Errorf("rtsp: auth realm: %w", err)
+		}
+		realm = strings.TrimSpace(string(out))
+	}
+	if err := checkRealm(realm); err != nil {
+		return "", fmt.Errorf("rtsp: %w", err)
+	}
+	if realm == "" {
+		realm = defaultRealm
+	}
+	return realm, nil
+}
+
+// checkRealm rejects what a quoted challenge parameter cannot carry.
+func checkRealm(realm string) error {
+	if strings.ContainsAny(realm, "\"\\\r\n") {
+		return fmt.Errorf("realm %q: quotes, backslashes and line breaks cannot go in a challenge", realm)
+	}
+	return nil
 }
 
 // Start implements engine.Engine.
@@ -150,6 +208,11 @@ func (e *Engine) Start(ctx context.Context, in engine.StartInput) error {
 	if err := json.Unmarshal(in.Config, &e.cfg); err != nil {
 		return err
 	}
+	realm, err := e.renderRealm(e.cfg.Auth.Realm)
+	if err != nil {
+		return err
+	}
+	e.realm, e.serverName = realm, e.cfg.Server
 	ln := in.Listeners["rtsp"]
 	if ln == nil {
 		return errors.New("rtsp: no listener for socket rtsp")
@@ -264,8 +327,13 @@ func (e *Engine) Reload(ctx context.Context, config json.RawMessage) error {
 	if err := json.Unmarshal(config, &c); err != nil {
 		return err
 	}
+	realm, err := e.renderRealm(c.Auth.Realm)
+	if err != nil {
+		return err
+	}
 	e.mu.Lock()
 	e.cfg.Paths = c.Paths
+	e.realm, e.serverName = realm, c.Server
 	e.mu.Unlock()
 	return nil
 }
@@ -337,27 +405,41 @@ func sameQuery(want, got string) bool {
 	return true
 }
 
-// authorize checks the request credentials against the camera users.
-func (e *Engine) authorize(conn *gortsplib.ServerConn, req *base.Request) bool {
+// authorize checks the request credentials against the camera users. It
+// returns nil for an authorized request, else the 401 that challenges the
+// client with the camera's realm, as the camera answers every failed
+// attempt.
+func (e *Engine) authorize(conn *gortsplib.ServerConn, req *base.Request) *base.Response {
 	if e.cfg.Auth.Scheme == "none" {
-		return true
+		return nil
 	}
+	e.mu.RLock()
+	realm := e.realm
+	e.mu.RUnlock()
+	methods := authMethods(e.cfg.Auth.Scheme)
+	nonce := e.nonce(conn)
 	// Accounts are read on every request: an edited password applies at
 	// once.
-	accounts := e.in.Host.Accounts()
 	var h headers.Authorization
 	if err := h.Unmarshal(req.Header["Authorization"]); err == nil {
-		if u, ok := accounts.Lookup(h.Username); ok {
-			return conn.VerifyCredentials(req, u.Username, u.Password)
+		if u, ok := e.in.Host.Accounts().Lookup(h.Username); ok && auth.Verify(req, u.Username, u.Password, methods, realm, nonce) == nil {
+			return nil
 		}
 	}
-	// VerifyCredentials also creates the connection's nonce, which the
-	// 401 challenge carries; call it even when the request has no
-	// credentials so the challenge is valid.
-	if users := accounts.List(); len(users) > 0 {
-		conn.VerifyCredentials(req, users[0].Username, "\x00")
+	return &base.Response{
+		StatusCode: base.StatusUnauthorized,
+		Header:     base.Header{"WWW-Authenticate": auth.GenerateWWWAuthenticate(methods, realm, nonce)},
 	}
-	return false
+}
+
+// nonce is the digest nonce of a connection, made at its first request.
+func (e *Engine) nonce(conn *gortsplib.ServerConn) string {
+	if n, ok := e.nonces.Load(conn); ok {
+		return n.(string)
+	}
+	n, _ := auth.GenerateNonce()
+	actual, _ := e.nonces.LoadOrStore(conn, n)
+	return actual.(string)
 }
 
 // OnConnOpen implements gortsplib.ServerHandlerOnConnOpen.
@@ -367,6 +449,7 @@ func (e *Engine) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 
 // OnConnClose implements gortsplib.ServerHandlerOnConnClose.
 func (e *Engine) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
+	e.nonces.Delete(ctx.Conn)
 	e.in.Host.Telemetry().Client("rtsp", hostOnly(ctx.Conn.NetConn().RemoteAddr().String()), false)
 }
 
@@ -389,8 +472,8 @@ func (e *Engine) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 
 // OnDescribe implements gortsplib.ServerHandlerOnDescribe.
 func (e *Engine) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Response, *gortsplib.ServerStream, error) {
-	if !e.authorize(ctx.Conn, ctx.Request) {
-		return &base.Response{StatusCode: base.StatusUnauthorized}, nil, liberrors.ErrServerAuth{}
+	if res := e.authorize(ctx.Conn, ctx.Request); res != nil {
+		return res, nil, nil
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
 	if st == nil {
@@ -402,8 +485,8 @@ func (e *Engine) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 
 // OnSetup implements gortsplib.ServerHandlerOnSetup.
 func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
-	if !e.authorize(ctx.Conn, ctx.Request) {
-		return &base.Response{StatusCode: base.StatusUnauthorized}, nil, liberrors.ErrServerAuth{}
+	if res := e.authorize(ctx.Conn, ctx.Request); res != nil {
+		return res, nil, nil
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
 	if st == nil {
@@ -429,8 +512,10 @@ func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 	sess.mu.Lock()
 	authorized := sess.authorized
 	sess.mu.Unlock()
-	if !authorized && !e.authorize(ctx.Conn, ctx.Request) {
-		return &base.Response{StatusCode: base.StatusUnauthorized}, liberrors.ErrServerAuth{}
+	if !authorized {
+		if res := e.authorize(ctx.Conn, ctx.Request); res != nil {
+			return res, nil
+		}
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
 	if st != nil {
@@ -450,10 +535,15 @@ func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 }
 
 // OnResponse implements gortsplib.ServerHandlerOnResponse. It follows
-// every request of a connection; after a PLAY, the server has added the
-// session to the stream's readers, and the stream goes on from its
-// keyframe.
-func (e *Engine) OnResponse(sc *gortsplib.ServerConn, _ *base.Response) {
+// every request of a connection and names the camera's server; after a
+// PLAY, the server has added the session to the stream's readers, and the
+// stream goes on from its keyframe.
+func (e *Engine) OnResponse(sc *gortsplib.ServerConn, res *base.Response) {
+	e.mu.RLock()
+	if e.serverName != "" {
+		res.Header["Server"] = base.HeaderValue{e.serverName}
+	}
+	e.mu.RUnlock()
 	if st, ok := sc.UserData().(*streamer); ok {
 		sc.SetUserData(nil)
 		st.release()

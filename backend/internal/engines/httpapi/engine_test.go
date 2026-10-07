@@ -118,21 +118,29 @@ const testConfig = `{
 
 func startEngine(t *testing.T) string {
 	t.Helper()
+	return startEngineWith(t, testConfig, engine.Identity{})
+}
+
+func startEngineWith(t *testing.T, config string, id engine.Identity) string {
+	t.Helper()
 	h := fakeHost{
 		accounts: fakeAccounts{
 			{Username: "admin", Password: "a", Role: RoleAdmin},
 			{Username: "op", Password: "o", Role: RoleOperator},
 			{Username: "view", Password: "v", Role: RoleViewer},
 		},
-		state: &fakeState{values: map[string]any{"Image.Brightness": 50, "Image.Contrast": 40}},
+		state: &fakeState{values: map[string]any{
+			"Image.Brightness": 50, "Image.Contrast": 40,
+			"Encode[0].MainFormat[0].Video.BitRate": 4096, "Encode[0].ExtraFormat[0].Video.BitRate": 1024,
+		}},
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := New()
-	if err := e.Start(context.Background(), engine.StartInput{Config: json.RawMessage(testConfig), Instance: "http",
-		Listeners: map[string]net.Listener{"http": ln}, Host: h}); err != nil {
+	if err := e.Start(context.Background(), engine.StartInput{Config: json.RawMessage(config), Instance: "http",
+		Identity: id, Listeners: map[string]net.Listener{"http": ln}, Host: h}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.Stop(context.Background()) })
@@ -224,5 +232,65 @@ func TestDigestReplayAndURI(t *testing.T) {
 	pathOnly := digestHeader(t, base, "GET", "/param.cgi", "/param.cgi", "admin", "a", 2)
 	if code, _ := send(t, base, "GET", "/param.cgi?action=set&Image.Brightness=9", pathOnly, ""); code != http.StatusUnauthorized {
 		t.Fatalf("path-only uri with a query: %d", code)
+	}
+}
+
+// A group name reads its members, also when the vendor indexes its groups
+// as Dahua does (Encode[0].MainFormat[0]...); a partial name reads nothing.
+func TestStateGetGroups(t *testing.T) {
+	base := startEngine(t)
+	for i, c := range []struct {
+		name string
+		code int
+		want string
+	}{
+		{"Image", http.StatusOK, "Image.Brightness=50\nImage.Contrast=40"},
+		{"Encode", http.StatusOK, "Encode[0].ExtraFormat[0].Video.BitRate=1024\nEncode[0].MainFormat[0].Video.BitRate=4096"},
+		{"Encode[0].MainFormat[0]", http.StatusOK, "Encode[0].MainFormat[0].Video.BitRate=4096"},
+		{"Enc", http.StatusBadRequest, "Error: unknown parameter Enc"},
+	} {
+		target := "/param.cgi?action=get&name=" + c.name
+		auth := digestHeader(t, base, "GET", target, target, "admin", "a", i+1)
+		code, body := send(t, base, "GET", target, auth, "")
+		if code != c.code || strings.TrimSpace(body) != c.want {
+			t.Errorf("name=%s: %d %q, want %d %q", c.name, code, body, c.code, c.want)
+		}
+	}
+}
+
+// The realm may name the camera, as Dahua's "Login to <serial>" does; the
+// client signs with the realm it was given.
+func TestRealmNamesTheCamera(t *testing.T) {
+	config := strings.Replace(testConfig, `"realm": "cam"`, `"realm": "Login to {{ .Camera.Serial }}"`, 1)
+	base := startEngineWith(t, config, engine.Identity{Serial: "4F0ABCDPAG12345"})
+	resp, err := http.Get(base + "/snapshot.cgi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := parseDigest(strings.TrimPrefix(resp.Header.Get("WWW-Authenticate"), "Digest "))["realm"]; got != "Login to 4F0ABCDPAG12345" {
+		t.Fatalf("realm %q", got)
+	}
+	auth := digestHeader(t, base, "GET", "/snapshot.cgi", "/snapshot.cgi", "admin", "a", 1)
+	if code, _ := send(t, base, "GET", "/snapshot.cgi", auth, ""); code != http.StatusOK {
+		t.Fatalf("signed with the camera's realm: %d", code)
+	}
+}
+
+// A realm must fit in a quoted challenge parameter.
+func TestRealmValidation(t *testing.T) {
+	for realm, want := range map[string]string{
+		`Login to {{ .Camera.Serial }}`: "",
+		`Login to {{ .Camera.Serial`:    "unclosed action",
+		`say \"hi\"`:                    "quotes, backslashes and line breaks",
+	} {
+		config := strings.Replace(testConfig, `"realm": "cam"`, `"realm": "`+realm+`"`, 1)
+		var got []string
+		for _, p := range validate(json.RawMessage(config)) {
+			got = append(got, p.Path+": "+p.Message)
+		}
+		if (want == "") != (len(got) == 0) || want != "" && !strings.Contains(strings.Join(got, "; "), want) {
+			t.Errorf("realm %s: problems %q, want %q", realm, got, want)
+		}
 	}
 }

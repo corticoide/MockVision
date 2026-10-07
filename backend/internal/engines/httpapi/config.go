@@ -22,7 +22,8 @@ type Config struct {
 	Unknown *Action `json:"unknown,omitempty"`
 }
 
-// Auth selects the authentication scheme.
+// Auth selects the authentication scheme. The realm may be a template
+// with the camera's data, such as "Login to {{ .Camera.Serial }}".
 type Auth struct {
 	Scheme string `json:"scheme"`
 	Realm  string `json:"realm,omitempty"`
@@ -186,6 +187,13 @@ func validate(raw json.RawMessage) []engine.Problem {
 	default:
 		add("/auth/scheme", "unknown scheme %q", c.Auth.Scheme)
 	}
+	if strings.Contains(c.Auth.Realm, "{{") {
+		if err := tmpl.Check("realm", c.Auth.Realm); err != nil {
+			add("/auth/realm", "%v", err)
+		}
+	} else if err := checkRealm(c.Auth.Realm); err != nil {
+		add("/auth/realm", "%v", err)
+	}
 	ids := map[string]int{}
 	matches := map[string]string{}
 	for i, r := range c.Routes {
@@ -279,6 +287,14 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 		}
 	}
 	return probs
+}
+
+// checkRealm rejects what a quoted challenge parameter cannot carry.
+func checkRealm(realm string) error {
+	if strings.ContainsAny(realm, "\"\\\r\n") {
+		return fmt.Errorf("realm %q: quotes, backslashes and line breaks cannot go in a challenge", realm)
+	}
+	return nil
 }
 
 func checkMatcher(v string) error {
