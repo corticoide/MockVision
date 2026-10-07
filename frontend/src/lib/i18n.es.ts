@@ -175,20 +175,13 @@ export const es: Record<string, string> = {
   "Delete {file}?": "¿Eliminar {file}?",
 
   // Targets page and dialog
-  "Receivers of the camera events: a VMS, an NVR or any HTTP endpoint. Link them to cameras when creating them.":
-    "Receptores de los eventos de las cámaras: un VMS, un NVR o cualquier endpoint HTTP. Vincúlalos a las cámaras al crearlas.",
   "New target": "Nuevo destino",
   "Loading targets…": "Cargando destinos…",
   "No targets": "No hay destinos",
-  "Add the URL where the cameras should send their events.":
-    "Agrega la URL a donde las cámaras deben enviar sus eventos.",
-  Request: "Solicitud",
   Auth: "Autenticación",
   "Basic ({user})": "Basic ({user})",
   Test: "Probar",
   "Testing…": "Probando…",
-  "Send a test request from a running camera that uses the target, or else from the node":
-    "Envía una solicitud de prueba desde una cámara activa que use el destino o, si no hay, desde el nodo",
   "{name}: HTTP {status} in {ms} ms, {from}": "{name}: HTTP {status} en {ms} ms, {from}",
   "{name}: {error} ({ms} ms, {from})": "{name}: {error} ({ms} ms, {from})",
   "from camera {camera}": "desde la cámara {camera}",
@@ -201,10 +194,58 @@ export const es: Record<string, string> = {
   "Creating…": "Creando…",
   "Create target": "Crear destino",
   Method: "Método",
-  "Stored encrypted; Basic authentication.": "Se guarda cifrada; autenticación Basic.",
   Headers: "Cabeceras",
   "One per line: Name: value": "Una por línea: Nombre: valor",
   "Target {name} created": "Destino {name} creado",
+  "Receivers of the camera events: a VMS or any HTTP endpoint, an MQTT broker, FTP and SFTP servers, a mail server. Link them to cameras when creating them.":
+    "Receptores de los eventos de las cámaras: un VMS o cualquier endpoint HTTP, un broker MQTT, servidores FTP y SFTP, un servidor de correo. Vincúlalos a las cámaras al crearlas.",
+  "Add where the cameras should send their events.": "Agrega a dónde las cámaras deben enviar sus eventos.",
+  Destination: "Destino",
+  "Digest ({user})": "Digest ({user})",
+  "{user}, pinned key": "{user}, clave fijada",
+  "{name}: connected in {ms} ms, {from}": "{name}: conectado en {ms} ms, {from}",
+  "Test the target from a running camera that uses it, or else from the node; nothing is uploaded or mailed":
+    "Prueba el destino desde una cámara activa que lo use o, si no hay, desde el nodo; no se sube ni se envía nada",
+  Edit: "Editar",
+  "Target {name} saved": "Destino {name} guardado",
+  "Edit target {name}": "Editar el destino {name}",
+  "The type of a target does not change.": "El tipo de un destino no cambia.",
+  "Stored encrypted; leave it empty to keep it.": "Se guarda cifrada; déjala vacía para conservarla.",
+  "Stored encrypted.": "Se guarda cifrada.",
+  Authentication: "Autenticación",
+  "Digest answers the target's challenge, as cameras do.": "Digest responde al desafío del destino, como hacen las cámaras.",
+  Topic: "Tópico",
+  "Optional: replaces the profile's; a template such as cams/{{ .Camera.Serial }}.":
+    "Opcional: reemplaza al del perfil; una plantilla como cams/{{ .Camera.Serial }}.",
+  "Client ID": "ID de cliente",
+  "Optional template; each camera needs its own, the serial by default.":
+    "Plantilla opcional; cada cámara necesita el suyo, por defecto su número de serie.",
+  "Host key": "Clave del servidor",
+  "Optional SHA256 fingerprint the server's key must have; empty accepts any, as most cameras do.":
+    "Huella SHA256 opcional que debe tener la clave del servidor; vacía acepta cualquiera, como la mayoría de las cámaras.",
+  Security: "Seguridad",
+  None: "Ninguna",
+  "TLS (port 465)": "TLS (puerto 465)",
+  Sender: "Remitente",
+  Recipients: "Destinatarios",
+  "Up to 5, separated by commas.": "Hasta 5, separados por comas.",
+  "Accept a TLS certificate that does not verify, as a test server's self-signed one":
+    "Aceptar un certificado TLS que no se verifica, como el autofirmado de un servidor de pruebas",
+  "Delivery (empty: as the profile says)": "Entrega (vacío: como dice el perfil)",
+  "Timeout (s)": "Tiempo máximo (s)",
+  "Pause between attempts (s)": "Pausa entre intentos (s)",
+  "E-mail": "Correo",
+  "A request per event with the payload of the profile, as an HTTP notification.":
+    "Una solicitud por evento con el payload del perfil, como una notificación HTTP.",
+  "A broker: the camera connects as it starts and publishes each event to the topic of its profile.":
+    "Un broker: la cámara se conecta al arrancar y publica cada evento en el tópico de su perfil.",
+  "The snapshot of each event, in passive mode. The path is relative to the login directory; %2F starts it at the root.":
+    "La instantánea de cada evento, en modo pasivo. La ruta es relativa al directorio de inicio de sesión; %2F la empieza en la raíz.",
+  "The snapshot of each event over SSH. The path is absolute; /~/ starts it at the home directory.":
+    "La instantánea de cada evento por SSH. La ruta es absoluta; /~/ la empieza en el directorio personal.",
+  "A mail per event with the snapshot attached, at most one per interval of the profile.":
+    "Un correo por evento con la instantánea adjunta, a lo sumo uno por intervalo del perfil.",
+  Skipped: "Omitido",
 
   // New camera dialog
   "The camera appears on the LAN with its own IP and MAC and behaves as its profile describes.":

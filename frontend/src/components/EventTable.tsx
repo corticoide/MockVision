@@ -123,14 +123,14 @@ function EventDetails({ event, t }: { event: EventItem; t: Translate }) {
           <div className="flex flex-col gap-1.5">
             {event.deliveries.map((d) => (
               <div key={d.id} className="flex flex-wrap items-center gap-2 text-[13px]">
-                <Badge tone={d.status === "ok" ? "ok" : d.status === "retry" ? "warn" : "error"}>{d.status}</Badge>
+                <Badge tone={d.status === "ok" ? "ok" : d.status === "retry" ? "warn" : d.status === "skipped" ? "muted" : "error"}>{d.status}</Badge>
                 <span>{d.target_name}</span>
                 <Mono className="text-muted">
                   {d.http_status
                     ? t("attempt {n} · {time} · {ms} ms · HTTP {http}", { n: d.attempt, time: formatTime(d.at), ms: d.latency_ms, http: d.http_status })
                     : t("attempt {n} · {time} · {ms} ms", { n: d.attempt, time: formatTime(d.at), ms: d.latency_ms })}
                 </Mono>
-                {d.error && <span className="text-error">{d.error}</span>}
+                {d.error && <span className={d.status === "skipped" ? "text-muted" : "text-error"}>{d.error}</span>}
               </div>
             ))}
           </div>

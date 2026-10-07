@@ -1451,11 +1451,12 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /** @description An event receiver shared by cameras (D45). Which fields apply depends on its type: http (method, headers, auth), mqtt (topic, client_id, insecure), ftp and sftp (host_key), smtp (tls, from, to, insecure). */
         Target: {
             id: string;
             name: string;
-            /** @enum {string} */
-            type: "http";
+            type: components["schemas"]["TargetType"];
+            /** @description http(s)://, mqtt(s)://host[:port], ftp://host[:port]/dir, sftp://host[:port]/dir or smtp(s)://host[:port] */
             url: string;
             method: string;
             headers: {
@@ -1467,11 +1468,36 @@ export interface components {
             camera_count: number;
             /** Format: date-time */
             created_at: string;
+            /**
+             * @description http: Basic, or Digest answering the target's challenge
+             * @enum {string}
+             */
+            auth?: "basic" | "digest";
+            /** @description mqtt: template replacing the profile's topic */
+            topic?: string;
+            /** @description mqtt: template replacing the profile's client ID */
+            client_id?: string;
+            /** @description sftp: SHA256 fingerprint the server key must have; empty accepts any */
+            host_key?: string;
+            /** @enum {string} */
+            tls?: "none" | "starttls" | "tls";
+            from?: string;
+            to: string[];
+            /** @description mqtts and smtp: accept a TLS certificate that does not verify */
+            insecure: boolean;
+            delivery?: components["schemas"]["DeliveryOverride"];
+        };
+        /** @enum {string} */
+        TargetType: "http" | "mqtt" | "ftp" | "sftp" | "smtp";
+        /** @description The target's own delivery policy; what it leaves out comes from the profile (D42). An empty object goes back to the profile's. */
+        DeliveryOverride: {
+            timeout_ms?: number;
+            retries?: number;
+            backoff_ms?: number;
         };
         TargetInput: {
             name?: string;
-            /** @enum {string} */
-            type?: "http";
+            type?: components["schemas"]["TargetType"];
             url?: string;
             /** @enum {string} */
             method?: "GET" | "POST" | "PUT";
@@ -1481,8 +1507,19 @@ export interface components {
             username?: string;
             password?: string;
             enabled?: boolean;
+            /** @enum {string} */
+            auth?: "basic" | "digest";
+            topic?: string;
+            client_id?: string;
+            host_key?: string;
+            /** @enum {string} */
+            tls?: "none" | "starttls" | "tls";
+            from?: string;
+            to?: string[];
+            insecure?: boolean;
+            delivery?: components["schemas"]["DeliveryOverride"];
         };
-        /** @description The request leaves from a running camera that uses the target, across the same network as its deliveries; with none running it leaves from the node, which refuses its own and link-local addresses. */
+        /** @description The test leaves from a running camera that uses the target, across the same network as its deliveries; with none running it leaves from the node, which refuses its own and link-local addresses. An http target gets a request; an mqtt one a session; ftp and sftp a login and the target's directory, created if missing; smtp the sender and recipients, without any mail. */
         TargetTest: {
             ok: boolean;
             http_status?: number;
@@ -1640,8 +1677,11 @@ export interface components {
             attempt: number;
             /** Format: date-time */
             at: string;
-            /** @enum {string} */
-            status: "ok" | "retry" | "failed";
+            /**
+             * @description skipped: the camera chose not to send, as a mail within its interval
+             * @enum {string}
+             */
+            status: "ok" | "retry" | "failed" | "skipped";
             http_status?: number;
             latency_ms: number;
             error?: string;
@@ -1662,7 +1702,7 @@ export interface components {
             trigger_id?: string;
             deliveries: components["schemas"]["Delivery"][];
             /** @enum {string} */
-            delivery_status: "ok" | "failed" | "pending" | "none";
+            delivery_status: "ok" | "failed" | "pending" | "skipped" | "none";
             latency_ms: number | null;
         };
         EventPage: {

@@ -121,6 +121,12 @@ export function DeliveryBadge({ status }: { status: string }) {
           {t("Pending")}
         </Badge>
       );
+    case "skipped":
+      return (
+        <Badge tone="muted" icon={<Ban />}>
+          {t("Skipped")}
+        </Badge>
+      );
     default:
       return (
         <Badge tone="muted" icon={<CircleSlash />}>
