@@ -172,6 +172,9 @@ var offline atomic.Bool
 // back, as a network_down fault does.
 func SetOffline(v bool) { offline.Store(v) }
 
+// Offline reports whether the camera is off the network.
+func Offline() bool { return offline.Load() }
+
 // Dial opens a connection to a target, with the dialer of ctx if it has one.
 func Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	if offline.Load() {

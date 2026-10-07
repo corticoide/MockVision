@@ -167,6 +167,26 @@
         }
       }
     },
+    "storage": {
+      "description": "Where the model keeps recordings: an SD card slot, NAS shares, or both.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sd": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_gb"],
+          "properties": {
+            "max_gb": { "description": "Largest card the slot takes.", "type": "integer", "minimum": 1, "maximum": 1024 }
+          }
+        },
+        "nas": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["nfs", "smb"] }
+        }
+      }
+    },
     "coverage": {
       "description": "What the author declares covered; the importer checks it.",
       "type": "object",
@@ -276,6 +296,16 @@
         "report": {
           "description": "The event carries what the camera counted (for example a people counting report), not an object it saw. Reports come from no rule.",
           "type": "boolean"
+        },
+        "record": {
+          "description": "What the camera stores for the event on its SD card or NAS share: the snapshot and a clip of a stream (main when omitted).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "snapshot": { "type": "boolean" },
+            "clip": { "$ref": "#/$defs/duration" },
+            "stream": { "type": "string" }
+          }
         },
         "transports": {
           "type": "object",

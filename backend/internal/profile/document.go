@@ -27,6 +27,7 @@ type Document struct {
 	Engines  map[string]json.RawMessage `json:"engines"`
 	Events   map[string]EventSpec       `json:"events,omitempty"`
 	VCA      *VCA                       `json:"vca,omitempty"`
+	Storage  *Storage                   `json:"storage,omitempty"`
 	Coverage map[string]string          `json:"coverage,omitempty"`
 }
 
@@ -135,6 +136,48 @@ type EventSpec struct {
 	// Report marks an event that carries what the camera counted, such as a
 	// people counting report, rather than an object it saw.
 	Report bool `json:"report,omitempty"`
+	// Record is what the camera stores for the event on its SD card or
+	// its NAS share.
+	Record *RecordSpec `json:"record,omitempty"`
+}
+
+// RecordSpec is what an event records: the snapshot of a stream and a clip
+// of it.
+type RecordSpec struct {
+	Snapshot bool     `json:"snapshot,omitempty"`
+	Clip     Duration `json:"clip,omitempty"`
+	// Stream is main when empty.
+	Stream string `json:"stream,omitempty"`
+}
+
+// Storage is where the model keeps recordings: an SD card slot, NAS
+// shares, or both.
+type Storage struct {
+	SD  *SDSlot  `json:"sd,omitempty"`
+	NAS []string `json:"nas,omitempty"`
+}
+
+// SDSlot is the model's SD card slot.
+type SDSlot struct {
+	// MaxGB is the largest card the model takes.
+	MaxGB int `json:"max_gb"`
+}
+
+// MaxSDMB is the largest SD card the model takes, in MiB; 0 without a
+// slot.
+func (d *Document) MaxSDMB() int {
+	if d.Storage == nil || d.Storage.SD == nil {
+		return 0
+	}
+	return d.Storage.SD.MaxGB << 10
+}
+
+// NASProtocols are the NAS protocols the model records over.
+func (d *Document) NASProtocols() []string {
+	if d.Storage == nil {
+		return nil
+	}
+	return d.Storage.NAS
 }
 
 // RuleType is the kind of rule events of type typ come from, "" for none.

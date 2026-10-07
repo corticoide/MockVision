@@ -61,6 +61,8 @@ type Env struct {
 	Snapshot func() ([]byte, error)
 	// Analytics returns what the camera's analytics counted.
 	Analytics func() any
+	// Storage returns the state of the camera's SD card or NAS share.
+	Storage func() any
 	// Heatmap returns the heat map in rows of cols cells.
 	Heatmap func(cols, rows int) [][]int
 	// LineCount and Occupancy read the counts of a rule by name or ID.
@@ -363,6 +365,15 @@ func funcMap(env Env) template.FuncMap {
 				return nil
 			}
 			return env.Analytics()
+		},
+		// storage: the SD card or NAS share as the device reports it,
+		// .kind (none, sd or nas), .state, .capacity_mb, .used_mb,
+		// .free_mb, .files and .overwrite.
+		"storage": func() any {
+			if env.Storage == nil {
+				return map[string]any{"kind": "none", "state": "", "capacity_mb": 0, "used_mb": 0, "free_mb": 0, "files": 0, "overwrite": false}
+			}
+			return env.Storage()
 		},
 		// lineCount "Gate" "A->B": crossings of a line one way; any other
 		// direction counts both.

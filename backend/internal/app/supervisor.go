@@ -585,6 +585,7 @@ func (ss *session) sync(ctx context.Context) {
 		return
 	}
 	s.tellCamera(ctx, ss.id, ipc.TypeReload, ipc.Reload{Users: cfg.Users, Targets: &cfg.Targets, State: cfg.State, VCA: &cfg.VCA})
+	s.tellCamera(ctx, ss.id, ipc.TypeStorage, cfg.Storage)
 	s.regenerateStreamsLater(ss.id)
 }
 
@@ -868,6 +869,24 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, err
 		}
 		s.clientChanges(ctx, ss.id, sc.Changes)
+	case ipc.TypeFilesFind:
+		var q ipc.FilesFind
+		if err := msg.Decode(&q); err != nil {
+			return nil, err
+		}
+		return s.findFiles(ctx, ss.id, q)
+	case ipc.TypeRecorded:
+		var rec ipc.Recorded
+		if err := msg.Decode(&rec); err != nil {
+			return nil, err
+		}
+		s.indexNAS(ctx, ss.id, rec)
+	case ipc.TypeNASState:
+		var st ipc.NASState
+		if err := msg.Decode(&st); err != nil {
+			return nil, err
+		}
+		s.setNASState(ss.id, st)
 	case ipc.TypeClient, ipc.TypeGap, ipc.TypeLog:
 		if !ss.allowNotice() {
 			return nil, nil // over budget: dropped
@@ -1146,6 +1165,12 @@ func (s *Service) buildConfigure(b *cameraBundle, streams []ipc.Stream, ip strin
 	cfg.Targets = targets
 	cfg.VCA = vcaConfig(b)
 	cfg.Faults = s.startFaults(s.baseCtx, b.cam.ID)
+	if err := s.ensureSDDir(b.cam.ID); err != nil {
+		return cfg, fmt.Errorf("cannot prepare the SD card: %w", err)
+	}
+	if cfg.Storage, err = s.storageConfig(s.baseCtx, b); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 

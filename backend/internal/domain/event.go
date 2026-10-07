@@ -33,7 +33,7 @@ const (
 var CanonicalEventTypes = []EventType{
 	EventLineCrossing, EventRegionEntrance, EventRegionExit, EventLoitering,
 	EventIntrusion, EventMotion, EventLPR, EventSpeed, EventTamper,
-	EventNetworkLost, EventIPConflict,
+	EventNetworkLost, EventIPConflict, EventStorageMissing, EventStorageFailure, EventStorageFull,
 }
 
 // CustomEventPrefix marks vendor specific types: custom:<name>.

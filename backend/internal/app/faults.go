@@ -138,7 +138,7 @@ func (s *Service) InjectFault(ctx context.Context, actor Actor, cameraID string,
 	kind := domain.FaultKind(in.Kind)
 	params := domain.FaultParams{Instance: strings.TrimSpace(in.Instance), Status: in.Status, LatencyMS: in.LatencyMS, SkewS: in.SkewS}
 	duration := time.Duration(in.DurationS) * time.Second
-	if err := domain.ValidateFault(kind, params, duration, s.faultTargets(b)); err != nil {
+	if err := domain.ValidateFault(kind, params, duration, s.faultTargets(b), b.storageKind()); err != nil {
 		return nil, err
 	}
 	open, err := s.openFaults(ctx, cameraID)
@@ -212,6 +212,10 @@ func (s *Service) endFault(ctx context.Context, f domain.Fault, by string) error
 // the network as it is.
 func (s *Service) applyFault(ctx context.Context, f domain.Fault, on bool) {
 	defer s.pub.Publish("cameras", "faults", map[string]any{"camera_id": f.CameraID})
+	if _, sd := domain.SDFaultStates[f.Kind]; sd {
+		// The card's state follows, after the camera raised the event.
+		defer s.pushStorage(ctx, f.CameraID)
+	}
 	ss := s.session(f.CameraID)
 	if ss == nil || !ss.active() {
 		return
@@ -285,6 +289,14 @@ func faultLabel(f domain.Fault) string {
 		return "network down"
 	case domain.FaultIPConflict:
 		return "IP conflict"
+	case domain.FaultSDMissing:
+		return "SD card missing"
+	case domain.FaultSDError:
+		return "SD card error"
+	case domain.FaultSDReadOnly:
+		return "SD card read only"
+	case domain.FaultSDFull:
+		return "SD card full"
 	}
 	return string(f.Kind)
 }

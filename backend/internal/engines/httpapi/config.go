@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/corticoide/mockvision/backend/internal/engines/timefmt"
 	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -80,7 +81,16 @@ type Action struct {
 	From     string            `json:"from,omitempty"`
 	Key      string            `json:"key,omitempty"`
 	Stream   string            `json:"stream,omitempty"`
-	Then     *Action           `json:"then,omitempty"`
+	// Params name the request parameters sd.search reads: start, end,
+	// kind, event and limit.
+	Params map[string]string `json:"params,omitempty"`
+	// TimeFormat is how sd.search reads and writes times: rfc3339 (the
+	// default), unix, unix_ms or a Go layout as 2006_01_02_15_04_05.
+	TimeFormat string `json:"time_format,omitempty"`
+	// Kinds translate the kinds of recording, snapshot and clip, to the
+	// device's words, both ways.
+	Kinds map[string]string `json:"kinds,omitempty"`
+	Then  *Action           `json:"then,omitempty"`
 }
 
 // Handlers available in this version.
@@ -88,11 +98,18 @@ const (
 	HandlerStateGet = "state.get"
 	HandlerStateSet = "state.set"
 	HandlerSnapshot = "snapshot"
+	// HandlerSDSearch lists the recordings of the SD card or NAS share by
+	// time, kind and event (D68); HandlerSDDownload sends one.
+	HandlerSDSearch   = "sd.search"
+	HandlerSDDownload = "sd.download"
 )
 
 var plannedHandlers = map[string]bool{
-	"stream.attach": true, "sd.search": true, "sd.download": true, "reboot": true, "factory_reset": true,
+	"stream.attach": true, "reboot": true, "factory_reset": true,
 }
+
+// searchParams are the parameters sd.search reads.
+var searchParams = map[string]bool{"start": true, "end": true, "kind": true, "event": true, "limit": true}
 
 var methodPattern = regexp.MustCompile(`^[A-Z]{3,10}$`)
 
@@ -155,6 +172,26 @@ const configSchema = `{
         "from": {"enum": ["query", "form", "json"]},
         "key": {"type": "string"},
         "stream": {"enum": ["main", "sub", "third"]},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": {"type": "string", "minLength": 1},
+            "end": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "minLength": 1},
+            "event": {"type": "string", "minLength": 1},
+            "limit": {"type": "string", "minLength": 1}
+          }
+        },
+        "time_format": {"type": "string", "maxLength": 64},
+        "kinds": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "snapshot": {"type": "string", "minLength": 1},
+            "clip": {"type": "string", "minLength": 1}
+          }
+        },
         "then": {"$ref": "#/$defs/action"}
       }
     }
@@ -252,7 +289,7 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 			add(path+"/handler", "a then action cannot run another handler")
 		}
 		switch a.Handler {
-		case HandlerStateGet, HandlerStateSet, HandlerSnapshot:
+		case HandlerStateGet, HandlerStateSet, HandlerSnapshot, HandlerSDSearch, HandlerSDDownload:
 		default:
 			if plannedHandlers[a.Handler] {
 				add(path+"/handler", "handler %s is not available in this version", a.Handler)
@@ -266,11 +303,40 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 		if a.Handler == HandlerStateSet && a.From == "" {
 			add(path+"/from", "state.set needs from: query, form or json")
 		}
+		if a.Handler == HandlerSDSearch {
+			for k := range a.Params {
+				if !searchParams[k] {
+					add(path+"/params/"+k, "sd.search reads start, end, kind, event and limit")
+				}
+			}
+			if err := timefmt.Check(a.TimeFormat); err != nil {
+				add(path+"/time_format", "%v", err)
+			}
+			for k, v := range a.Kinds {
+				if k != "snapshot" && k != "clip" {
+					add(path+"/kinds/"+k, "the kinds of recording are snapshot and clip")
+				}
+				if other := a.Kinds[otherKind(k)]; other == v {
+					add(path+"/kinds/"+k, "snapshot and clip need different words")
+				}
+			}
+		}
 		if a.Then != nil {
 			probs = append(probs, validateAction(path+"/then", name, *a.Then, true)...)
 		}
 	} else if a.Then != nil {
 		add(path+"/then", "then is only valid after a handler")
+	}
+	if a.Handler != HandlerSDSearch {
+		if len(a.Params) > 0 {
+			add(path+"/params", "only sd.search reads params")
+		}
+		if a.TimeFormat != "" {
+			add(path+"/time_format", "only sd.search reads time_format")
+		}
+		if len(a.Kinds) > 0 {
+			add(path+"/kinds", "only sd.search reads kinds")
+		}
 	}
 	if a.Body != "" {
 		if err := tmpl.Check(name, a.Body); err != nil {
@@ -287,6 +353,13 @@ func validateAction(path, name string, a Action, nested bool) []engine.Problem {
 		}
 	}
 	return probs
+}
+
+func otherKind(k string) string {
+	if k == "snapshot" {
+		return "clip"
+	}
+	return "snapshot"
 }
 
 // checkRealm rejects what a quoted challenge parameter cannot carry.

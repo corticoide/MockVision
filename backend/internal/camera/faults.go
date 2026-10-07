@@ -75,6 +75,18 @@ func (f *faultSet) latency(instance string) time.Duration {
 	return 0
 }
 
+// has reports whether a fault of a kind is on.
+func (f *faultSet) has(kind domain.FaultKind) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	for _, ft := range f.active {
+		if ft.Kind == string(kind) {
+			return true
+		}
+	}
+	return false
+}
+
 // skew is how far the camera's clock is moved.
 func (f *faultSet) skew() time.Duration {
 	f.mu.RLock()

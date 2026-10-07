@@ -51,7 +51,7 @@ func demoProfile(t *testing.T, version string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return []byte(strings.Replace(string(data), "version: 0.6.0", "version: "+version, 1))
+	return []byte(strings.Replace(string(data), "version: 0.7.0", "version: "+version, 1))
 }
 
 func TestImportRunsAsAJob(t *testing.T) {
@@ -113,7 +113,7 @@ func TestImportRunsAsAJob(t *testing.T) {
 func TestImportResumesAfterValidation(t *testing.T) {
 	svc, _ := newBareService(t)
 	ctx := context.Background()
-	data := demoProfile(t, "0.6.0")
+	data := demoProfile(t, "0.7.0")
 	j, err := svc.SubmitImport(ctx, testActor, "demo.yaml", data)
 	if err != nil {
 		t.Fatal(err)

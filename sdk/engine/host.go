@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"time"
@@ -19,7 +20,8 @@ type Host interface {
 	Events() Events
 	Media() Media
 	Templates() Templates
-	// Files is the camera's simulated SD card; nil when the camera has none.
+	// Files are the camera's recordings, on its simulated SD card or its
+	// NAS share; nil when the camera records nothing.
 	Files() Files
 	Telemetry() Telemetry
 	// Faults are the failures injected into the camera (D43); nil when the
@@ -330,11 +332,84 @@ type Templates interface {
 	Compile(name, text string, maxBytes int) (Template, error)
 }
 
-// Files is the simulated SD card of a camera.
+// Files are the recordings a camera keeps of its events: snapshots and
+// clips on its simulated SD card or its NAS share (D68, D69). The host
+// records them; engines search them and read them, as a device's API and
+// its playback do.
 type Files interface {
-	Put(ctx context.Context, name string, r io.Reader) error
-	Open(name string) (io.ReadCloser, error)
+	// Status is the storage's state as the device reports it.
+	Status() StorageStatus
+	// Find lists the recordings that overlap the query's time range,
+	// oldest first.
+	Find(ctx context.Context, q FileQuery) ([]FileInfo, error)
+	// Open reads a recording by its name. ErrNoFile when there is none;
+	// ErrStorageUnavailable while the card is out or failing.
+	Open(ctx context.Context, name string) (io.ReadCloser, FileInfo, error)
 }
+
+// Storage errors.
+var (
+	ErrNoFile             = errors.New("no such recording")
+	ErrStorageUnavailable = errors.New("the storage is unavailable")
+)
+
+// Storage states, as devices report them.
+const (
+	StoragePresent  = "present"
+	StorageFull     = "full"
+	StorageAbsent   = "absent"
+	StorageError    = "error"
+	StorageReadOnly = "read_only"
+)
+
+// Kinds of recording.
+const (
+	FileSnapshot = "snapshot"
+	FileClip     = "clip"
+)
+
+// StorageStatus is a camera's storage as the device reports it.
+type StorageStatus struct {
+	Kind  string `json:"kind"` // sd or nas
+	State string `json:"state"`
+	// CapacityBytes is the card's size; 0 for a share.
+	CapacityBytes int64 `json:"capacity_bytes"`
+	UsedBytes     int64 `json:"used_bytes"`
+	Files         int   `json:"files"`
+	// Overwrite replaces the oldest recordings when the card is full.
+	Overwrite bool `json:"overwrite"`
+}
+
+// Usable reports whether recordings can be read.
+func (s StorageStatus) Usable() bool {
+	return s.State == StoragePresent || s.State == StorageFull || s.State == StorageReadOnly
+}
+
+// FileQuery selects recordings: those that overlap From and To, of a kind
+// and an event type when set.
+type FileQuery struct {
+	From  time.Time
+	To    time.Time
+	Kind  string
+	Event string
+	Limit int
+}
+
+// FileInfo describes a recording.
+type FileInfo struct {
+	// Name is its path inside the card or the share, as
+	// 20260107/143000_motion.jpg.
+	Name   string    `json:"name"`
+	Kind   string    `json:"kind"`
+	Event  string    `json:"event"`
+	Stream string    `json:"stream,omitempty"`
+	Size   int64     `json:"size"`
+	Start  time.Time `json:"start"`
+	End    time.Time `json:"end"`
+}
+
+// Duration is how long a clip lasts; 0 for a snapshot.
+func (f FileInfo) Duration() time.Duration { return f.End.Sub(f.Start) }
 
 // Telemetry collects logs, per-route statistics and gaps.
 type Telemetry interface {

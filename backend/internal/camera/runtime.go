@@ -77,6 +77,7 @@ type Runtime struct {
 	identity  engine.Identity
 	accounts  accountStore
 	faults    *faultSet
+	files     *fileStore
 
 	dhcp *dhcpClient
 	dns  dnsServers
@@ -108,6 +109,7 @@ func NewRuntime(opts Options) *Runtime {
 	}
 	rt.events = newEventBus(rt)
 	rt.faults = newFaultSet(rt)
+	rt.files = newFileStore(rt)
 	rt.vca = newVCA(rt)
 	rt.events.observe = rt.vca.observe
 	rt.tel = newTelemetry(rt)
@@ -129,9 +131,15 @@ func (r *Runtime) Media() engine.Media { return r.media }
 // Templates implements engine.Host.
 func (r *Runtime) Templates() engine.Templates { return r.templates }
 
-// Files implements engine.Host; the simulated SD card is not part of the
-// demo, so cameras have none.
-func (r *Runtime) Files() engine.Files { return nil }
+// Files implements engine.Host: the camera's SD card or NAS share, nil
+// when it records nothing.
+func (r *Runtime) Files() engine.Files {
+	switch r.files.kind() {
+	case string(domain.StorageSD), string(domain.StorageNAS):
+		return r.files
+	}
+	return nil
+}
 
 // Telemetry implements engine.Host.
 func (r *Runtime) Telemetry() engine.Telemetry { return r.tel }
@@ -213,6 +221,7 @@ loop:
 	// Triggers stop first: no event is raised while engines go away.
 	r.vca.stop()
 	r.stopEngines(stopCtx)
+	r.files.close()
 	_ = r.conn.Notify(ipc.TypeBye, ipc.Bye{Reason: reason})
 	r.conn.Close()
 	<-runDone
@@ -320,6 +329,22 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		}
 		r.faults.stop(f.ID)
 		return nil, nil
+	case ipc.TypeStorage:
+		var st ipc.Storage
+		if err := msg.Decode(&st); err != nil {
+			return nil, err
+		}
+		if r.model == nil {
+			return nil, ipc.Errorf("state", "camera not configured")
+		}
+		r.files.set(st, true)
+		return nil, nil
+	case ipc.TypeFileRead:
+		var rq ipc.FileRead
+		if err := msg.Decode(&rq); err != nil {
+			return nil, err
+		}
+		return r.files.readFile(ctx, rq)
 	}
 	return nil, ipc.Errorf("unsupported", "unknown message type %q", msg.Type)
 }
@@ -343,6 +368,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	}, r.faults.skew)
 	// Faults on as the camera starts apply before any engine listens.
 	r.faults.set(cfg.Faults)
+	r.files.set(cfg.Storage, false)
 	r.vca.setCaps(doc.VCACaps())
 	r.templates = tmpl.NewCompiler(tmpl.Env{
 		State:    r.state.Get,
@@ -351,6 +377,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		Analytics: func() any {
 			return r.vca.analytics(ipc.AnalyticsQuery{})
 		},
+		Storage: r.files.templateStatus,
 		Heatmap: func(cols, rows int) [][]int {
 			h := r.vca.analytics(ipc.AnalyticsQuery{Cols: cols, Rows: rows}).Heat
 			out := make([][]int, h.Rows)
@@ -367,7 +394,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		},
 	})
 	if r.opts.Confine {
-		if err := r.confine(cfg.Streams); err != nil {
+		if err := r.confine(cfg.Streams, cfg.Storage.SDDir); err != nil {
 			return ipc.Ready{}, err
 		}
 	}
@@ -402,11 +429,14 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 }
 
 // confine limits the files the camera can reach, before its engines read
-// anything from the LAN: its renditions, read only, and the system files
-// name resolution and TLS need (audit B10). Outside local mode it cannot
-// bind a TCP port either; its sockets are open already.
-func (r *Runtime) confine(streams []ipc.Stream) error {
+// anything from the LAN: its renditions and its SD card, read only, and
+// the system files name resolution and TLS need (audit B10). Outside local
+// mode it cannot bind a TCP port either; its sockets are open already.
+func (r *Runtime) confine(streams []ipc.Stream, sdDir string) error {
 	read := []string{"/etc", "/usr/share/ca-certificates", "/usr/local/share/ca-certificates", "/usr/share/zoneinfo", "/proc"}
+	if sdDir != "" {
+		read = append(read, sdDir)
+	}
 	seen := map[string]bool{}
 	for _, st := range streams {
 		for _, p := range []string{st.StreamPath, st.SnapshotPath} {

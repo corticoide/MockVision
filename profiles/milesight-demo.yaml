@@ -7,7 +7,9 @@
 # HTTP, published to an MQTT broker, uploaded as snapshots to FTP and SFTP
 # servers and mailed with the snapshot attached; the counts the camera
 # keeps from them (people counting per line, occupancy per region, a heat
-# map) are served over HTTP and pushed as a periodic report.
+# map) are served over HTTP and pushed as a periodic report. Each analytics
+# event records a snapshot and a clip to an SD card or a NAS share, which
+# the HTTP API searches and downloads and RTSP plays back by time range.
 #
 # It is illustrative: routes and payloads were not captured from a real
 # device, so its verification level is Draft. MockVision is not affiliated
@@ -19,7 +21,7 @@ schema: 1
 
 profile:
   id: milesight/demo
-  version: 0.6.0
+  version: 0.7.0
   name: Milesight demo camera
   vendor: Milesight
   model: MS-DEMO
@@ -138,6 +140,11 @@ media:
       bitrate: { min: 64, max: 4096 }
       default: { codec: mjpeg, resolution: 640x360, fps: 5, bitrate: 1024 }
 
+# A microSD slot up to 256 GB, and recording to a NAS over NFS or SMB.
+storage:
+  sd: { max_gb: 256 }
+  nas: [nfs, smb]
+
 engines:
   rtsp:
     engine: rtsp@^1
@@ -147,6 +154,9 @@ engines:
       main: /main
       sub: /sub
       third: /third
+    # Recordings by time range, as
+    # /playback?starttime=20261007T143000Z&endtime=20261007T150000Z
+    playback: { path: /playback, start: starttime, end: endtime, time_format: "20060102T150405Z" }
 
   http:
     engine: http-api@^1
@@ -237,6 +247,48 @@ engines:
           body: |
             {{ $data := heatmap (default "32" .Request.Query.cols) (default "18" .Request.Query.rows) }}{"cols": {{ len (index $data 0) }}, "rows": {{ len $data }}, "data": {{ json $data }}}
 
+      # 6. Storage: the SD card or NAS share, its state and its space.
+      - id: storage-info
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.storage.info }
+        action:
+          type: application/json
+          body: |
+            {{ $s := storage }}{
+              "type": {{ json $s.kind }},
+              "status": {{ json $s.state }},
+              "totalMB": {{ $s.capacity_mb }},
+              "usedMB": {{ $s.used_mb }},
+              "freeMB": {{ $s.free_mb }},
+              "files": {{ $s.files }},
+              "overwrite": {{ $s.overwrite }}
+            }
+
+      # 7. Recordings by time, kind and event, for example
+      #    ?action=get.record.search&starttime=2026-10-07 14:00:00&endtime=2026-10-07 15:00:00&type=video
+      - id: record-search
+        match:
+          method: GET
+          path: /cgi-bin/operator/operator.cgi
+          query: { action: get.record.search }
+        action:
+          handler: sd.search
+          params: { start: starttime, end: endtime, kind: type, event: event, limit: max }
+          time_format: "2006-01-02 15:04:05"
+          kinds: { snapshot: picture, clip: video }
+          then:
+            type: application/json
+            body: |
+              {"total": {{ len .Result }}, "records": [{{ range $i, $f := .Result }}{{ if $i }}, {{ end }}{"file": {{ json $f.Name }}, "type": {{ json $f.Kind }}, "event": {{ json $f.Event }}, "startTime": {{ json $f.Start }}, "endTime": {{ json $f.End }}, "size": {{ $f.Size }}}{{ end }}]}
+
+      # 8. A recording by the file name the search gave:
+      #    /cgi-bin/operator/download.cgi?file=20261007/143000_line_crossing_x7k2pq.ts
+      - id: record-download
+        match: { method: GET, path: /cgi-bin/operator/download.cgi }
+        action: { handler: sd.download, key: file }
+
     unknown:
       status: 404
       type: text/html
@@ -313,26 +365,33 @@ events:
           {{ end }}{{ with .Event.Object }}Object: {{ .Class }}
           {{ end }}
     delivery: &delivery { timeout: 5s, retries: 3, backoff: 2s }
+    # The snapshot and 10 seconds of the main stream, on the SD card or the
+    # NAS share.
+    record: &record { snapshot: true, clip: 10s }
   region_entrance:
     vendor_name: RegionEntrance
     min_interval: 1s
     transports: *transports
     delivery: *delivery
+    record: *record
   region_exit:
     vendor_name: RegionExiting
     min_interval: 1s
     transports: *transports
     delivery: *delivery
+    record: *record
   loitering:
     vendor_name: Loitering
     min_interval: 1s
     transports: *transports
     delivery: *delivery
+    record: *record
   intrusion:
     vendor_name: Intrusion
     min_interval: 1s
     transports: *transports
     delivery: *delivery
+    record: *record
   # A report: what the camera counted, pushed by a trigger with a fixed
   # interval (the same shortest and longest wait).
   custom:people_counting:
@@ -382,7 +441,7 @@ events:
     delivery: { timeout: 5s, retries: 6, backoff: 5s }
   ip_conflict:
     vendor_name: IPConflict
-    transports:
+    transports: &system_transports
       http_push:
         method: POST
         content_type: application/json
@@ -391,6 +450,20 @@ events:
         topic: "milesight/{{ .Camera.Serial }}/event/{{ .EventName }}"
         qos: 1
         body: *system_body
+    delivery: *delivery
+  # The SD card out of its slot, failing or read only, and full when it
+  # does not overwrite: raised by faults, and by a card that fills up.
+  storage_missing:
+    vendor_name: SDCardMissing
+    transports: *system_transports
+    delivery: *delivery
+  storage_failure:
+    vendor_name: SDCardError
+    transports: *system_transports
+    delivery: *delivery
+  storage_full:
+    vendor_name: SDCardFull
+    transports: *system_transports
     delivery: *delivery
 
 vca:
@@ -408,10 +481,11 @@ vca:
       events: [region_entrance, region_exit]
 
 coverage:
-  rtsp: main stream only
-  http-api: snapshot, device information, parameters, counting and heat map
+  rtsp: main stream only, and playback of recordings by time range
+  http-api: snapshot, device information, parameters, counting, heat map, storage state, and recording search and download
   http_push: line_crossing, region_entrance, region_exit, loitering, intrusion and a people counting report
   mqtt: the same events and the counting report, with birth and will messages
   ftp: the snapshot of each analytics event
   smtp: a mail with the snapshot of each analytics event
-  system: network_lost and ip_conflict, raised by faults
+  system: network_lost and ip_conflict, raised by faults; storage_missing, storage_failure and storage_full
+  storage: a snapshot and a 10 s clip of each analytics event, on an SD card up to 256 GB or a NAS share

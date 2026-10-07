@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,6 +117,16 @@ type cameraBundle struct {
 	// The camera's analytics: its rules and stored triggers, in order.
 	rules    []domain.Rule
 	triggers []domain.Trigger
+	// storage is where it records; nil records nothing.
+	storage *db.CameraStorage
+}
+
+// storageKind is where the camera records.
+func (b *cameraBundle) storageKind() domain.StorageKind {
+	if b.storage == nil {
+		return domain.StorageNone
+	}
+	return domain.StorageKind(b.storage.Kind)
 }
 
 func (s *Service) profileDoc(p db.Profile) (*profile.Document, error) {
@@ -176,6 +187,9 @@ func (s *Service) loadBundle(ctx context.Context, id string) (*cameraBundle, err
 	if st, err := q.GetCameraStatus(ctx, id); err == nil {
 		b.status = &st
 	}
+	if st, err := q.GetCameraStorage(ctx, id); err == nil {
+		b.storage = &st
+	}
 	return b, nil
 }
 
@@ -220,6 +234,10 @@ func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
 		return nil, err
 	}
 	triggers, err := q.ListAllTriggers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	storages, err := q.ListCameraStorage(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +305,11 @@ func (s *Service) loadBundles(ctx context.Context) ([]*cameraBundle, error) {
 	for _, t := range triggers {
 		if b := byID[t.CameraID]; b != nil {
 			b.triggers = append(b.triggers, triggerOf(t))
+		}
+	}
+	for _, st := range storages {
+		if b := byID[st.CameraID]; b != nil {
+			b.storage = &st
 		}
 	}
 	return out, nil
@@ -1171,6 +1194,10 @@ func (s *Service) DeleteCamera(ctx context.Context, actor Actor, id string) erro
 	if _, err := s.store.W().DeleteCamera(ctx, id); err != nil {
 		return err
 	}
+	if err := os.RemoveAll(s.sdDir(id)); err != nil {
+		s.log.Warn("cannot remove the camera's SD card", "camera", id, "error", err)
+	}
+	s.storage.forget(id)
 	s.metrics.Remove(id)
 	s.audit(ctx, actor, "camera.delete", "camera", id, map[string]string{"name": cam.Name})
 	s.pub.Publish("cameras", "deleted", map[string]string{"id": id})

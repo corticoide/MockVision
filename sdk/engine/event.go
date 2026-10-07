@@ -9,7 +9,8 @@ type Event struct {
 	Type string    `json:"type"`
 	At   time.Time `json:"at"`
 	// Trigger is what produced the event: manual, random, schedule, script,
-	// external, or fault for a failure injected into the camera.
+	// external, fault for a failure injected into the camera, or device for
+	// a state the camera reached by itself, such as a full SD card.
 	Trigger   string         `json:"trigger,omitempty"`
 	Rule      *Rule          `json:"rule,omitempty"`
 	Direction string         `json:"direction,omitempty"`

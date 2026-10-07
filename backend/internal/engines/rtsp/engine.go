@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 	"github.com/pion/rtp"
 
+	"github.com/corticoide/mockvision/backend/internal/engines/timefmt"
 	"github.com/corticoide/mockvision/backend/internal/tmpl"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -52,6 +54,19 @@ type Config struct {
 	// Paths maps stream names to request paths. A path may carry a query,
 	// as Dahua does: /cam/realmonitor?channel=1&subtype=0.
 	Paths map[string]string `json:"paths"`
+	// Playback plays the camera's recorded clips back by time range (D68).
+	Playback *Playback `json:"playback,omitempty"`
+}
+
+// Playback is where the camera plays its recordings back: a path, which
+// may carry a fixed query, and the query parameters of the range, as
+// Dahua's /cam/playback?channel=1&starttime=2026_10_07_14_30_00&endtime=...
+type Playback struct {
+	Path  string `json:"path"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	// TimeFormat is rfc3339 (the default), unix, unix_ms or a Go layout.
+	TimeFormat string `json:"time_format,omitempty"`
 }
 
 const configSchema = `{
@@ -76,6 +91,17 @@ const configSchema = `{
       "minProperties": 1,
       "propertyNames": {"enum": ["main", "sub", "third"]},
       "additionalProperties": {"type": "string", "pattern": "^/"}
+    },
+    "playback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "start", "end"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "start": {"type": "string", "minLength": 1},
+        "end": {"type": "string", "minLength": 1},
+        "time_format": {"type": "string", "maxLength": 64}
+      }
     }
   }
 }`
@@ -92,8 +118,11 @@ type Engine struct {
 	serverName string
 	nonces     sync.Map // digest nonce by *gortsplib.ServerConn
 	cancel     context.CancelFunc
+	runCtx     context.Context
 	wg         sync.WaitGroup
 	unwatch    func()
+	// playbacks are the recordings each connection plays back.
+	playbacks map[*gortsplib.ServerConn]*streamer
 
 	state    atomic.Value
 	sessions atomic.Int64
@@ -118,7 +147,7 @@ func stateOf(ss *gortsplib.ServerSession) *sessionState {
 
 // New returns an engine instance.
 func New() engine.Engine {
-	e := &Engine{streams: map[string]*streamer{}}
+	e := &Engine{streams: map[string]*streamer{}, playbacks: map[*gortsplib.ServerConn]*streamer{}}
 	e.state.Store(engine.HealthStopped)
 	return e
 }
@@ -159,6 +188,20 @@ func (e *Engine) Validate(config json.RawMessage) []engine.Problem {
 		}
 	} else if err := checkRealm(c.Auth.Realm); err != nil {
 		probs = append(probs, engine.Problem{Path: "/auth/realm", Message: err.Error()})
+	}
+	if pb := c.Playback; pb != nil {
+		if err := timefmt.Check(pb.TimeFormat); err != nil {
+			probs = append(probs, engine.Problem{Path: "/playback/time_format", Message: err.Error()})
+		}
+		if pb.Start == pb.End {
+			probs = append(probs, engine.Problem{Path: "/playback/end", Message: "the start and the end need different parameters"})
+		}
+		pbPath, _, _ := strings.Cut(pb.Path, "?")
+		for name, p := range c.Paths {
+			if live, _, _ := strings.Cut(p, "?"); strings.TrimRight(live, "/") == strings.TrimRight(pbPath, "/") && !strings.Contains(pb.Path, "?") && !strings.Contains(p, "?") {
+				probs = append(probs, engine.Problem{Path: "/playback/path", Message: fmt.Sprintf("path %s is also stream %s", pb.Path, name)})
+			}
+		}
 	}
 	return probs
 }
@@ -247,7 +290,7 @@ func (e *Engine) Start(ctx context.Context, in engine.StartInput) error {
 	e.server = s
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	e.cancel = cancel
+	e.cancel, e.runCtx = cancel, runCtx
 	for name := range e.cfg.Paths {
 		if err := e.startStream(runCtx, name); err != nil {
 			cancel()
@@ -332,7 +375,7 @@ func (e *Engine) Reload(ctx context.Context, config json.RawMessage) error {
 		return err
 	}
 	e.mu.Lock()
-	e.cfg.Paths = c.Paths
+	e.cfg.Paths, e.cfg.Playback = c.Paths, c.Playback
 	e.realm, e.serverName = realm, c.Server
 	e.mu.Unlock()
 	return nil
@@ -365,7 +408,12 @@ func (e *Engine) Stop(context.Context) error {
 	for _, st := range e.streams {
 		st.stop()
 	}
+	playbacks := e.playbacks
+	e.playbacks = map[*gortsplib.ServerConn]*streamer{}
 	e.mu.Unlock()
+	for _, st := range playbacks {
+		st.stop()
+	}
 	e.wg.Wait()
 	if e.server != nil {
 		e.server.Close()
@@ -472,6 +520,13 @@ func (e *Engine) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 // OnConnClose implements gortsplib.ServerHandlerOnConnClose.
 func (e *Engine) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
 	e.nonces.Delete(ctx.Conn)
+	e.mu.Lock()
+	pb := e.playbacks[ctx.Conn]
+	delete(e.playbacks, ctx.Conn)
+	e.mu.Unlock()
+	if pb != nil {
+		go pb.stop()
+	}
 	e.in.Host.Telemetry().Client("rtsp", hostOnly(ctx.Conn.NetConn().RemoteAddr().String()), false)
 }
 
@@ -501,6 +556,13 @@ func (e *Engine) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 		return res, nil, nil
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
+	if st == nil && e.isPlayback(ctx.Path, ctx.Query) {
+		pb, res := e.playback(ctx.Conn, ctx.Query)
+		if res != nil {
+			return res, nil, nil
+		}
+		return &base.Response{StatusCode: base.StatusOK}, pb.stream, nil
+	}
 	if st == nil {
 		e.in.Host.Telemetry().Gap("rtsp", hostOnly(ctx.Conn.NetConn().RemoteAddr().String()), "DESCRIBE "+ctx.Path)
 		return &base.Response{StatusCode: base.StatusNotFound}, nil, nil
@@ -517,6 +579,14 @@ func (e *Engine) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 		return res, nil, nil
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
+	if st == nil && e.isPlayback(ctx.Path, ctx.Query) {
+		if st = e.playbackOf(ctx.Conn); st == nil {
+			var res *base.Response
+			if st, res = e.playback(ctx.Conn, ctx.Query); res != nil {
+				return res, nil, nil
+			}
+		}
+	}
 	if st == nil {
 		return &base.Response{StatusCode: base.StatusNotFound}, nil, nil
 	}
@@ -549,6 +619,9 @@ func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 		}
 	}
 	st := e.streamFor(ctx.Path, ctx.Query)
+	if st == nil && e.isPlayback(ctx.Path, ctx.Query) {
+		st = e.playbackOf(ctx.Conn)
+	}
 	if st != nil {
 		sess.mu.Lock()
 		if sess.playing != st {
@@ -601,6 +674,10 @@ type streamer struct {
 	// viewers counts the sessions playing this stream; a stream nobody
 	// plays skips the packetizing work.
 	viewers atomic.Int64
+	// A playback sends limit frames, from its first viewer on, stamped
+	// with the time they were recorded from recorded on; then it ends.
+	limit    int64
+	recorded time.Time
 }
 
 // hold stops the frames while a session joins the stream's readers.
@@ -650,7 +727,30 @@ func (s *streamer) run(ctx context.Context) {
 		n int64 // frames sent since start; drives continuous timestamps
 		i int   // position in the loop
 	)
+	waitUntil := time.Now().Add(playbackWait)
 	for {
+		if s.limit > 0 {
+			if n >= s.limit {
+				return
+			}
+			// A playback starts with its viewer.
+			s.mu.Lock()
+			waiting := n == 0 && (s.joining > 0 || s.viewers.Load() == 0)
+			s.mu.Unlock()
+			if waiting {
+				if time.Now().After(waitUntil) {
+					return
+				}
+				start = time.Now()
+				timer.Reset(frame)
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				}
+				continue
+			}
+		}
 		due := start.Add(time.Duration(n) * frame)
 		if wait := time.Until(due); wait > 0 {
 			timer.Reset(wait)
@@ -672,9 +772,13 @@ func (s *streamer) run(ctx context.Context) {
 				pkts, err := encode(s.src.AccessUnits[i], i == 0)
 				if err == nil {
 					ts := rtpBase + uint32(n*90000/int64(fps))
+					ntp := due
+					if s.limit > 0 {
+						ntp = s.recorded.Add(time.Duration(n) * frame)
+					}
 					for _, p := range pkts {
 						p.Timestamp = ts
-						_ = s.stream.WritePacketRTPWithNTP(media, p, due)
+						_ = s.stream.WritePacketRTPWithNTP(media, p, ntp)
 					}
 				}
 			}
@@ -683,6 +787,122 @@ func (s *streamer) run(ctx context.Context) {
 		n++
 		i = (i + 1) % len(s.src.AccessUnits)
 	}
+}
+
+// playbackWait is how long a playback waits for its client to play it.
+const playbackWait = time.Minute
+
+// isPlayback reports whether a request is for the playback path.
+func (e *Engine) isPlayback(path, query string) bool {
+	e.mu.RLock()
+	pb := e.cfg.Playback
+	e.mu.RUnlock()
+	if pb == nil {
+		return false
+	}
+	wantPath, wantQuery, _ := strings.Cut(pb.Path, "?")
+	if strings.TrimRight(path, "/") != strings.TrimRight(wantPath, "/") {
+		return false
+	}
+	return wantQuery == "" || sameQuery(wantQuery, query)
+}
+
+func (e *Engine) playbackOf(conn *gortsplib.ServerConn) *streamer {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.playbacks[conn]
+}
+
+// playback prepares what a client asked to play back: the clips recorded
+// in the range, from the first one on, for as long as they last within
+// it. The camera's clips are its stream's loop, so the stream plays them.
+func (e *Engine) playback(conn *gortsplib.ServerConn, query string) (*streamer, *base.Response) {
+	e.mu.RLock()
+	pb := *e.cfg.Playback
+	e.mu.RUnlock()
+	q, _ := url.ParseQuery(query)
+	from, err1 := timefmt.Parse(pb.TimeFormat, q.Get(pb.Start))
+	to, err2 := timefmt.Parse(pb.TimeFormat, q.Get(pb.End))
+	if err1 != nil || err2 != nil || !to.After(from) {
+		return nil, &base.Response{StatusCode: base.StatusBadRequest}
+	}
+	files := e.in.Host.Files()
+	if files == nil {
+		return nil, &base.Response{StatusCode: base.StatusNotFound}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	clips, err := files.Find(ctx, engine.FileQuery{From: from, To: to, Kind: engine.FileClip, Limit: 1000})
+	if errors.Is(err, engine.ErrStorageUnavailable) {
+		return nil, &base.Response{StatusCode: base.StatusServiceUnavailable}
+	}
+	if err != nil {
+		return nil, &base.Response{StatusCode: base.StatusInternalServerError}
+	}
+	var (
+		total  time.Duration
+		first  time.Time
+		stream string
+	)
+	for _, c := range clips {
+		s, end := c.Start, c.End
+		if s.Before(from) {
+			s = from
+		}
+		if end.After(to) {
+			end = to
+		}
+		if !end.After(s) {
+			continue
+		}
+		total += end.Sub(s)
+		if first.IsZero() {
+			first, stream = s, c.Stream
+		}
+	}
+	if total <= 0 {
+		return nil, &base.Response{StatusCode: base.StatusNotFound}
+	}
+	if stream == "" {
+		stream = "main"
+	}
+	src, err := e.in.Host.Media().Source(stream)
+	if err != nil {
+		return nil, &base.Response{StatusCode: base.StatusNotFound}
+	}
+	forma, err := formatFor(src)
+	if err != nil {
+		return nil, &base.Response{StatusCode: base.StatusUnsupportedMediaType}
+	}
+	ss := &gortsplib.ServerStream{Server: e.server, Desc: &description.Session{
+		Medias: []*description.Media{{Type: description.MediaTypeVideo, Formats: []format.Format{forma}}},
+	}}
+	if err := ss.Initialize(); err != nil {
+		return nil, &base.Response{StatusCode: base.StatusInternalServerError}
+	}
+	fps := src.Info.FPS
+	if fps <= 0 {
+		fps = 15
+	}
+	st := &streamer{engine: e, stream: ss, src: src, done: make(chan struct{}), recorded: first,
+		limit: max(int64(total.Seconds()*float64(fps)), 1)}
+	sctx, stop := context.WithCancel(e.runCtx)
+	st.cancel = stop
+	e.mu.Lock()
+	old := e.playbacks[conn]
+	e.playbacks[conn] = st
+	e.mu.Unlock()
+	if old != nil {
+		go old.stop()
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		st.run(sctx)
+		// The recording is over: its viewer's session ends with it.
+		st.stop()
+	}()
+	return st, nil
 }
 
 // formatFor describes the RTP format of a source.

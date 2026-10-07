@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"time"
 
@@ -1036,6 +1038,68 @@ func (s *Server) handleEndFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Storage ---
+
+func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	v, err := s.svc.GetStorage(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleUpdateStorage(w http.ResponseWriter, r *http.Request) {
+	var in app.StorageInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	v, err := s.svc.UpdateStorage(r.Context(), actor(r), r.PathValue("id"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleFormatStorage(w http.ResponseWriter, r *http.Request) {
+	v, err := s.svc.FormatStorage(r.Context(), actor(r), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleListRecordings(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListRecordings(r.Context(), r.PathValue("id"), r.URL.Query().Get("kind"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	rec, rc, err := s.svc.OpenRecording(ctx, r.PathValue("id"), r.PathValue("recording"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", rec.ContentType())
+	w.Header().Set("Content-Length", strconv.FormatInt(rec.Size, 10))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(rec.Name)))
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, rc)
+	}
 }
 
 func (s *Server) handleActiveFaults(w http.ResponseWriter, r *http.Request) {

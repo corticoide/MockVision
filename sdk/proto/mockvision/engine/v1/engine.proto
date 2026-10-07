@@ -48,14 +48,15 @@ service Host {
   rpc MediaSnapshot(MediaSnapshotRequest) returns (MediaSnapshotResponse);
   // Templates
   rpc TemplateRender(TemplateRenderRequest) returns (TemplateRenderResponse);
-  // Files (simulated SD card)
-  rpc FilePut(stream FileChunk) returns (FilePutResponse);
+  // Files: the recordings on the camera's SD card or NAS share, which the
+  // host records; engines search and read them.
+  rpc FileStatus(FileStatusRequest) returns (StorageStatus);
+  rpc FileFind(FileFindRequest) returns (FileFindResponse);
   rpc FileGet(FileGetRequest) returns (stream FileChunk);
-  // Telemetry
-  // The status every request to an engine instance gets while an injected
-  // fault is on; 0 when none.
+  // Faults: the status every request to an engine instance gets while an
+  // injected fault is on; 0 when none.
   rpc FaultStatus(FaultStatusRequest) returns (FaultStatusResponse);
-
+  // Telemetry
   rpc Log(LogRequest) returns (LogResponse);
   rpc RequestStat(RequestStatRequest) returns (RequestStatResponse);
   rpc Gap(GapRequest) returns (GapResponse);
@@ -313,15 +314,48 @@ message TemplateRenderResponse {
   bytes output = 1;
 }
 
-message FileChunk {
-  string name = 1;
-  bytes data = 2;
+message FileStatusRequest {}
+
+message StorageStatus {
+  string kind = 1; // sd | nas
+  string state = 2; // present | full | absent | error | read_only
+  int64 capacity_bytes = 3;
+  int64 used_bytes = 4;
+  int32 files = 5;
+  bool overwrite = 6;
 }
 
-message FilePutResponse {}
+message FileFindRequest {
+  int64 from_unix_ms = 1;
+  int64 to_unix_ms = 2;
+  string kind = 3; // snapshot | clip; empty for both
+  string event = 4;
+  int32 limit = 5;
+}
+
+message FileInfo {
+  string name = 1;
+  string kind = 2;
+  string event = 3;
+  string stream = 4;
+  int64 size = 5;
+  int64 start_unix_ms = 6;
+  int64 end_unix_ms = 7;
+}
+
+message FileFindResponse {
+  repeated FileInfo files = 1;
+}
 
 message FileGetRequest {
   string name = 1;
+}
+
+// The first chunk carries the file's info; NOT_FOUND when there is none,
+// UNAVAILABLE while the storage is.
+message FileChunk {
+  FileInfo info = 1;
+  bytes data = 2;
 }
 
 message LogRequest {

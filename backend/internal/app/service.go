@@ -101,6 +101,10 @@ type Service struct {
 	resolver targetResolver
 	// profiles caches the decoded profiles, by id@version.
 	profiles sync.Map
+	// storage is what the cameras' cards and shares need in memory.
+	storage storageState
+	// diskFree measures the node's free disk, for SD cards (D91).
+	diskFree func(dir string) (uint64, bool)
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -148,6 +152,11 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 			return nil, err
 		}
 	}
+	// The SD cards: each camera reads its own, and may not list the others.
+	if err := os.MkdirAll(filepath.Join(opts.DataDir, "sd"), 0o711); err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(filepath.Join(opts.DataDir, "sd"), 0o711)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		opts:         opts,
@@ -171,6 +180,8 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		netnsNames:   map[string]string{},
 		claims:       map[netip.Addr]string{},
 		exitsChanged: make(chan struct{}),
+		storage:      newStorageState(),
+		diskFree:     nodeDiskFree,
 		baseCtx:      ctx,
 		cancel:       cancel,
 	}

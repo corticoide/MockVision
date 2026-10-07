@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"golang.org/x/text/language"
@@ -476,9 +477,41 @@ func (v *validator) lint(doc *Document, delivers map[string]bool) {
 				v.errorf(StepLint, ptr+"/transports/"+escapePointer(t), "no engine of this profile delivers %s; add an engine instance such as push: {engine: http-push@^1}", t)
 			}
 		}
+		if spec.Record != nil {
+			v.lintRecord(doc, typ, *spec.Record, ptr+"/record")
+		}
 	}
 	v.lintVCA(doc)
 }
+
+// lintRecord checks what an event records: a stream of the model that can
+// be clipped, a clip of 5 minutes at most, and somewhere to keep them.
+func (v *validator) lintRecord(doc *Document, typ string, rec RecordSpec, ptr string) {
+	stream := rec.Stream
+	if stream == "" {
+		stream = "main"
+	}
+	st, ok := doc.Media.Streams[stream]
+	if !ok {
+		v.errorf(StepLint, ptr+"/stream", "the model has no %s stream", stream)
+	}
+	d := rec.Clip.D()
+	switch {
+	case d < 0 || d > media.MaxClip:
+		v.errorf(StepLint, ptr+"/clip", "a clip lasts at most %s", media.MaxClip)
+	case d > 0 && d < time.Second:
+		v.errorf(StepLint, ptr+"/clip", "a clip lasts at least 1s")
+	case d > 0 && ok && st.Default.Codec == "mjpeg":
+		v.warnf(ptr+"/clip", "%s is MJPEG by default: its clips are only recorded while it runs H.264 or H.265", stream)
+	}
+	if !rec.Snapshot && d == 0 {
+		v.warnf(ptr, "%s records nothing: set snapshot or clip", typ)
+	}
+	if doc.MaxSDMB() == 0 && len(doc.NASProtocols()) == 0 {
+		v.warnf(ptr, "%s records, but the model has no storage: declare storage.sd or storage.nas", typ)
+	}
+}
+
 
 // lintVCA checks that the analytics and their events agree: each kind of
 // rule raises some event, the events that come from a kind of rule have it,

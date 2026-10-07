@@ -34,6 +34,8 @@ tags:
   - name: events
   - name: faults
     description: Failures injected into a camera (D43) and its simulated reboot
+  - name: storage
+    description: A camera's simulated SD card or NAS share and the recordings of its events (D68, D69)
 
 paths:
   /auth/setup:
@@ -512,6 +514,81 @@ paths:
         "204": { description: Ended }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/storage:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [storage]
+      operationId: getStorage
+      description: Where the camera records, what its model offers, and the state of its card or share.
+      responses:
+        "200": { description: Storage, content: { application/json: { schema: { $ref: "#/components/schemas/Storage" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [storage]
+      operationId: updateStorage
+      description: >
+        Gives the camera an SD card, a NAS share or neither; fields left out
+        stay. A card that is new or grows must fit on the node's disk with
+        what the other cards promised (D91, rejected with code disk). Taking
+        the card out wipes it, and a smaller card keeps the newest
+        recordings that fit. A running camera gets the change at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageInput" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Storage" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/storage/actions/format:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [storage]
+      operationId: formatStorage
+      description: Wipes the SD card, as the device's format does; a card out of its slot or read only cannot be formatted.
+      responses:
+        "200": { description: Formatted, content: { application/json: { schema: { $ref: "#/components/schemas/Storage" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/recordings:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [storage]
+      operationId: listRecordings
+      description: The newest recordings (200 at most) of the camera's current card or share.
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [snapshot, clip] } }
+      responses:
+        "200":
+          description: Recordings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Recording" } }
+  /cameras/{id}/recordings/{recording}/download:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: recording, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [storage]
+      operationId: downloadRecording
+      description: >
+        The recording's file: a JPEG snapshot or an MPEG-TS clip. Those on a
+        NAS share are read through the camera, which must be running.
+      responses:
+        "200":
+          description: The file
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            video/mp2t: { schema: { type: string, format: binary } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /cameras/{id}/users:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -949,7 +1026,7 @@ x-websocket:
     messages; after a reconnection send the last seq seen per topic. When it
     is too old the server answers type "resync" and the client reloads that
     state through REST. Topics: node (metrics), cameras (created, updated,
-    deleted, status), camera:<id> (status, config, client, gap, log),
+    deleted, status, faults, storage), camera:<id> (status, config, client, gap, log),
     events (event), profiles (installed), audit (entry), jobs (job: every
     change of a job), job:<id> (event: its history as it grows).
 
@@ -1737,7 +1814,7 @@ components:
         camera: { type: string, description: Name of the camera the request left from }
     FaultKind:
       type: string
-      enum: [service_down, latency, error_status, clock_skew, network_down, ip_conflict]
+      enum: [service_down, latency, error_status, clock_skew, network_down, ip_conflict, sd_missing, sd_error, sd_read_only, sd_full]
       description: >
         service_down: a protocol resets its connections and refuses new
         ones. latency: everything a protocol reads waits latency_ms.
@@ -1745,6 +1822,10 @@ components:
         (401 with a challenge). clock_skew: the camera's clock moves skew_s.
         network_down: the camera answers nobody, not even ARP, and reaches
         nobody; it raises network_lost. ip_conflict: it raises ip_conflict.
+        sd_missing, sd_error, sd_read_only and sd_full force the SD card's
+        state (cameras with a card only) and raise storage_missing,
+        storage_failure or storage_full; the card records nothing meanwhile,
+        and a missing or failing one cannot be searched.
     FaultInput:
       type: object
       required: [kind]
@@ -1773,6 +1854,64 @@ components:
         ended_by: { type: string, description: "expired, replaced, or who ended it" }
         created_by: { type: string }
         active: { type: boolean }
+    StorageStatus:
+      type: object
+      required: [kind, state, capacity_bytes, used_bytes, files, overwrite]
+      properties:
+        kind: { type: string, enum: [none, sd, nas] }
+        state: { type: string, enum: ["", present, full, absent, error, read_only], description: Empty when the camera records nothing }
+        capacity_bytes: { type: integer, description: The card's size; 0 for a share }
+        used_bytes: { type: integer }
+        files: { type: integer }
+        overwrite: { type: boolean }
+    Storage:
+      type: object
+      required: [kind, size_mb, overwrite, nas_url, nas_username, has_nas_password, max_sd_mb, nas_protocols, status, records]
+      properties:
+        kind: { type: string, enum: [none, sd, nas] }
+        size_mb: { type: integer, description: The card's capacity, its quota on the node }
+        overwrite: { type: boolean, description: "A full card replaces its oldest recordings (D69); off, it stops recording and raises storage_full" }
+        nas_url: { type: string }
+        nas_username: { type: string }
+        has_nas_password: { type: boolean }
+        max_sd_mb: { type: integer, description: Largest card the profile's model takes; 0 without a slot }
+        nas_protocols: { type: array, items: { type: string, enum: [nfs, smb] } }
+        status: { $ref: "#/components/schemas/StorageStatus" }
+        nas_error: { type: string, description: Why the camera cannot reach its share }
+        records:
+          description: The events the profile records, and what
+          type: array
+          items:
+            type: object
+            required: [event, snapshot, clip_s, stream]
+            properties:
+              event: { type: string }
+              snapshot: { type: boolean }
+              clip_s: { type: integer }
+              stream: { type: string }
+    StorageInput:
+      type: object
+      properties:
+        kind: { type: string, enum: [none, sd, nas] }
+        size_mb: { type: integer, minimum: 64, description: "Up to the model's largest card; 1024 or the largest when a card is new" }
+        overwrite: { type: boolean }
+        nas_url: { type: string, description: "nfs://host[:port]/export[?uid=N&gid=N] or smb://host[:port]/share[/dir]" }
+        nas_username: { type: string, maxLength: 128, description: "SMB account, DOMAIN\\user for a domain one" }
+        nas_password: { type: string, maxLength: 256, description: Replaces the share's password; empty clears it }
+    Recording:
+      type: object
+      required: [id, name, kind, event_type, size, start, end, location]
+      properties:
+        id: { type: string }
+        name: { type: string, description: "Its path on the card or the share, as 20261007/143000_motion_x7k2pq.ts" }
+        kind: { type: string, enum: [snapshot, clip] }
+        stream: { type: string }
+        event_id: { type: string }
+        event_type: { type: string }
+        size: { type: integer }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        location: { type: string, enum: [sd, nas] }
     Point:
       description: A position on the picture, from 0 to 1 from its top left corner.
       type: object

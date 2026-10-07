@@ -28,13 +28,18 @@ const (
 )
 
 // FaultKinds lists the kinds of fault.
-var FaultKinds = []FaultKind{FaultServiceDown, FaultLatency, FaultErrorStatus, FaultClockSkew, FaultNetworkDown, FaultIPConflict}
+var FaultKinds = []FaultKind{FaultServiceDown, FaultLatency, FaultErrorStatus, FaultClockSkew, FaultNetworkDown, FaultIPConflict,
+	FaultSDMissing, FaultSDError, FaultSDReadOnly, FaultSDFull}
 
 // FaultEvents are the canonical events a fault raises as it starts, when
 // the camera's profile defines them.
 var FaultEvents = map[FaultKind]EventType{
 	FaultNetworkDown: EventNetworkLost,
 	FaultIPConflict:  EventIPConflict,
+	FaultSDMissing:   EventStorageMissing,
+	FaultSDError:     EventStorageFailure,
+	FaultSDReadOnly:  EventStorageFailure,
+	FaultSDFull:      EventStorageFull,
 }
 
 // Limits of faults.
@@ -87,13 +92,16 @@ type FaultTarget struct {
 	Server   bool   // it listens for clients
 }
 
-// ValidateFault checks a fault against the camera's engine instances, and
-// its duration: zero means until ended by hand.
-func ValidateFault(kind FaultKind, p FaultParams, duration time.Duration, instances []FaultTarget) error {
+// ValidateFault checks a fault against the camera's engine instances and
+// storage, and its duration: zero means until ended by hand.
+func ValidateFault(kind FaultKind, p FaultParams, duration time.Duration, instances []FaultTarget, storage StorageKind) error {
 	v := &ValidationError{}
 	if !slices.Contains(FaultKinds, kind) {
-		v.Add("kind", "must be one of service_down, latency, error_status, clock_skew, network_down or ip_conflict")
+		v.Add("kind", "must be one of service_down, latency, error_status, clock_skew, network_down, ip_conflict, sd_missing, sd_error, sd_read_only or sd_full")
 		return v
+	}
+	if _, sd := SDFaultStates[kind]; sd && storage != StorageSD {
+		v.Add("kind", "the camera records to no SD card")
 	}
 	if duration < 0 || duration > MaxFaultDuration {
 		v.Add("duration_s", "must be between 1 second and 24 hours, or 0 to last until ended")

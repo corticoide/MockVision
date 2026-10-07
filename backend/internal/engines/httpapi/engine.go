@@ -494,6 +494,25 @@ func (e *Engine) run(w *countingWriter, r *http.Request, route *compiledRoute, a
 			_, _ = io.WriteString(w, "OK\n")
 			return
 		}
+	case HandlerSDSearch:
+		found, err := e.sdSearch(r, a.a, data.Request)
+		if err != nil {
+			e.failErr(w, err)
+			return
+		}
+		data.Result = found
+		if a.then == nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			for _, f := range found {
+				fmt.Fprintf(w, "%s %s %s %s %d\n", f.Name, f.Kind, f.Start, f.End, f.Size)
+			}
+			return
+		}
+	case HandlerSDDownload:
+		if err := e.sdDownload(w, r, a.a, data.Request); err != nil {
+			e.failErr(w, err)
+		}
+		return
 	}
 	e.respond(w, r, a.then, data)
 }
@@ -640,6 +659,16 @@ func (e *Engine) respond(w *countingWriter, r *http.Request, a *compiledAction, 
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(out)
 	}
+}
+
+// failErr answers a handler's error with its status.
+func (e *Engine) failErr(w *countingWriter, err error) {
+	var es *errStatus
+	if errors.As(err, &es) {
+		e.fail(w, es.status, es.msg)
+		return
+	}
+	e.fail(w, http.StatusInternalServerError, err.Error())
 }
 
 func (e *Engine) fail(w *countingWriter, status int, msg string) {

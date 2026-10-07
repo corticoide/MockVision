@@ -78,6 +78,7 @@ func (b *eventBus) emit(_ context.Context, e engine.Event, triggerID string) (en
 	if err := b.rt.conn.Notify(ipc.TypeEvent, ipc.EventMsg{Event: e, TriggerID: triggerID}); err != nil {
 		return e, err
 	}
+	b.rt.files.record(e, spec)
 
 	vendor := spec.VendorName
 	if vendor == "" {

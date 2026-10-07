@@ -183,8 +183,8 @@ func query4(ctx context.Context, server, host string) []string {
 }
 
 // destinations is what a camera with these DNS servers may connect to:
-// every event target of the node, so a target can be tested from any
-// camera. Names are resolved in parallel, and those asked within fresh
+// every event target and NAS share of the node, so a target can be tested
+// from any camera. Names are resolved in parallel, and those asked within fresh
 // are not asked again. It fails only when the targets cannot be read, so
 // a passing database error never empties the firewalls.
 func (s *Service) destinations(ctx context.Context, dns []string, fresh time.Duration) ([]netctl.Destination, error) {
@@ -200,6 +200,17 @@ func (s *Service) destinations(ctx context.Context, dns []string, fresh time.Dur
 	for _, t := range rows {
 		if host, ports, ok := targetPorts(t.Type, t.ConfigJson); ok {
 			targets = append(targets, hostPort{host, ports})
+		}
+	}
+	// NAS shares: NFS finds its ports through the portmapper, so any port
+	// of the host.
+	shares, err := s.store.R().ListNASHosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range shares {
+		if host := nasHost(raw); host != "" {
+			targets = append(targets, hostPort{host, []int{netctl.AnyPort}})
 		}
 	}
 	ips := make([][]string, len(targets))

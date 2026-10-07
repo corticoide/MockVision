@@ -225,6 +225,7 @@ func (s *Service) recordEvent(ctx context.Context, cameraID string, e engine.Eve
 	if v, err := s.GetEvent(ctx, e.ID); err == nil {
 		s.pub.Publish("events", "event", v)
 	}
+	s.recordEventFiles(b, e)
 }
 
 func hasEvent(b *cameraBundle, typ string) bool {

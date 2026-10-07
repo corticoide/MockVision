@@ -214,7 +214,7 @@ ok "validated and listed as draft (Borrador)"
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
 CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
+	\"name\": \"Gate 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.7.0\",
 	\"network\": {\"ip\": \"$CAM_IP\", \"netmask\": \"255.255.255.0\"},
 	\"users\": [{\"username\": \"admin\", \"password\": \"e2e-cam-pw\", \"role\": \"admin\"}],
 	\"stream\": {\"resolution\": \"640x360\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -503,7 +503,7 @@ metrics=$(api GET /node/metrics)
 echo "$metrics" | json "d['cameras']['$CID']['rss_bytes']" >/dev/null || fail "no metrics for the camera"
 ok "camera RSS $(echo "$metrics" | json "round(d['cameras']['$CID']['rss_bytes']/1048576,1)") MiB, CPU $(echo "$metrics" | json "round(d['cameras']['$CID']['cpu_percent'],2)") %"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":1}' >/dev/null
-resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.6.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
+resp=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\":\"Gate 2\",\"profile_id\":\"milesight/demo\",\"profile_version\":\"0.7.0\",\"network\":{\"ip\":\"$CAM2_IP\"}}")
 [ "$(echo "$resp" | json 'd.get("code")')" = max_cameras ] || fail "creation over the maximum was not rejected: $resp"
 ok "rejected: $(echo "$resp" | json 'd["detail"]')"
 api PATCH /settings -H 'Content-Type: application/json' -d '{"max_cameras":100}' >/dev/null
@@ -580,7 +580,7 @@ fi
 step "MAC probe: a camera does not start with a MAC another device has (RN-06)"
 CLIENT_MAC=$(client cat /sys/class/net/eth0/address)
 BAD=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
+	\"name\": \"Clash\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.7.0\",
 	\"network\": {\"ip\": \"10.77.0.13\", \"mac\": \"$CLIENT_MAC\"}, \"start\": true}" | json 'd["id"]')
 for _ in $(seq 1 60); do
 	[ "$(api GET "/cameras/$BAD" | json 'd["status"]["state"]')" = error ] && break
@@ -594,7 +594,7 @@ ok "refused: $reason"
 
 step "DHCP: a new camera takes its factory address without a server, then leases one (D23, D24)"
 LID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.6.0",
+	"name": "Lobby", "profile_id": "milesight/demo", "profile_version": "0.7.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_state "$LID" running 90
 LMAC=$(api GET "/cameras/$LID" | json 'd["network"]["mac"]')
@@ -606,7 +606,7 @@ client ping -c 2 -W 2 192.168.5.190 >/dev/null || fail "the client cannot reach 
 ok "no server answered: the camera took the profile's factory address 192.168.5.190, as a real one"
 # A second one finds the address taken, and takes it once the first stops.
 L2ID=$(api POST /cameras -H 'Content-Type: application/json' -d '{
-	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.6.0",
+	"name": "Lobby 2", "profile_id": "milesight/demo", "profile_version": "0.7.0",
 	"network": {"ip_mode": "dhcp"}, "stream": {"resolution": "640x360"}, "start": true}' | json 'd["id"]')
 wait_status "$L2ID" 'd["status"].get("reason_code")' dhcp_factory_in_use 90
 ok "a second camera did not take 192.168.5.190 while Lobby holds it"
@@ -669,7 +669,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	ip link del mve2eiv
 	WMAC=$(cat "/sys/class/net/$WLAN/address")
 	IID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
-		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
+		\"name\": \"Wi-Fi 1\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.7.0\",
 		\"network\": {\"mode\": \"ipvlan\", \"parent\": \"$WLAN\", \"ip\": \"10.78.0.10\", \"netmask\": \"255.255.255.0\"},
 		\"stream\": {\"resolution\": \"640x360\"}, \"start\": true}" | json 'd["id"]')
 	wait_state "$IID" running 60
@@ -678,7 +678,7 @@ if ip link add mve2eiv link "$WLAN" type ipvlan mode l2 2>/dev/null; then
 	[ "$(api GET "/cameras/$IID" | json 'd["status"].get("mac")')" = "$WMAC" ] || fail "the status does not show the card's MAC"
 	ok "10.78.0.10 answers with the MAC of $WLAN, $WMAC"
 	code=$(api POST /cameras -H 'Content-Type: application/json' -o "$WORK/mix.json" -w '%{http_code}' -d "{
-		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.6.0\",
+		\"name\": \"Wired\", \"profile_id\": \"milesight/demo\", \"profile_version\": \"0.7.0\",
 		\"network\": {\"parent\": \"$WLAN\", \"ip\": \"10.78.0.11\", \"netmask\": \"255.255.255.0\"}}")
 	[ "$code" = 422 ] && grep -q "Wi-Fi 1" "$WORK/mix.json" || fail "a macvlan camera beside an ipvlan one: $code $(cat "$WORK/mix.json")"
 	ok "a macvlan camera on $WLAN is refused and the answer names Wi-Fi 1"

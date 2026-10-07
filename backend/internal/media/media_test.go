@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/corticoide/mockvision/sdk/engine"
 )
 
 func TestEncodeRendition(t *testing.T) {
@@ -288,5 +291,68 @@ func TestProbeImageRefusesHugePictures(t *testing.T) {
 	}
 	if _, err := ProbeImage(bytes.NewReader(header(16000, 16000))); err == nil {
 		t.Fatal("a 256-megapixel picture must be refused")
+	}
+}
+
+// A clip is a playable MPEG-TS of the length asked, the stream's loop
+// played as many times as it takes.
+func TestClip(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	lib, err := NewLibrary(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "pattern.jpg")
+	if err := lib.TestPattern(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	for _, codec := range []string{CodecH264, CodecH265, CodecMJPEG} {
+		t.Run(codec, func(t *testing.T) {
+			p := Params{Codec: codec, Width: 320, Height: 240, FPS: 10, GOP: 10, Bitrate: 256}
+			files, err := lib.Encode(ctx, src, p, p.Key("clip"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(files.Stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			vs, err := ParseStream(codec, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			vs.Info.Codec, vs.Info.FPS = codec, p.FPS
+			clip, err := Clip(vs, 3*time.Second)
+			if codec == CodecMJPEG {
+				if !errors.Is(err, ErrNoClip) {
+					t.Fatalf("an MJPEG clip: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := filepath.Join(dir, codec+".ts")
+			if err := os.WriteFile(name, clip, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+				"-show_entries", "stream=codec_name,nb_read_frames", "-of", "csv=p=0", name).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{CodecH264: "h264,30", CodecH265: "hevc,30"}[codec]
+			// ffprobe lists the stream again under its program.
+			if got, _, _ := strings.Cut(string(out), "\n"); got != want {
+				t.Fatalf("ffprobe says %q, want %q", got, want)
+			}
+		})
+	}
+	if _, err := Clip(&engine.VideoSource{}, time.Hour); err == nil {
+		t.Fatal("an hour-long clip was accepted")
 	}
 }

@@ -39,6 +39,7 @@ type fakeHost struct {
 	faults *fakeFaults
 	src    *engine.VideoSource
 	users  fakeAccounts
+	files  engine.Files
 }
 
 func (h fakeHost) Accounts() engine.Accounts   { return h.users }
@@ -46,7 +47,7 @@ func (h fakeHost) State() engine.State         { return nil }
 func (h fakeHost) Events() engine.Events       { return nil }
 func (h fakeHost) Media() engine.Media         { return fakeMedia{h.src} }
 func (h fakeHost) Templates() engine.Templates { return tmpl.NewCompiler(tmpl.Env{}) }
-func (h fakeHost) Files() engine.Files         { return nil }
+func (h fakeHost) Files() engine.Files         { return h.files }
 func (h fakeHost) Faults() engine.Faults       { return h.faults }
 func (h fakeHost) Telemetry() engine.Telemetry { return fakeTelemetry{} }
 

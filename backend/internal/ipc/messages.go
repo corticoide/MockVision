@@ -27,6 +27,13 @@ const (
 	TypeDHCPLease  = "dhcp.lease"
 	TypeDHCPFailed = "dhcp.failed"
 	TypeDHCPLost   = "dhcp.lost"
+	// TypeFilesFind asks the service for the recordings the camera keeps,
+	// as its API searches them.
+	TypeFilesFind = "files.find"
+	// TypeRecorded reports a recording the camera wrote to its NAS share.
+	TypeRecorded = "recorded"
+	// TypeNASState reports whether the camera reaches its NAS share.
+	TypeNASState = "nas.state"
 )
 
 // Service to camera.
@@ -44,6 +51,11 @@ const (
 	// The service refuses a leased address someone else uses; the camera
 	// declines it and asks again.
 	TypeDHCPDecline = "dhcp.decline"
+	// TypeStorage replaces the camera's storage and its state.
+	TypeStorage = "storage"
+	// TypeFileRead reads part of a recording on the camera's NAS share,
+	// for the panel to download it.
+	TypeFileRead = "file.read"
 )
 
 // HeartbeatInterval is how often cameras report; three missed heartbeats
@@ -127,7 +139,73 @@ type Configure struct {
 	DNS []string `json:"dns,omitempty"`
 	// Faults are the ones on as the camera starts; they raise no event.
 	Faults []Fault `json:"faults,omitempty"`
+	// Storage is where the camera keeps its recordings.
+	Storage Storage `json:"storage"`
 }
+
+// Storage is where a camera keeps its recordings, and its state. The
+// service writes the SD card in SDDir, which the camera may only read;
+// the camera writes its NAS share itself (D68, D69).
+type Storage struct {
+	Kind string `json:"kind"` // none, sd or nas
+	// SDDir is the camera's card on the node; it exists whatever Kind is,
+	// so the camera can read it once it gets a card.
+	SDDir  string               `json:"sd_dir"`
+	Status engine.StorageStatus `json:"status"`
+	NAS    *NAS                 `json:"nas,omitempty"`
+}
+
+// NAS is the share a camera records to.
+type NAS struct {
+	URL      string `json:"url"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+// FilesFind asks for the camera's recordings: those that overlap From and
+// To, or the one named.
+type FilesFind struct {
+	Name  string    `json:"name,omitempty"`
+	From  time.Time `json:"from"`
+	To    time.Time `json:"to"`
+	Kind  string    `json:"kind,omitempty"`
+	Event string    `json:"event,omitempty"`
+	Limit int       `json:"limit,omitempty"`
+}
+
+// FilesFound is the reply to FilesFind.
+type FilesFound struct {
+	Files []engine.FileInfo `json:"files"`
+}
+
+// Recorded reports a recording written to the NAS share for an event.
+type Recorded struct {
+	EventID string          `json:"event_id"`
+	File    engine.FileInfo `json:"file"`
+}
+
+// NASState says whether the camera reaches its share, and why not.
+type NASState struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// FileRead asks for Length bytes of a NAS recording from Offset.
+type FileRead struct {
+	Name   string `json:"name"`
+	Offset int64  `json:"offset"`
+	Length int    `json:"length"`
+}
+
+// FileData is the reply to FileRead; EOF marks the end of the file.
+type FileData struct {
+	Data []byte `json:"data"`
+	Size int64  `json:"size"`
+	EOF  bool   `json:"eof"`
+}
+
+// MaxFileRead bounds a FileRead, so its reply fits in a message.
+const MaxFileRead = 512 << 10
 
 // Fault is a failure injected into the camera (D43), sent with
 // fault.start; the camera raises the fault's event, if any, as it starts.

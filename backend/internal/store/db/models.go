@@ -105,6 +105,16 @@ type CameraStatus struct {
 	ReasonCode    string
 }
 
+type CameraStorage struct {
+	CameraID     string
+	Kind         string
+	SizeMb       int64
+	Overwrite    int64
+	NasUrl       string
+	NasUsername  string
+	NasSecretEnc []byte
+}
+
 type CameraStream struct {
 	CameraID    string
 	Stream      string
@@ -218,6 +228,21 @@ type Profile struct {
 	CoverageJson string
 	Archived     int64
 	CreatedAt    int64
+}
+
+type Recording struct {
+	ID        string
+	CameraID  string
+	EventID   string
+	EventType string
+	Kind      string
+	Stream    string
+	Name      string
+	Size      int64
+	StartAt   int64
+	EndAt     int64
+	Location  string
+	CreatedAt int64
 }
 
 type Rendition struct {
