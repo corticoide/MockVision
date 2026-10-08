@@ -428,6 +428,14 @@ func (s *Server) originAllowed(origin, host string) bool {
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
 	"font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
+// cspWithStyleNonce is the policy of the panel's page: its style elements
+// with the nonce of the response are allowed too, nothing else inline
+// (D49). Style attributes stay refused: components position things through
+// the style object, which the policy does not restrict.
+func cspWithStyleNonce(nonce string) string {
+	return strings.Replace(contentSecurityPolicy, "style-src 'self'", "style-src 'self' 'nonce-"+nonce+"'", 1)
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
