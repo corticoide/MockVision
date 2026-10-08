@@ -345,6 +345,43 @@ panel lista las grabaciones más nuevas y las descarga; la API tiene `GET` y
 `PUT /api/v1/cameras/{id}/storage`, `POST …/storage/actions/format`, `GET
 …/recordings` y `GET …/recordings/{recording}/download`.
 
+### Diagnóstico
+
+La pestaña **Diagnóstico** de una cámara diagnostica al equipo bajo prueba
+tanto como a la cámara (D79, D92):
+
+- **Clientes.** Cada dirección que usó la cámara: los protocolos, qué pide
+  y cada cuánto (`device-info` ×120 · cada 1,02 s), sus conexiones y
+  cuánto duran, y qué le falló: errores, contraseñas rechazadas y pedidos
+  que el perfil no conoce.
+- **Pedidos** por ruta y cliente, minuto a minuto, con las latencias p50 y
+  p95 de la propia cámara; RTSP cuenta por método (`rtsp:DESCRIBE`,
+  `rtsp:GET_PARAMETER` para los keep-alives). **CSV** y **JSON** descargan
+  los minutos.
+- **Pedidos desconocidos** (brechas): lo que los clientes pidieron y el
+  perfil no conoce. La cámara los responde como dice el perfil; la lista
+  muestra lo que le falta al perfil.
+- **Registro**: lo que registró la cámara y lo que hizo el servicio con
+  ella.
+- **Métricas**: CPU, memoria, clientes, pedidos y tráfico, cada segundo
+  durante 10 minutos, cada 10 s durante un día y cada minuto durante una
+  semana.
+
+Las cámaras informan lo que sirvieron cada 10 segundos. La API tiene
+`GET /api/v1/cameras/{id}/clients`, `…/requests` (`?format=csv`),
+`…/gaps`, `…/logs` y `…/metrics?range=10m|1h|24h|7d`, con
+`?window=1h|24h|7d`; `GET /api/v1/metrics` sirve las métricas del nodo y de
+las cámaras en el formato de texto de Prometheus a un scraper con un token
+de API:
+
+```yaml
+scrape_configs:
+  - job_name: mockvision
+    metrics_path: /api/v1/metrics
+    authorization: { credentials: mvt_… }
+    static_configs: [{ targets: ["nodo:8080"] }]
+```
+
 ### Perfiles
 
 Un perfil describe lo que un modelo de cámara hace en la red, tal como lo

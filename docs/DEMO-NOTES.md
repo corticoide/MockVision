@@ -281,11 +281,25 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   `profiles`.
 - Settings are stored as one JSON document under a single key of the
   settings table.
-- **Metrics live in memory only**: a sample every 2 seconds, kept for 10
-  minutes. D92 asks for 1-second samples, plus 10-second and 1-minute
-  series that are not kept.
-- Gaps (requests the profile does not cover) are logged and published on the
-  camera's topic, but not stored; request counters are not persisted.
+- **Metrics**: cameras report every 2 seconds and the service keeps a
+  sample a second at most, for 10 minutes, in memory; the 10-second and
+  1-minute series are the means of those samples, stored for a day and a
+  week (D92).
+- **Request statistics are aggregates**: per minute, client and route,
+  reported every 10 seconds. Reports of the same minute add up: the median
+  is weighted by their requests and the 95th percentile is the highest of
+  them, so both are approximations over a minute. Latencies are measured
+  in the camera, from the request read to the answer written. There is no
+  raw request log (D92's circular buffer and HAR export).
+- **Sessions are TCP connections**: RTSP sessions are timed by their
+  connection, and a client that keeps reconnecting shows as many
+  connections. Whether a client is connected now comes from the camera's
+  notices.
+- **Gaps** are stored per request shape and client for 30 days; query
+  values are left out of their summary. A camera's log keeps its last 2000
+  lines for 7 days: what it logged at warning or above and its state
+  changes.
+- **Load scenarios** (D93) are not part of this version.
 
 ### Panel
 

@@ -15,8 +15,8 @@
 # node bridge, ipvlan where the kernel has it, faults, the SD card and a NAS
 # share (over SMB when the machine has Samba), the Dahua profile, packages
 # (the catalog, signatures, the self-test, inheritance, export and a
-# camera's upgrade), an external plugin, clean stop, and cameras coming
-# back after a restart.
+# camera's upgrade), an external plugin, diagnostics, clean stop, and
+# cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl, ping, python3 and Go
 # (to build the example plugin):
@@ -1066,6 +1066,42 @@ echo "$hst" | grep -q 'NoNewPrivs:\s*1' && echo "$hst" | grep -q 'Seccomp:\s*2' 
 echo "$hst" | grep -E '^CapEff' | awk '{print $2}' | grep -q '^0*$' || fail "the plugin holds capabilities"
 ok "the plugin (pid $HPID) runs as its camera's user $huid, with no capabilities, no_new_privs and a seccomp filter"
 api DELETE "/cameras/$PL" -o /dev/null
+
+step "diagnostics: what the camera served, its clients, unknown requests, log and metrics (D79, D92)"
+GATE_IP=$(api GET "/cameras/$CID" | json 'd["network"]["ip"]')
+for _ in 1 2 3; do
+	client curl -s -o /dev/null --digest -u admin:e2e-new-pw "http://$GATE_IP/cgi-bin/operator/operator.cgi?action=get.system.information"
+done
+client curl -s -o /dev/null --digest -u admin:not-the-password "http://$GATE_IP/cgi-bin/operator/operator.cgi?action=get.system.information"
+client curl -s -o /dev/null --digest -u admin:e2e-new-pw "http://$GATE_IP/cgi-bin/e2e-unknown.cgi?probe=1"
+client ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 "rtsp://admin:e2e-new-pw@$GATE_IP/main" >/dev/null 2>&1 || true
+diag_ok() {
+	api GET "/cameras/$CID/clients?window=1h" >"$WORK/clients.json"
+	python3 - "$WORK/clients.json" "$CLIENT_IP" <<'PY'
+import json, sys
+c = [x for x in json.load(open(sys.argv[1]))["items"] if x["ip"] == sys.argv[2]]
+routes = {r["route"]: r for r in c[0]["routes"]} if c else {}
+ok = (c and routes.get("device-info", {}).get("count", 0) >= 3 and "rtsp:DESCRIBE" in routes and c[0]["auth_failures"] >= 1
+      and c[0]["gaps"] >= 1 and set(c[0]["protocols"]) >= {"http", "rtsp"})
+if ok:
+    i = routes["device-info"]
+    print(f'{c[0]["connections"]} connections over {",".join(c[0]["protocols"])}, device-info {i["count"]} times, '
+          f'p95 {i["p95_ms"]:.1f} ms, {c[0]["auth_failures"]} refused, {c[0]["gaps"]} unknown')
+sys.exit(0 if ok else 1)
+PY
+}
+# The camera reports what it served every 10 s.
+for _ in $(seq 1 40); do diag_ok >/dev/null && break; sleep 0.5; done
+summary=$(diag_ok) || fail "the client's diagnosis: $(cat "$WORK/clients.json")"
+ok "client $CLIENT_IP: $summary"
+api GET "/cameras/$CID/gaps" | json '"\n".join(g["summary"] for g in d["items"])' | grep -q '^GET /cgi-bin/e2e-unknown.cgi?probe$' ||
+	fail "the unknown request is not a gap: $(api GET "/cameras/$CID/gaps")"
+[ "$(api GET "/cameras/$CID/requests?window=1h&format=csv" | head -n 1)" = "minute,client_ip,route,count,errors,auth_failures,p50_ms,p95_ms,max_ms" ] ||
+	fail "the CSV export"
+api GET "/cameras/$CID/logs" | json '"\n".join(l["msg"] for l in d["items"])' | grep -q '^running$' || fail "the camera's log"
+[ "$(api GET "/cameras/$CID/metrics?range=1h" | json 'len(d["samples"])')" -ge 1 ] || fail "no stored metrics"
+api GET /metrics | grep -q "^mockvision_camera_up{camera_id=\"$CID\",name=\"Gate 1\",state=\"running\"} 1$" || fail "Prometheus metrics"
+ok "the unknown request is a gap, the CSV export, the camera's log, metrics every 10 s and Prometheus' text format"
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

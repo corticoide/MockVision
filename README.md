@@ -329,6 +329,40 @@ panel lists the newest recordings and downloads them; the API has `GET` and
 `PUT /api/v1/cameras/{id}/storage`, `POST …/storage/actions/format`, `GET
 …/recordings` and `GET …/recordings/{recording}/download`.
 
+### Diagnostics
+
+A camera's **Diagnostics** tab diagnoses the equipment under test as much
+as the camera (D79, D92):
+
+- **Clients.** Every address that used the camera: the protocols, what it
+  asks and how often (`device-info` ×120 · every 1.02 s), its connections
+  and how long they last, and what failed for it: errors, refused
+  passwords and requests the profile does not know.
+- **Requests** by route and client, a minute at a time, with the camera's
+  own p50 and p95 latencies; RTSP counts by method (`rtsp:DESCRIBE`,
+  `rtsp:GET_PARAMETER` for keep-alives). **CSV** and **JSON** download the
+  minutes.
+- **Unknown requests** (gaps): what clients asked that the profile does not
+  know. The camera answers them as the profile says; the list shows what
+  the profile lacks.
+- **Log**: what the camera logged and what the service did with it.
+- **Metrics**: CPU, memory, clients, requests and traffic, every second
+  for 10 minutes, every 10 s for a day and every minute for a week.
+
+Cameras report what they served every 10 seconds. The API has
+`GET /api/v1/cameras/{id}/clients`, `…/requests` (`?format=csv`),
+`…/gaps`, `…/logs` and `…/metrics?range=10m|1h|24h|7d`, with
+`?window=1h|24h|7d`; `GET /api/v1/metrics` serves the node's and the
+cameras' metrics in Prometheus' text format to a scraper with an API token:
+
+```yaml
+scrape_configs:
+  - job_name: mockvision
+    metrics_path: /api/v1/metrics
+    authorization: { credentials: mvt_… }
+    static_configs: [{ targets: ["node:8080"] }]
+```
+
 ### Profiles
 
 A profile describes what one camera model does on the network, as its
