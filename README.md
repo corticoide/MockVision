@@ -661,19 +661,27 @@ or MAC on the LAN.
 |---|---|
 | `make test` | `go vet`, unit tests and the panel's type check |
 | `make test-integration` | network namespaces, macvlan, ipvlan, MAC probe, firewall, DHCP socket and bridge on a virtual link (root) |
-| `make e2e` | the demo's acceptance criteria on an isolated virtual LAN (root, iproute2, ffmpeg, curl, ping, python3) |
+| `make e2e` | the demo's acceptance criteria on an isolated virtual LAN (root, iproute2, ffmpeg, curl, ping, python3, Go) |
 | `make e2e-compose` | the same criteria against the Docker image started with `compose.yaml` |
-| `make generate` | sqlc queries and the panel's API types from `openapi.yaml` |
+| `make generate` | sqlc queries, the panel's API types from `openapi.yaml` and the plugin protocol's Go code |
+
+The panel's components are [shadcn/ui](https://ui.shadcn.com)'s, on Radix
+(`frontend/components.json`, `src/components/ui`), in the panel's design.
+The panel runs under a strict CSP: a component that adds a style element at
+run time, such as a modal's scroll lock, must give it the page's nonce
+(`src/lib/nonce.ts`); positions go through React's style object, never a
+style attribute.
 
 The binary must be built with `CGO_ENABLED=0`: dropping privileges and the
 sandbox change every thread at once, and only a pure Go binary can do that.
 
 ```
 backend/    cmd/mockvision, internal/ (domain, app, store, netctl, sandbox, camera, engines, media, pkg, api, telemetry)
-frontend/   React + TypeScript + Vite panel, embedded in the binary
+frontend/   React + TypeScript + Vite panel (shadcn/ui on Radix), embedded in the binary
 database/   migrations and queries (sqlc)
 profiles/   profile schema, the demo profile and the Dahua draft
-sdk/        engine contract (Go and gRPC)
+sdk/        engine contract (Go and gRPC) and the plugin SDK
+examples/   an example plugin
 deploy/     Dockerfile and systemd unit
 docs/       notes and the code audit (AUDITORIA.md)
 ```
@@ -686,7 +694,9 @@ docs/       notes and the code audit (AUDITORIA.md)
   an account lock it for that address.
 - Sessions are `HttpOnly` and `SameSite=Strict` cookies. Every request that
   changes state needs a custom header and passes an `Origin` check. The
-  panel runs under a strict CSP and loads nothing from other origins.
+  panel runs under a strict CSP and loads nothing from other origins: no
+  inline script, and no inline style but the style elements that carry the
+  nonce of their page, new on every load.
 - Camera and target passwords are encrypted with XChaCha20-Poly1305. The key
   is kept outside the database, and the API never returns them.
 - API tokens are stored as SHA-256 hashes and shown once. They carry a scope

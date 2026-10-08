@@ -305,12 +305,15 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 
 - English and Spanish: the panel starts in the browser's language and
   remembers the one picked.
-- No shadcn/ui or Radix: native `<dialog>` and a small router, so the panel
-  runs under a CSP without `unsafe-inline`. The design tokens (colors,
-  radius, 32 px rows, Inter and JetBrains Mono embedded) are the design's.
-- The camera tab for logs comes with its feature of the v1 plan; the
-  detail page has General, Network, Protocols, Media, Rules, Triggers,
-  Users, Configuration, Storage, Faults and Events.
+- **shadcn/ui on Radix** (D49), with the design's tokens (colors, radius,
+  32 px rows, Inter and JetBrains Mono embedded) rather than shadcn's
+  theme. The CSP stays without `unsafe-inline`: the panel's page carries a
+  nonce of its own on every load, which the style element of a modal's
+  scroll lock takes; nothing else is inline. Selects stay native (`<select>`)
+  and confirmations use the browser's `confirm()`; toasts are the panel's
+  own. A small router replaces React Router.
+- The detail page has General, Network, Protocols, Media, Rules, Triggers,
+  Users, Configuration, Storage, Faults, Events and Diagnostics.
 - The rule editor draws on the latest snapshot of the main stream, refreshed
   every 5 seconds; the camera page loads the first time a camera is opened.
 - The event log shows the latest 100 events; the API pages with a cursor.

@@ -698,9 +698,17 @@ tiene IP ni MAC en la LAN.
 |---|---|
 | `make test` | `go vet`, tests unitarios y el chequeo de tipos del panel |
 | `make test-integration` | namespaces de red, macvlan, ipvlan, sondeo de MAC, firewall, socket DHCP y puente sobre un enlace virtual (root) |
-| `make e2e` | los criterios de aceptación de la demo en una LAN virtual aislada (root, iproute2, ffmpeg, curl, ping, python3) |
+| `make e2e` | los criterios de aceptación de la demo en una LAN virtual aislada (root, iproute2, ffmpeg, curl, ping, python3, Go) |
 | `make e2e-compose` | los mismos criterios contra la imagen Docker levantada con `compose.yaml` |
-| `make generate` | consultas de sqlc y tipos de la API del panel desde `openapi.yaml` |
+| `make generate` | consultas de sqlc, tipos de la API del panel desde `openapi.yaml` y el código Go del protocolo de plugins |
+
+Los componentes del panel son los de [shadcn/ui](https://ui.shadcn.com),
+sobre Radix (`frontend/components.json`, `src/components/ui`), con el diseño
+del panel. El panel corre con una CSP estricta: un componente que agrega un
+elemento de estilo en tiempo de ejecución, como el bloqueo de scroll de un
+modal, tiene que darle el nonce de la página (`src/lib/nonce.ts`); las
+posiciones van por el objeto de estilo de React, nunca por un atributo
+style.
 
 El binario se compila con `CGO_ENABLED=0`: soltar privilegios y el sandbox
 cambian todos los hilos a la vez, y eso solo lo puede hacer un binario Go
@@ -715,7 +723,9 @@ puro.
   bloquean para esa dirección.
 - Las sesiones son cookies `HttpOnly` y `SameSite=Strict`. Todo pedido que
   cambia estado necesita un encabezado propio y pasa un chequeo de `Origin`.
-  El panel corre con una CSP estricta y no carga nada de otros orígenes.
+  El panel corre con una CSP estricta y no carga nada de otros orígenes:
+  ningún script en línea, y ningún estilo en línea salvo los elementos de
+  estilo que llevan el nonce de su página, nuevo en cada carga.
 - Las contraseñas de cámaras y destinos se cifran con XChaCha20-Poly1305. La
   clave se guarda fuera de la base, y la API nunca las devuelve.
 - Los tokens de API se guardan como hash SHA-256 y se muestran una sola vez.
