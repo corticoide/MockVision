@@ -841,6 +841,8 @@ export interface paths {
         parameters: {
             query?: {
                 since?: number;
+                /** @description A window instead of since: 10m (a sample a second, from memory), 1h and 24h (one every 10 s), 7d (one a minute) (D92) */
+                range?: "10m" | "1h" | "24h" | "7d";
             };
             header?: never;
             path: {
@@ -849,6 +851,119 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getCameraMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/requests": {
+        parameters: {
+            query?: {
+                /** @description The last hour, day or week; an hour by default */
+                window?: components["parameters"]["Window"];
+                /** @description Download the window a minute at a time, by client and route, as CSV or JSON */
+                format?: "csv" | "json";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** What the camera served over a window, by route and client, and a minute at a time */
+        get: operations["getCameraRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/clients": {
+        parameters: {
+            query?: {
+                /** @description The last hour, day or week; an hour by default */
+                window?: components["parameters"]["Window"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The camera's clients over a window, the most recent first
+         * @description For each address: what it asks and how often, its connections and
+         *     how long they last, its errors, refused credentials and requests
+         *     the profile does not know. It diagnoses the equipment under test.
+         */
+        get: operations["getCameraClients"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** Requests the camera's profile does not know (D79), the most recent first */
+        get: operations["getCameraGaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/logs": {
+        parameters: {
+            query?: {
+                /** @description The id the previous page ended at */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** The camera's log, the newest first; what it logged and what the service did with it */
+        get: operations["getCameraLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The node's and the cameras' latest metrics, in Prometheus' text format
+         * @description For a Prometheus server with an API token (Authorization Bearer).
+         */
+        get: operations["getPrometheusMetrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1456,6 +1571,78 @@ export interface components {
             approved_at?: string;
             /** Format: date-time */
             installed_at: string;
+        };
+        RouteStat: {
+            /** @description The profile's route id; rtsp:METHOD for RTSP; auth for a challenge, auth-failed for credentials refused */
+            route: string;
+            client_ip: string;
+            count: number;
+            /** @description Answers of 400 or more */
+            errors: number;
+            auth_failures: number;
+            p50_ms: number;
+            p95_ms: number;
+            max_ms: number;
+            /** @description How often the client asks */
+            interval_ms: number;
+            /** Format: date-time */
+            first_at: string;
+            /** Format: date-time */
+            last_at: string;
+        };
+        RequestsView: {
+            /** Format: date-time */
+            since: string;
+            routes: components["schemas"]["RouteStat"][];
+            minutes: {
+                /** Format: date-time */
+                minute: string;
+                count: number;
+                errors: number;
+                auth_failures: number;
+            }[];
+        };
+        CameraClient: {
+            ip: string;
+            protocols: string[];
+            connected: boolean;
+            /** Format: date-time */
+            first_seen: string;
+            /** Format: date-time */
+            last_seen: string;
+            /** @description Connections it opened; a client that keeps reconnecting opens many */
+            connections: number;
+            mean_session_ms: number;
+            max_session_ms: number;
+            requests: number;
+            errors: number;
+            auth_failures: number;
+            gaps: number;
+            routes: components["schemas"]["RouteStat"][];
+        };
+        Gap: {
+            protocol: string;
+            /** @description The request, such as GET /cgi-bin/unknown.cgi?action=x */
+            summary: string;
+            client_ip: string;
+            count: number;
+            /** Format: date-time */
+            first_at: string;
+            /** Format: date-time */
+            last_at: string;
+        };
+        CameraLog: {
+            id: number;
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            level: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            /** @enum {string} */
+            source: "camera" | "service";
+            msg: string;
+            attrs: {
+                [key: string]: unknown;
+            };
         };
         TrustedKey: {
             /** @description Empty for an official key */
@@ -2259,6 +2446,8 @@ export interface components {
     };
     parameters: {
         ID: string;
+        /** @description The last hour, day or week; an hour by default */
+        Window: "1h" | "24h" | "7d";
     };
     requestBodies: never;
     headers: never;
@@ -3707,6 +3896,8 @@ export interface operations {
         parameters: {
             query?: {
                 since?: number;
+                /** @description A window instead of since: 10m (a sample a second, from memory), 1h and 24h (one every 10 s), 7d (one a minute) (D92) */
+                range?: "10m" | "1h" | "24h" | "7d";
             };
             header?: never;
             path: {
@@ -3725,6 +3916,137 @@ export interface operations {
                     "application/json": {
                         samples: components["schemas"]["CameraMetrics"][];
                     };
+                };
+            };
+        };
+    };
+    getCameraRequests: {
+        parameters: {
+            query?: {
+                /** @description The last hour, day or week; an hour by default */
+                window?: components["parameters"]["Window"];
+                /** @description Download the window a minute at a time, by client and route, as CSV or JSON */
+                format?: "csv" | "json";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requests; with format, the file to download instead */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestsView"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getCameraClients: {
+        parameters: {
+            query?: {
+                /** @description The last hour, day or week; an hour by default */
+                window?: components["parameters"]["Window"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Clients */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CameraClient"][];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    getCameraGaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gaps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Gap"][];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    getCameraLogs: {
+        parameters: {
+            query?: {
+                /** @description The id the previous page ended at */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lines */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CameraLog"][];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    getPrometheusMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
                 };
             };
         };

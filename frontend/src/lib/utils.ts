@@ -60,6 +60,12 @@ export function formatBitRate(bytesPerSecond: number | null | undefined): string
   return `${value} ${units[i]}`;
 }
 
+/** A number in the panel's locale. */
+export function formatNumber(n: number | null | undefined, digits = 0): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
+}
+
 export function formatPercent(n: number | null | undefined, digits = 1): string {
   if (n == null) return "—";
   const value = new Intl.NumberFormat(formatLocale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
@@ -91,6 +97,19 @@ export function formatDuration(from: string | null | undefined, to: string | nul
   if (ms < 1000) return `${ms} ms`;
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/** A length of time in milliseconds, such as 2.4 ms, 1.02 s or 3m 5s. */
+export function formatMS(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  const n = (v: number, digits: number) => new Intl.NumberFormat(formatLocale, { maximumFractionDigits: digits }).format(v);
+  if (ms < 10) return `${n(ms, 1)} ms`;
+  if (ms < 1000) return `${n(ms, 0)} ms`;
+  if (ms < 60_000) return `${n(ms / 1000, ms < 10_000 ? 2 : 1)} s`;
+  const s = Math.round(ms / 1000);
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ${s % 60}s`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;

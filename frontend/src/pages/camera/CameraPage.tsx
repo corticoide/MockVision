@@ -15,6 +15,7 @@ import { Link, navigate } from "@/lib/router";
 import { cameraIP } from "@/lib/network";
 import { reasonDetail, reasonText } from "@/lib/reasons";
 import { ConfigTab } from "./ConfigTab";
+import { DiagnosticsTab } from "./DiagnosticsTab";
 import { FaultsTab } from "./FaultsTab";
 import { CloneDialog, ResetDialog } from "./dialogs";
 import { GeneralTab } from "./GeneralTab";
@@ -39,6 +40,7 @@ const sections = [
   { id: "storage", label: "Storage" },
   { id: "faults", label: "Faults" },
   { id: "events", label: "Events" },
+  { id: "diagnostics", label: "Diagnostics" },
 ];
 
 export function CameraPage({ id, tab }: { id: string; tab?: string }) {
@@ -100,6 +102,7 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         {current === "storage" && <StorageTab camera={camera} />}
         {current === "faults" && <FaultsTab camera={camera} />}
         {current === "events" && <EventsTab camera={camera} />}
+        {current === "diagnostics" && <DiagnosticsTab camera={camera} />}
       </TabPanel>
     </>
   );

@@ -49,6 +49,7 @@ export const keys = {
   profileDiff: (id: string, from: string, to: string) => ["profiles", id, from, "diff", to] as const,
   trustedKeys: ["trusted-keys"] as const,
   plugins: ["plugins"] as const,
+  diagnostics: (id: string) => ["cameras", id, "diagnostics"] as const,
   assets: ["assets"] as const,
   targets: ["targets"] as const,
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
@@ -498,6 +499,52 @@ export function useImportPackage() {
       qc.invalidateQueries({ queryKey: keys.profiles });
       qc.invalidateQueries({ queryKey: keys.plugins });
     },
+  });
+}
+
+// --- Diagnostics ---
+
+export type MetricsRange = "10m" | "1h" | "24h" | "7d";
+export type StatsWindow = "1h" | "24h" | "7d";
+
+/** A camera's metrics over a window: from memory for ten minutes, stored for longer (D92). */
+export function useCameraMetrics(id: string, range: MetricsRange) {
+  return useQuery({
+    queryKey: [...keys.diagnostics(id), "metrics", range],
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/metrics", { params: { path: { id }, query: { range } } })).samples,
+    refetchInterval: range === "10m" ? 5000 : 30_000,
+  });
+}
+
+export function useCameraRequests(id: string, window: StatsWindow) {
+  return useQuery({
+    queryKey: [...keys.diagnostics(id), "requests", window],
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/requests", { params: { path: { id }, query: { window } } })),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCameraClients(id: string, window: StatsWindow) {
+  return useQuery({
+    queryKey: [...keys.diagnostics(id), "clients", window],
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/clients", { params: { path: { id }, query: { window } } })).items,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCameraGaps(id: string) {
+  return useQuery({
+    queryKey: [...keys.diagnostics(id), "gaps"],
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/gaps", { params: { path: { id } } })).items,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCameraLogs(id: string, limit: number) {
+  return useQuery({
+    queryKey: [...keys.diagnostics(id), "logs", limit],
+    queryFn: async () => unwrap(await api.GET("/cameras/{id}/logs", { params: { path: { id }, query: { limit } } })).items,
+    refetchInterval: 10_000,
   });
 }
 
