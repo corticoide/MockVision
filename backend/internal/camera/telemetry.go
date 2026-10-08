@@ -16,7 +16,8 @@ import (
 )
 
 // telemetry implements engine.Telemetry: logs, request counters, gaps and
-// clients of the camera, forwarded to the service.
+// clients of the camera, forwarded to the service, and the statistics it
+// reports every StatsInterval.
 type telemetry struct {
 	rt       *Runtime
 	requests atomic.Uint64
@@ -24,6 +25,7 @@ type telemetry struct {
 	mu      sync.Mutex
 	gaps    map[string]*gapEntry
 	clients map[string]int
+	stats   *stats
 }
 
 type gapEntry struct {
@@ -32,7 +34,7 @@ type gapEntry struct {
 }
 
 func newTelemetry(rt *Runtime) *telemetry {
-	return &telemetry{rt: rt, gaps: map[string]*gapEntry{}, clients: map[string]int{}}
+	return &telemetry{rt: rt, gaps: map[string]*gapEntry{}, clients: map[string]int{}, stats: newStats()}
 }
 
 func (t *telemetry) Log(level slog.Level, msg string, attrs ...any) {
@@ -52,14 +54,28 @@ func (t *telemetry) Log(level slog.Level, msg string, attrs ...any) {
 	_ = t.rt.conn.Notify(ipc.TypeLog, ipc.Log{Level: level.String(), Msg: msg, Attrs: m})
 }
 
-func (t *telemetry) Request(string, string, int, time.Duration) {
+func (t *telemetry) Request(route, clientIP string, status int, dur time.Duration) {
 	t.requests.Add(1)
+	t.mu.Lock()
+	t.stats.request(time.Now(), route, clientIP, status, dur)
+	t.mu.Unlock()
+}
+
+// report sends what the camera served since the last report.
+func (t *telemetry) report() {
+	t.mu.Lock()
+	st := t.stats.take()
+	t.mu.Unlock()
+	if st != nil && t.rt.conn != nil {
+		_ = t.rt.conn.Notify(ipc.TypeRequestStats, st)
+	}
 }
 
 // Gap reports an unknown request at most once a minute per request shape.
 func (t *telemetry) Gap(protocol, clientIP, summary string) {
 	key := protocol + " " + summary
 	t.mu.Lock()
+	t.stats.gap(time.Now(), protocol, clientIP, summary)
 	g := t.gaps[key]
 	if g == nil {
 		if len(t.gaps) > 1000 {
@@ -83,6 +99,7 @@ func (t *telemetry) Gap(protocol, clientIP, summary string) {
 func (t *telemetry) Client(protocol, clientIP string, connected bool) {
 	key := protocol + "|" + clientIP
 	t.mu.Lock()
+	t.stats.connection(time.Now(), protocol, clientIP, connected)
 	before := t.clients[key]
 	if connected {
 		t.clients[key]++

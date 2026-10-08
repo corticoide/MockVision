@@ -123,9 +123,19 @@ type Engine struct {
 	unwatch    func()
 	// playbacks are the recordings each connection plays back.
 	playbacks map[*gortsplib.ServerConn]*streamer
+	// pending is the request each connection is being answered, for the
+	// camera's statistics.
+	pending sync.Map
 
 	state    atomic.Value
 	sessions atomic.Int64
+}
+
+// pendingRequest is a request being answered.
+type pendingRequest struct {
+	method   string
+	authSent bool
+	start    time.Time
 }
 
 // sessionState is what the engine keeps about an RTSP session: whether
@@ -520,6 +530,7 @@ func (e *Engine) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 // OnConnClose implements gortsplib.ServerHandlerOnConnClose.
 func (e *Engine) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
 	e.nonces.Delete(ctx.Conn)
+	e.pending.Delete(ctx.Conn)
 	e.mu.Lock()
 	pb := e.playbacks[ctx.Conn]
 	delete(e.playbacks, ctx.Conn)
@@ -638,6 +649,12 @@ func (e *Engine) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
 
+// OnRequest implements gortsplib.ServerHandlerOnRequest: it notes the
+// request a connection is answered, for its statistics.
+func (e *Engine) OnRequest(sc *gortsplib.ServerConn, req *base.Request) {
+	e.pending.Store(sc, pendingRequest{method: string(req.Method), authSent: len(req.Header["Authorization"]) > 0, start: time.Now()})
+}
+
 // OnResponse implements gortsplib.ServerHandlerOnResponse. It follows
 // every request of a connection and names the camera's server; after a
 // PLAY, the server has added the session to the stream's readers, and the
@@ -648,6 +665,18 @@ func (e *Engine) OnResponse(sc *gortsplib.ServerConn, res *base.Response) {
 		res.Header["Server"] = base.HeaderValue{e.serverName}
 	}
 	e.mu.RUnlock()
+	if v, ok := e.pending.LoadAndDelete(sc); ok {
+		p := v.(pendingRequest)
+		// Routes by method; a 401 is a challenge, or credentials refused.
+		route := "rtsp:" + p.method
+		if res.StatusCode == base.StatusUnauthorized {
+			route = "rtsp:auth"
+			if p.authSent {
+				route = "rtsp:auth-failed"
+			}
+		}
+		e.in.Host.Telemetry().Request(route, hostOnly(sc.NetConn().RemoteAddr().String()), int(res.StatusCode), time.Since(p.start))
+	}
 	if st, ok := sc.UserData().(*streamer); ok {
 		sc.SetUserData(nil)
 		st.release()

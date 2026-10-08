@@ -427,3 +427,55 @@ type Plugin struct {
 	Permissions []string          `json:"permissions"`
 	Descriptor  engine.Descriptor `json:"descriptor"`
 }
+
+// RequestStats is what a camera served since its last report, every
+// StatsInterval (D92): its requests a minute at a time by client and route,
+// its connections by client, and the requests its profile did not know
+// (D79). Reports of the same minute add up.
+type RequestStats struct {
+	Requests    []RequestStat `json:"requests,omitempty"`
+	Connections []ConnStat    `json:"connections,omitempty"`
+	Gaps        []GapStat     `json:"gaps,omitempty"`
+}
+
+// RequestStat counts the requests of a client to a route in a minute.
+type RequestStat struct {
+	// Minute is the start of the minute, in Unix milliseconds.
+	Minute   int64  `json:"minute"`
+	ClientIP string `json:"client_ip"`
+	Route    string `json:"route"`
+	Count    int    `json:"count"`
+	// Errors are answers of 400 or more but a challenge's 401;
+	// AuthFailures are credentials refused.
+	Errors       int     `json:"errors"`
+	AuthFailures int     `json:"auth_failures"`
+	P50MS        float64 `json:"p50_ms"`
+	P95MS        float64 `json:"p95_ms"`
+	MaxMS        float64 `json:"max_ms"`
+	// FirstAt and LastAt are the first and the last request, in Unix
+	// milliseconds: how often a client asks.
+	FirstAt int64 `json:"first_at"`
+	LastAt  int64 `json:"last_at"`
+}
+
+// ConnStat counts the connections of a client in a minute; DurationMS adds
+// up how long those that closed lasted.
+type ConnStat struct {
+	Minute        int64  `json:"minute"`
+	Protocol      string `json:"protocol"`
+	ClientIP      string `json:"client_ip"`
+	Opened        int    `json:"opened"`
+	Closed        int    `json:"closed"`
+	DurationMS    int64  `json:"duration_ms"`
+	MaxDurationMS int64  `json:"max_duration_ms"`
+}
+
+// GapStat counts the requests of a client the profile did not know.
+type GapStat struct {
+	Protocol string `json:"protocol"`
+	ClientIP string `json:"client_ip"`
+	Summary  string `json:"summary"`
+	Count    int    `json:"count"`
+	// At is the last one, in Unix milliseconds.
+	At int64 `json:"at"`
+}

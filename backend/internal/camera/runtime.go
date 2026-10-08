@@ -203,6 +203,8 @@ func (r *Runtime) Run(ctx context.Context) error {
 	cpu.sample()
 	ticker := time.NewTicker(ipc.HeartbeatInterval * time.Millisecond)
 	defer ticker.Stop()
+	statsTicker := time.NewTicker(StatsInterval)
+	defer statsTicker.Stop()
 	deadline := 5 * time.Second
 	reason := "stopped"
 loop:
@@ -210,6 +212,8 @@ loop:
 		select {
 		case <-ticker.C:
 			r.heartbeat(cpu)
+		case <-statsTicker.C:
+			r.tel.report()
 		case d := <-r.stopReq:
 			deadline = d
 			break loop
@@ -228,6 +232,8 @@ loop:
 	r.stopEngines(stopCtx)
 	r.files.close()
 	r.sink.close()
+	// What the engines served until they stopped.
+	r.tel.report()
 	_ = r.conn.Notify(ipc.TypeBye, ipc.Bye{Reason: reason})
 	r.conn.Close()
 	<-runDone

@@ -356,9 +356,13 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	user, ok, stale := cc.auth.check(r)
 	if !ok {
-		routeID = "auth"
 		// Credentials sent and refused, not the challenge's first round.
-		if ev := cc.cfg.Auth.FailureEvent; ev != "" && !stale && r.Header.Get("Authorization") != "" && e.in.Host.Events() != nil {
+		refused := !stale && r.Header.Get("Authorization") != ""
+		routeID = "auth"
+		if refused {
+			routeID = "auth-failed"
+		}
+		if ev := cc.cfg.Auth.FailureEvent; ev != "" && refused && e.in.Host.Events() != nil {
 			_, _ = e.in.Host.Events().Emit(r.Context(), engine.Event{Type: ev, Trigger: "device",
 				Custom: map[string]any{"client": clientIP}})
 		}
