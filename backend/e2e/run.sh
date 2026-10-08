@@ -13,8 +13,9 @@
 # with bulk actions and the audit log, background jobs, the outbound
 # firewall, the MAC probe, DHCP with the factory address as fallback, the
 # node bridge, ipvlan where the kernel has it, faults, the SD card and a NAS
-# share (over SMB when the machine has Samba), clean stop, and cameras
-# coming back after a restart.
+# share (over SMB when the machine has Samba), the Dahua profile, packages
+# (the catalog, signatures, the self-test, inheritance, export and a
+# camera's upgrade), clean stop, and cameras coming back after a restart.
 #
 # Run as root on Linux with iproute2, ffmpeg, curl, ping and python3:
 #   sudo backend/e2e/run.sh
@@ -207,10 +208,12 @@ if [ "$MODE" = compose ]; then node_exec test ! -e /data/setup-code; else [ ! -e
 	fail "the setup code outlived the setup"
 ok "setup needs the one-time code from the log; admin created and logged in"
 
-step "import profiles/milesight-demo.yaml"
-level=$(api POST /packages -F "file=@$ROOT/profiles/milesight-demo.yaml" | json 'd["profile"]["level"]')
-[ "$level" = draft ] || fail "expected level draft, got $level"
-ok "validated and listed as draft (Borrador)"
+step "the official catalog is installed when the node starts (D81)"
+CATALOG=$(api GET /profiles | json '" ".join(sorted(p["profile_id"] + "@" + p["version"] + ":" + p["level"] + ":" + p["source"] for p in d["items"]))')
+for want in milesight/base@0.1.0:documented:catalog milesight/demo@0.7.0:draft:catalog dahua/ipc-hdbw1230e-s4@0.2.0:documented:catalog; do
+	case " $CATALOG " in *" $want "*) ;; *) fail "the catalog lacks $want: $CATALOG" ;; esac
+done
+ok "milesight/base, milesight/demo (draft) and the Dahua draft (documented) came with the node, read only"
 
 step "event target on the client and a camera with a fixed IP"
 TID=$(api POST /targets -H 'Content-Type: application/json' -d "{\"name\":\"client\",\"url\":\"http://$CLIENT_IP:9000/events\"}" | json 'd["id"]')
@@ -544,8 +547,7 @@ code=$(tok "$SECRET" GET /cameras -o /dev/null -w '%{http_code}')
 [ "$code" = 401 ] || fail "a revoked token got $code"
 ok "a revoked token is refused at once"
 
-step "background jobs: import, renditions and a preparation (D72, D74)"
-[ "$(api GET '/jobs?type=import' | json 'd["items"][-1]["status"]')" = completed ] || fail "the import did not run as a completed job"
+step "background jobs: renditions and a preparation (D72, D74)"
 [ "$(api GET '/jobs?type=rendition&status=completed' | json 'len(d["items"])')" -ge 1 ] || fail "no rendition was encoded as a job"
 JID=$(api POST /jobs -H 'Content-Type: application/json' -d '{"type":"renditions.prepare"}' | json 'd["id"]')
 for _ in $(seq 1 120); do
@@ -554,7 +556,7 @@ for _ in $(seq 1 120); do
 	sleep 0.5
 done
 [ "$st" = completed ] || fail "renditions.prepare ended $st: $(api GET "/jobs/$JID")"
-ok "import and renditions ran as jobs; preparation: $(api GET "/jobs/$JID" | json 'd["result"]')"
+ok "renditions ran as jobs; preparation: $(api GET "/jobs/$JID" | json 'd["result"]')"
 
 step "outbound firewall: a camera connects only to the event targets (D25)"
 [ "$(api GET "/cameras/$CID" | json 'd["status"]["firewall"]')" = True ] || fail "the camera has no outbound firewall"
@@ -871,8 +873,6 @@ else
 fi
 
 step "Dahua profile: eventManager attach, Dahua's values and errors (D29)"
-level=$(api POST /packages -F "file=@$ROOT/profiles/dahua-ipc-hdbw1230e-s4.yaml" | json 'd["profile"]["level"]')
-[ "$level" = draft ] || fail "the Dahua draft: $level"
 DH_IP=10.77.0.13
 DH=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\": \"Hall\", \"profile_id\": \"dahua/ipc-hdbw1230e-s4\",
 	\"profile_version\": \"0.2.0\", \"network\": {\"ip\": \"$DH_IP\"}, \"target_ids\": [\"$TID\"], \"start\": true}" | json 'd["id"]')
@@ -880,7 +880,7 @@ wait_state "$DH" running 120
 DH_SERIAL=$(api GET "/cameras/$DH" | json 'd["serial"]')
 dh() { client curl -s --digest -u admin:admin1234 "http://$DH_IP$1"; }
 [ "$(dh '/cgi-bin/magicBox.cgi?action=getMachineName' | tr -d '\r')" = "name=$DH_SERIAL" ] || fail "the unit is not named after its serial"
-ok "the unit answers as Dahua's, named after its serial $DH_SERIAL"
+ok "the unit, from the catalog's Dahua profile, answers as Dahua's, named after its serial $DH_SERIAL"
 # A client keeps attach open; a motion reaches it as Start, then Stop.
 client curl -s -N --max-time 12 --digest -u admin:admin1234 \
 	"http://$DH_IP/cgi-bin/eventManager.cgi?action=attach&codes=%5BAll%5D&heartbeat=2" >"$WORK/attach.log" 2>/dev/null &
@@ -912,6 +912,97 @@ done
 [ "$(api GET "/events?camera_id=$DH&type=custom:login_failure" | json 'len(d["items"])')" -ge 1 ] || fail "no LoginFailure"
 ok "a wrong password raised LoginFailure"
 api DELETE "/cameras/$DH" -o /dev/null
+
+step "packages: a trusted signature, the self-test, inheritance, export and a camera's upgrade (D05, D17, D83, D88)"
+# The package tools run where the binary is: on the host, or in the image.
+mvcli() {
+	if [ "$MODE" = compose ]; then docker run --rm -u 0 -e MOCKVISION_KEY_PASSWORD -v "$WORK:$WORK" mockvision:latest "$@"; else "$BIN" "$@"; fi
+}
+PK=$WORK/pkg
+mkdir -p "$PK/demo/fixtures"
+mvcli pkg keygen -o "$PK/acme" -W >/dev/null || fail "pkg keygen"
+python3 -c 'import json,sys; print(json.dumps({"name": "Acme", "public_key": open(sys.argv[1]).read()}))' "$PK/acme.pub" >"$PK/key.json"
+api POST /trusted-keys -H 'Content-Type: application/json' -d "@$PK/key.json" | json 'd["key_id"]' >/dev/null || fail "trusting the key"
+sed 's/^  version: 0.7.0$/  version: 0.8.0/' "$ROOT/profiles/milesight-demo.yaml" >"$PK/demo/profile.yaml"
+printf 'format: 1\nkind: profile\nid: milesight/demo\nversion: 0.8.0\nprovenance: { source: captured }\n' >"$PK/demo/manifest.yaml"
+cat >"$PK/demo/fixtures/recorded.yaml" <<'FIXTURES'
+fixtures:
+  - id: device-info
+    request: { method: GET, path: /cgi-bin/operator/operator.cgi, query: { action: get.system.information } }
+    response:
+      status: 200
+      headers: { Content-Type: application/json }
+      body: |
+        {"deviceName": "Network Camera", "vendor": "Milesight", "model": "MS-DEMO", "serialNumber": "6C0123456789",
+         "macAddress": "1C:C3:16:00:00:01", "ipAddress": "192.168.5.190", "firmwareVersion": "demo-1.0.0",
+         "systemTime": "2026-09-20T10:00:00Z"}
+    vary:
+      - { in: body, path: $.serialNumber, as: serial }
+      - { in: body, path: $.macAddress, as: any }
+      - { in: body, path: $.ipAddress, as: any }
+      - { in: body, path: $.systemTime, as: timestamp }
+  - id: line-crossing
+    trigger: { type: line_crossing, direction: "A->B" }
+    expect:
+      http_push:
+        body: |
+          {"eventType": "LineCrossing", "eventId": "x", "time": "2026-09-20T10:00:00.000Z",
+           "device": {"name": "Network Camera", "serialNumber": "6C0123456789", "macAddress": "x", "ipAddress": "x"},
+           "rule": {"id": "x", "name": "Line 1", "type": "line"}, "direction": "A->B", "object": null}
+        vary:
+          - { in: body, path: $.eventId, as: any }
+          - { in: body, path: $.time, as: timestamp }
+          - { in: body, path: $.device.serialNumber, as: serial }
+          - { in: body, path: $.device.macAddress, as: any }
+          - { in: body, path: $.device.ipAddress, as: any }
+          - { in: body, path: $.rule.id, as: any }
+          - { in: body, path: $.object, as: any }
+FIXTURES
+chmod -R a+rwX "$PK"
+mvcli pkg build "$PK/demo" -o "$PK/demo.mvpkg" -k "$PK/acme.key" >/dev/null || fail "pkg build"
+IMP=$(api POST /packages -F "file=@$PK/demo.mvpkg")
+[ "$(echo "$IMP" | json 'd["profile"]["signature_status"] + " " + d["profile"]["signer"] + " " + d["profile"]["level"]')" = "trusted Acme captured" ] ||
+	fail "the signed package with its recordings: $(echo "$IMP" | json 'd["report"]')"
+[ "$(echo "$IMP" | json 'd["report"]["self_test"]["passed"]')" = 2 ] || fail "self-test: $(echo "$IMP" | json 'd["report"]["self_test"]')"
+[ "$(echo "$IMP" | json 'd["report"]["verified"]["route:http/device-info"] + " " + d["report"]["verified"]["event:line_crossing"]')" = "verified verified" ] ||
+	fail "coverage: $(echo "$IMP" | json 'd["report"]["verified"]')"
+[ "$(api GET '/jobs?type=import' | json 'd["items"][0]["status"]')" = completed ] || fail "the import did not run as a completed job"
+node_exec ip netns list | grep -q sim-selftest && fail "the self-test camera's namespace was left behind"
+ok "signed by a trusted key and its 2 recordings match an ephemeral camera on a network of its own: captured"
+# The same package with its manifest changed after signing.
+python3 - "$PK/demo.mvpkg" "$PK/tampered.mvpkg" <<'PY'
+import sys, zipfile
+src, dst = zipfile.ZipFile(sys.argv[1]), zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED)
+for i in src.infolist():
+    data = src.read(i.filename)
+    if i.filename == "manifest.yaml":
+        data += b"license: MIT\n"
+    dst.writestr(i.filename, data)
+dst.close()
+PY
+code=$(api POST /packages -F "file=@$PK/tampered.mvpkg" -o "$PK/tampered.json" -w '%{http_code}')
+[ "$code" = 422 ] && grep -q 'changed after it was signed' "$PK/tampered.json" || fail "a package changed after signing answered $code: $(cat "$PK/tampered.json")"
+ok "a manifest changed after signing is rejected (422)"
+# A model that extends the catalog's Milesight base.
+printf 'schema: 1\nprofile:\n  id: milesight/c2965\n  version: 1.0.0\n  name: Milesight C2965\n  vendor: Milesight\n  model: MS-C2965-PB\n  extends: milesight/base@^0.1\n' >"$PK/c2965.yaml"
+[ "$(api POST /packages -F "file=@$PK/c2965.yaml" | json 'd["profile"]["extends"]')" = milesight/base@0.1.0 ] || fail "the child of milesight/base"
+ok "milesight/c2965 extends milesight/base@^0.1, resolved with 0.1.0 pinned"
+# Exported, it is the signed package: pkg verify trusts it with the key.
+api GET /profiles/milesight/demo/versions/0.8.0/export -o "$PK/exported.mvpkg"
+cmp -s "$PK/exported.mvpkg" "$PK/demo.mvpkg" || fail "the export is not the package imported"
+chmod a+r "$PK/exported.mvpkg"
+mvcli pkg verify "$PK/exported.mvpkg" --key "$PK/acme.pub" | grep -q 'signature:trusted by acme.pub' || fail "pkg verify of the export"
+ok "the export is the signed package; pkg verify --key trusts it offline"
+# Gate 1 moves from 0.7.0 to 0.8.0: the plan first, then a restart.
+[ "$(api POST "/cameras/$CID/actions/upgrade-profile" -H 'Content-Type: application/json' -d '{"version":"0.8.0","dry_run":true}' | json 'd["plan"]["restart"]')" = True ] ||
+	fail "the plan of the upgrade"
+[ "$(api POST "/cameras/$CID/actions/upgrade-profile" -H 'Content-Type: application/json' -d '{"version":"0.8.0"}' | json 'd["camera"]["profile"]["version"]')" = 0.8.0 ] ||
+	fail "the upgrade"
+wait_state "$CID" running 90
+GATE_IP=$(api GET "/cameras/$CID" | json 'd["network"]["ip"]')
+client ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 \
+	"rtsp://admin:e2e-new-pw@$GATE_IP/main" | grep -q . || fail "after the upgrade, RTSP does not play"
+ok "Gate 1 runs milesight/demo@0.8.0 after the plan said it would restart; its stream plays"
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null

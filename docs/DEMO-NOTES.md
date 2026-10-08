@@ -20,7 +20,7 @@ against the Docker image started with `compose.yaml`.
 | Criterion | How it is checked |
 |---|---|
 | `docker compose up` and the first login creates the administrator | e2e in compose mode; `/auth/me` reports `setup_required` on a fresh node |
-| `profiles/milesight-demo.yaml` is validated and listed as Draft | `POST /packages`, level `draft` |
+| `profiles/milesight-demo.yaml` is validated and listed as Draft | it comes in the official catalog, installed when the node starts: `GET /profiles` lists it as `draft`, with `milesight/base` and the Dahua draft as `documented` |
 | The camera answers ping and `ip neigh` shows a MAC other than the node's | ping and `ip neigh` from the client namespace |
 | `ffprobe rtsp://admin:<pw>@<ip>:554/main` returns H.264 at the configured resolution | ffprobe over TCP and UDP, `h264,640,360` |
 | `curl --digest …/snapshot.cgi` returns a JPEG; device info carries the serial | curl from the client; a wrong password gets 401 |
@@ -39,7 +39,8 @@ against the Docker image started with `compose.yaml`.
 | Event transports (v1) | linked to an MQTT broker on the client, the running camera connects at once, with its serial as client ID and its will, and says online; a line crossing reaches the broker (QoS 1), the FTP server (the snapshot under `<serial>/<date>/`, in passive mode through the camera's firewall) and the mail server (with the snapshot attached); a second crossing within 10 s skips the mail; each target passes its test from the camera; unlinked, the camera disconnects from the broker |
 | Faults (v1) | RTSP down: ffprobe fails while the HTTP API answers and the camera is degraded with the fault named; ended by hand, the stream is back. A 401 fault refuses the right password and expires on its own after 3 s. Network down: no ping, no ARP; `network_lost` fails to leave and reaches the target once back. None of them restarts the camera; a reboot takes it off the network for its boot time and back |
 | Storage (v1) | a 256 GB card is refused with code `disk` on a smaller disk; on a 64 MB card a line crossing records its snapshot and a 10 s clip; the client finds the clip by time through the camera's API, downloads it (ffprobe: H.264, 10 s, the same bytes as the panel's download) and plays the range back over RTSP; `sd_missing` sends `storage_missing` to the target and the search answers 503; with Samba on the client, the camera writes its recordings to an SMB share in a folder of its serial and the panel reads them through it |
-| Dahua profile (v1) | imported as a draft, a Dahua camera is named after its serial; a client attached to `eventManager.cgi` with `codes=[All]&heartbeat=2` reads `Code=VideoMotion;action=Start;index=0`, then `Stop`, and heartbeats; `setConfig` of `Compression=H.265`, `Width=1280` and `Height=720` turns the main stream into H.265 at 1280×720 (ffprobe), and a height the sub stream lacks gets `Error` / `Bad Request!`; a wrong password raises `LoginFailure` |
+| Dahua profile (v1) | from the catalog, a Dahua camera is named after its serial; a client attached to `eventManager.cgi` with `codes=[All]&heartbeat=2` reads `Code=VideoMotion;action=Start;index=0`, then `Stop`, and heartbeats; `setConfig` of `Compression=H.265`, `Width=1280` and `Height=720` turns the main stream into H.265 at 1280×720 (ffprobe), and a height the sub stream lacks gets `Error` / `Bad Request!`; a wrong password raises `LoginFailure` |
+| Packages and catalog (v1) | a key made with `pkg keygen` and trusted through the API signs a package built with `pkg build -k`: it installs as signed by Acme, and its two recordings (a request and a line crossing pushed over HTTP) match an ephemeral camera on an isolated network, so it is captured and both are verified; the same package with its manifest changed after signing is refused (422); a model that extends `milesight/base@^0.1` resolves with 0.1.0 pinned; the export is the package imported, and `pkg verify --key` trusts it; Gate 1 moves from 0.7.0 to 0.8.0 after the plan says it restarts, and its stream plays |
 | Analytics from the profile (v1) | a new camera has the profile's factory line and region, and a crossing without a rule happens on the factory line; after two crossings and an entry, the node, the emulated API's counting route and a 16×9 heat map agree (2 crossings, 1 car inside, 3 objects); a report trigger with a fixed interval pushes the counts |
 
 The panel was also driven through the whole path in Chromium with
@@ -55,7 +56,14 @@ and a camera without rules, whose crossings cannot be fired and whose ⚡
 leaves the camera list. Since feature 10, also the Storage tab: an SD card
 given, an event's snapshot and clip listed live and downloaded, the card
 taken out by a fault (its format refused) and back, formatted, and a NAS
-share the camera cannot reach, with its reason, in English and Spanish. No
+share the camera cannot reach, with its reason, in English and Spanish.
+Since feature 12, also packages: the catalog listed with its badges, a key
+trusted in Settings, a signed package with recordings imported (captured,
+two recordings matching), its page with level, signature, versions, the
+comparison with 0.7.0, the import report and the self-test, its export, a
+catalog profile duplicated under an ID of one's own, and a running camera
+moved to the new version from its page after its plan, in English and
+Spanish. No
 console errors besides the expected 401 before login and the 409 of a
 refused action, and no CSP violations.
 
@@ -96,15 +104,23 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 
 ### Profiles and packages
 
-- **Signatures are not verified.** Every package is treated as unsigned;
-  a `manifest.sig` only adds a warning to the report.
-- **`extends` is rejected**: profiles must be published already resolved.
-- **No fixtures and no self-test**, so a profile never reaches the
-  *captured* or *verified* levels; hand-written profiles stay *draft*.
+- **The official catalog is unsigned in development builds.** A release
+  signs it with `mockvision pkg catalog -k` and stamps the key's public half
+  into the binary (`-ldflags -X .../pkg.officialKeys=`); until the project
+  has its catalog key, the catalog installs unsigned and nothing reaches
+  *verified*. The community catalog repository (D82) does not exist yet.
+- **The self-test sees HTTP only.** It replays requests to the http-api
+  engines and checks events pushed over `http_push`; RTSP (SDP), MQTT, FTP,
+  mail and `attach` expectations are reported as not checked, so a profile
+  with them is not *captured*. JSON paths are simple (`$.a.b[0]`); XML is
+  compared as text, with regular expressions.
+- **Upgrades** keep the values, protocols, streams, rules and triggers the
+  new version accepts and say what they drop; a camera's NAS or SD settings
+  are kept as they are.
+- **Duplicates** are new unsigned packages; there is no editor in the panel
+  (D22): export, edit and import the next version.
 - A loose `profile.yaml` may carry `profile.id` and `profile.version`
   itself, since it has no manifest.
-- **The official catalog is not bundled** (D81): profiles are imported by
-  hand, as the acceptance criteria ask.
 - **Vendor values** translate one by one (`map`) or as a width and a
   height; a value with no translation, or a value that depends on several
   parameters besides the resolution, is not supported. Defaults come from
@@ -118,8 +134,7 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
   only that transport have no delivery to log.
 - **The base profiles are drafts.** `milesight/base` and the Dahua
   IPC-HDBW1230E-S4 come from manuals and public API documents, not from a
-  capture; the values marked *to confirm* in them await one, and
-  `extends` (feature 12) is needed for models to inherit from the base.
+  capture; the values marked *to confirm* in them await one.
 
 ### Isolation
 

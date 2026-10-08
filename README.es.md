@@ -84,8 +84,8 @@ docker compose exec -u mockvision mockvision cat /data/setup-code
 
 Después:
 
-1. **Perfiles → Importar perfil:** elige `profiles/milesight-demo.yaml`. Se
-   valida y queda listado como *Borrador*.
+1. **Perfiles:** el catálogo oficial viene instalado, `milesight/demo`
+   entre ellos; no hay nada que importar.
 2. **Destinos → Nuevo destino:** pon la URL que tiene que recibir los
    eventos, por ejemplo `http://192.168.1.10:8000/events`, o elige otro
    tipo: un broker MQTT, un servidor FTP o SFTP, un servidor de correo (ver
@@ -403,6 +403,74 @@ maneja la cámara con su `bind`:
   de una respuesta `multipart/x-mixed-replace`, filtrados por `codes` y con
   latido; el transporte `attach` de un evento da la parte y, para los que
   duran, la que lo termina (`stop: { after: 5s, body: … }`).
+
+### Paquetes y catálogo
+
+Todo lo que se instala es un paquete `.mvpkg`: un zip con `manifest.yaml`,
+el sha256 de cada archivo y el perfil. Un `profile.yaml` suelto se acepta
+como borrador local.
+
+- **El catálogo oficial** (`profiles/catalog/catalog.yaml`) viene dentro del
+  binario y se instala al arrancar el nodo: `milesight/base`,
+  `milesight/demo` y el borrador Dahua. Sus perfiles son de solo lectura;
+  **Duplicar** copia uno con un ID propio, para exportarlo, editarlo e
+  importarlo como tuyo.
+- **Cada importación** recorre los mismos pasos en un subproceso sin
+  privilegios: integridad, firma, compatibilidad, YAML, esquema, lint,
+  herencia, plantillas y autoprueba. El nivel sale de ahí: *Borrador*,
+  *Documentado* (procedencia `documented`), *Capturado* (grabaciones del
+  equipo real que coinciden todas) o *Verificado* (capturado y firmado por
+  el catálogo oficial). La página del perfil muestra el informe.
+- **Firmas** de minisign (Ed25519), verificadas sin conexión sobre
+  manifest.yaml, que trae el sha256 de cada archivo. Un paquete firmado con
+  una clave del catálogo oficial o con una agregada en **Ajustes → Firmas de
+  paquetes** se instala como firmado; uno sin firma se instala con una
+  advertencia; uno cambiado después de firmarlo se rechaza. Todo lo hace el
+  binario:
+
+  ```sh
+  mockvision pkg keygen -o acme            # acme.pub y acme.key (MOCKVISION_KEY_PASSWORD, o -W)
+  mockvision pkg build midir -o mi.mvpkg -k acme.key
+  mockvision pkg sign otro.mvpkg -k acme.key
+  mockvision pkg verify mi.mvpkg --key acme.pub
+  ```
+
+  minisign mismo verifica estas firmas y firma paquetes que MockVision
+  acepta.
+- **Herencia.** `profile.extends: milesight/base@^0.1` parte de la versión
+  instalada más nueva de ese rango: los mapas se fusionan clave por clave,
+  las listas de elementos con `id` se fusionan por id, y `remove` quita lo
+  que traía el padre (`remove: [/engines/http/routes/param-set]`). Hasta
+  tres niveles; el perfil se guarda resuelto, con la versión del padre
+  fijada.
+- **Grabaciones y autoprueba.** `fixtures/*.yaml` en un paquete graba lo que
+  respondió el equipo real, o lo que envió ante un evento. La importación
+  las reproduce contra una cámara efímera del perfil, en una red propia que
+  no llega a nada, y compara las respuestas; los campos que cambian en cada
+  respuesta se comparan por tipo:
+
+  ```yaml
+  id: device-info
+  request: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSystemInfo } }
+  response:
+    status: 200
+    body: |
+      serialNumber=4E0AB2EPAG00B3B
+  vary:
+    - { in: body, regex: "serialNumber=(.*)", as: serial }   # timestamp, http-date, uuid, int, image, any
+  ```
+
+  `steps` encadena pedidos; `trigger` y `expect` graban un evento y lo que
+  envió cada transporte (por ahora la autoprueba ve lo que envía
+  `http_push`). El informe lista cada grabación y si cada ruta y evento
+  quedó *verificado* o solo *declarado*.
+- **Versiones.** Una cámara se queda en su versión de perfil. **Comparar**,
+  en la página del perfil, lista lo que cambia entre dos versiones;
+  **Cambiar versión**, en la cámara, muestra primero qué hace el cambio (los
+  valores que alguien cambió se conservan si la nueva versión los acepta,
+  el resto toma sus valores por defecto), después lo aplica y reinicia la
+  cámara si está funcionando. **Exportar** descarga una versión como el
+  paquete con que se importó.
 
 ### Red
 

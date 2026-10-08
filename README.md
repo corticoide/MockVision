@@ -83,8 +83,8 @@ docker compose exec -u mockvision mockvision cat /data/setup-code
 
 Then:
 
-1. **Profiles → Import profile:** choose `profiles/milesight-demo.yaml`. It
-   is validated and listed as *Draft*.
+1. **Profiles:** the official catalog comes installed, `milesight/demo`
+   among it; nothing to import.
 2. **Targets → New target:** enter the URL that should receive the events,
    for example `http://192.168.1.10:8000/events`, or pick another type: an
    MQTT broker, an FTP or SFTP server, a mail server (see
@@ -382,6 +382,71 @@ camera through its `bind`:
   `multipart/x-mixed-replace` answer, filtered by `codes` and with a
   heartbeat; an event's `attach` transport gives the part and, for those
   that last, the one that ends it (`stop: { after: 5s, body: … }`).
+
+### Packages and the catalog
+
+Everything installed is a `.mvpkg` package: a zip with `manifest.yaml`, the
+sha256 of every file and the profile. A loose `profile.yaml` is accepted as
+a local draft.
+
+- **The official catalog** (`profiles/catalog/catalog.yaml`) is built into
+  the binary and installed when the node starts: `milesight/base`,
+  `milesight/demo` and the Dahua draft. Its profiles are read only;
+  **Duplicate** copies one under an ID of yours, to export, edit and import
+  as your own.
+- **Every import** runs the same steps in an unprivileged subprocess:
+  integrity, signature, compatibility, YAML, schema, lint, inheritance,
+  templates and the self-test. The level comes out of them: *Draft*,
+  *Documented* (provenance `documented`), *Captured* (recordings of the
+  real device that all match) or *Verified* (captured and signed by the
+  official catalog). The profile's page shows the report.
+- **Signatures** are minisign's (Ed25519), checked offline against
+  manifest.yaml, which holds every file's sha256. A package signed by an
+  official catalog key or a key added in **Settings → Package signatures**
+  installs as signed; an unsigned one installs with a warning; one changed
+  after signing is rejected. The binary does it all:
+
+  ```sh
+  mockvision pkg keygen -o acme            # acme.pub and acme.key (MOCKVISION_KEY_PASSWORD, or -W)
+  mockvision pkg build mydir -o my.mvpkg -k acme.key
+  mockvision pkg sign other.mvpkg -k acme.key
+  mockvision pkg verify my.mvpkg --key acme.pub
+  ```
+
+  minisign itself verifies these signatures and signs packages MockVision
+  accepts.
+- **Inheritance.** `profile.extends: milesight/base@^0.1` builds on the
+  newest installed version in that range: mappings merge key by key, lists
+  of items with an `id` merge by id, and `remove` drops what the parent had
+  (`remove: [/engines/http/routes/param-set]`). At most three levels; the
+  profile is stored resolved, with its parent's version pinned.
+- **Recordings and the self-test.** `fixtures/*.yaml` in a package records
+  what the real device answered, or sent for an event. The import replays
+  them against an ephemeral camera of the profile, on a network of its own
+  that reaches nothing, and compares the answers; fields that change on
+  every answer are compared by type:
+
+  ```yaml
+  id: device-info
+  request: { method: GET, path: /cgi-bin/magicBox.cgi, query: { action: getSystemInfo } }
+  response:
+    status: 200
+    body: |
+      serialNumber=4E0AB2EPAG00B3B
+  vary:
+    - { in: body, regex: "serialNumber=(.*)", as: serial }   # timestamp, http-date, uuid, int, image, any
+  ```
+
+  `steps` chains requests; `trigger` and `expect` record an event and what
+  each transport sent (for now the self-test sees what `http_push` sends).
+  The report lists each recording and whether every route and event is
+  *verified* or only *declared*.
+- **Versions.** A camera stays on its profile version. **Compare** on the
+  profile's page lists what changes between two versions; **Change
+  version** on the camera shows first what moving it does (values someone
+  set stay when the new version accepts them, the rest follow its
+  defaults), then applies it and restarts the camera if it runs.
+  **Export** downloads a version as the package it was imported as.
 
 ### Network
 
