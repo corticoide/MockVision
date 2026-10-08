@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
@@ -65,7 +66,8 @@ type Service struct {
 	store   *store.Store
 	box     *secret.Box
 	lib     *media.Library
-	catalog *engines.Catalog
+	// engs resolves the built-in engines and the enabled plugins'.
+	engs atomic.Pointer[engineSet]
 	rt      netctl.Runtime
 	pub     Publisher
 	node    *telemetry.NodeSampler
@@ -164,6 +166,11 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		return nil, err
 	}
 	_ = os.Chmod(filepath.Join(opts.DataDir, "sd"), 0o711)
+	// The plugins: cameras run the programs, from their known paths.
+	if err := os.MkdirAll(filepath.Join(opts.DataDir, "plugins"), 0o711); err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(filepath.Join(opts.DataDir, "plugins"), 0o711)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		opts:         opts,
@@ -171,7 +178,6 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		store:        st,
 		box:          box,
 		lib:          lib,
-		catalog:      engines.Builtin(),
 		rt:           opts.Runtime,
 		pub:          pub,
 		node:         telemetry.NewNodeSampler(),
@@ -193,6 +199,7 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		baseCtx:      ctx,
 		cancel:       cancel,
 	}
+	s.engs.Store(&engineSet{catalog: engines.Builtin()})
 	s.jobs = s.newRunner()
 	return s, nil
 }
@@ -209,6 +216,7 @@ func (s *Service) RuntimeKind() string { return s.rt.Kind() }
 func (s *Service) Run(ctx context.Context) error {
 	s.announceSetup(ctx)
 	s.installCatalog(ctx)
+	_ = s.loadPlugins(ctx) // logged; cameras of a plugin it cannot load fail with the reason
 	if err := s.bootCameras(ctx); err != nil {
 		return err
 	}

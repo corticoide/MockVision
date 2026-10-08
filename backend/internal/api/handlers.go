@@ -489,6 +489,35 @@ func (s *Server) handleDuplicateProfile(w http.ResponseWriter, r *http.Request) 
 
 // --- Trusted keys ---
 
+func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListPlugins(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if in.Enabled == nil {
+		s.writeError(w, r, badReq("enabled is required"))
+		return
+	}
+	p, err := s.svc.SetPluginEnabled(r.Context(), actor(r), r.PathValue("id"), *in.Enabled)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
 func (s *Server) handleListTrustedKeys(w http.ResponseWriter, r *http.Request) {
 	list, err := s.svc.ListTrustedKeys(r.Context())
 	if err != nil {

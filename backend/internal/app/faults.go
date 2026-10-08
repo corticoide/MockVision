@@ -116,7 +116,7 @@ func (s *Service) faultTargets(b *cameraBundle) []domain.FaultTarget {
 		if err != nil {
 			continue
 		}
-		eng, err := s.catalog.Resolve(name, rng)
+		eng, err := s.engineCatalog().Resolve(name, rng)
 		if err != nil {
 			continue
 		}

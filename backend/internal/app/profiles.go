@@ -18,6 +18,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/store"
@@ -48,6 +49,7 @@ type importCheckpoint struct {
 // importOutcome is the result of an import job.
 type importOutcome struct {
 	Profile *ProfileView `json:"profile,omitempty"`
+	Plugin  *PluginView  `json:"plugin,omitempty"`
 	Report  *pkg.Report  `json:"report,omitempty"`
 	Created bool         `json:"created"`
 	Error   *jobError    `json:"error,omitempty"`
@@ -113,10 +115,10 @@ func ImportOutcome(j worker.Job) (*ImportResult, error) {
 	_ = json.Unmarshal(j.Result, &out)
 	switch j.Status {
 	case worker.Completed:
-		if out.Profile == nil || out.Report == nil {
-			return nil, errors.New("the import finished without a profile")
+		if (out.Profile == nil && out.Plugin == nil) || out.Report == nil {
+			return nil, errors.New("the import finished without a profile or a plugin")
 		}
-		return &ImportResult{Profile: *out.Profile, Report: *out.Report, Created: out.Created}, nil
+		return &ImportResult{Profile: out.Profile, Plugin: out.Plugin, Report: *out.Report, Created: out.Created}, nil
 	case worker.Failed:
 		if out.Error != nil && out.Error.Kind == "rejected" && out.Report != nil {
 			return nil, &ImportError{Report: *out.Report}
@@ -186,9 +188,15 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 	}
 	out, err := s.installPackage(ctx, p.Actor, data, res, source)
 	if err != nil {
+		// Installing can reject the package too: a plugin whose program
+		// is not what its manifest says.
+		var ie *ImportError
+		if errors.As(err, &ie) {
+			rep = ie.Report
+		}
 		return importOutcome{Report: &rep, Error: describeError(err)}, err
 	}
-	return importOutcome{Profile: &out.Profile, Report: &out.Report, Created: out.Created}, nil
+	return importOutcome{Profile: out.Profile, Plugin: out.Plugin, Report: &out.Report, Created: out.Created}, nil
 }
 
 // Where a package came from.
@@ -208,8 +216,11 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 	if res.Needs != nil {
 		return nil, errors.New("the import still needs the profile's parent")
 	}
+	if rep.Kind == "plugin" {
+		return s.installPlugin(ctx, actor, data, res, source)
+	}
 	if rep.Kind != "profile" || res.Profile == nil {
-		return nil, domain.Invalid("file", "only profile packages can be installed in this version")
+		return nil, domain.Invalid("file", "only profile and plugin packages can be installed")
 	}
 
 	existing, err := s.store.R().GetPackageByKey(ctx, db.GetPackageByKeyParams{Kind: rep.Kind, PkgID: rep.ID, Version: rep.Version})
@@ -221,7 +232,8 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 		if err != nil {
 			return nil, err
 		}
-		return &ImportResult{Profile: profileView(prof, existing, 0), Report: rep}, nil
+		view := profileView(prof, existing, 0)
+		return &ImportResult{Profile: &view, Report: rep}, nil
 	} else if !notFound(err) {
 		return nil, err
 	}
@@ -274,7 +286,7 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 	}
 	view := profileView(prof, pk, 0)
 	s.pub.Publish("profiles", "installed", view)
-	return &ImportResult{Profile: view, Report: rep, Created: true}, nil
+	return &ImportResult{Profile: &view, Report: rep, Created: true}, nil
 }
 
 // inspectWithParent runs the import pipeline; a profile that extends
@@ -336,7 +348,7 @@ func (s *Service) inspect(ctx context.Context, filename string, data []byte, par
 	}
 	opts.Parents = parents
 	if s.opts.Exe == "" {
-		return pkg.Inspect(data, filename, s.catalog, opts), nil
+		return pkg.Inspect(data, filename, engines.Builtin(), opts), nil
 	}
 	input, err := pkg.WriteInspectInput(opts, data)
 	if err != nil {

@@ -28,18 +28,22 @@ type Settings struct {
 	// an extra interface on the parent (D26); off by default, since it
 	// changes the node's network.
 	NodeBridge bool `json:"node_bridge"`
+	// AllowUnsignedPlugins lets an admin enable plugins no trusted key
+	// signed (D84); turning it off disables them.
+	AllowUnsignedPlugins bool `json:"allow_unsigned_plugins"`
 }
 
 // SettingsPatch changes some settings.
 type SettingsPatch struct {
-	MaxCameras          *int     `json:"max_cameras,omitempty"`
-	MaxRAMPercent       *float64 `json:"max_ram_percent,omitempty"`
-	MaxCPUPercent       *float64 `json:"max_cpu_percent,omitempty"`
-	ParentInterface     *string  `json:"parent_interface,omitempty"`
-	EventsRetentionDays *int     `json:"events_retention_days,omitempty"`
-	MaxJobs             *int     `json:"max_jobs,omitempty"`
-	JobStepTimeoutSecs  *int     `json:"job_step_timeout_seconds,omitempty"`
-	NodeBridge          *bool    `json:"node_bridge,omitempty"`
+	MaxCameras           *int     `json:"max_cameras,omitempty"`
+	MaxRAMPercent        *float64 `json:"max_ram_percent,omitempty"`
+	MaxCPUPercent        *float64 `json:"max_cpu_percent,omitempty"`
+	ParentInterface      *string  `json:"parent_interface,omitempty"`
+	EventsRetentionDays  *int     `json:"events_retention_days,omitempty"`
+	MaxJobs              *int     `json:"max_jobs,omitempty"`
+	JobStepTimeoutSecs   *int     `json:"job_step_timeout_seconds,omitempty"`
+	NodeBridge           *bool    `json:"node_bridge,omitempty"`
+	AllowUnsignedPlugins *bool    `json:"allow_unsigned_plugins,omitempty"`
 }
 
 const settingsKey = "node"
@@ -113,6 +117,9 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 	if p.NodeBridge != nil {
 		set.NodeBridge = *p.NodeBridge
 	}
+	if p.AllowUnsignedPlugins != nil {
+		set.AllowUnsignedPlugins = *p.AllowUnsignedPlugins
+	}
 	// A new default network card or a bridge must not put cameras where
 	// the kernel or an access point cannot take them.
 	if s.rt.Kind() == netctl.KindNetns && v.Err() == nil &&
@@ -131,6 +138,9 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 	s.audit(ctx, actor, "settings.update", "settings", settingsKey, map[string]any{"before": before, "after": set})
 	if set.ParentInterface != before.ParentInterface {
 		s.measureInterface(ctx)
+	}
+	if before.AllowUnsignedPlugins && !set.AllowUnsignedPlugins {
+		s.disableUnsignedPlugins(ctx, actor)
 	}
 	if set.NodeBridge != before.NodeBridge || (set.NodeBridge && set.ParentInterface != before.ParentInterface) {
 		s.applyBridge(ctx)

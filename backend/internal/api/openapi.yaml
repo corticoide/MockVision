@@ -270,6 +270,47 @@ paths:
                   changes: { type: array, items: { $ref: "#/components/schemas/ProfileChange" } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /plugins:
+    get:
+      tags: [packages]
+      operationId: listPlugins
+      summary: Installed plugins, the engines they provide and the permissions they ask for (D85, D86)
+      responses:
+        "200":
+          description: Plugins
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Plugin" } }
+  /plugins/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    patch:
+      tags: [packages]
+      operationId: updatePlugin
+      summary: Enable a plugin, approving its permissions, or disable it (panel session only)
+      description: |
+        One version of an engine is enabled at a time: enabling one disables
+        the others. An unsigned plugin is enabled only where the settings
+        allow unsigned plugins (D84). Running cameras keep the engine they
+        started with until they restart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Plugin" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /trusted-keys:
     get:
       tags: [packages]
@@ -1316,6 +1357,7 @@ components:
         max_jobs: { type: integer, minimum: 1, maximum: 16, description: Jobs that run at once (D72) }
         job_step_timeout_seconds: { type: integer, minimum: 10, maximum: 3600, description: Bound of each step of a job (D72) }
         node_bridge: { type: boolean, description: "Let the node reach its macvlan cameras through an extra interface (D26); off by default" }
+        allow_unsigned_plugins: { type: boolean, description: "Let an admin enable plugins no trusted key signed (D84); turning it off disables them" }
     SettingsPatch:
       type: object
       properties:
@@ -1327,6 +1369,7 @@ components:
         max_jobs: { type: integer }
         job_step_timeout_seconds: { type: integer }
         node_bridge: { type: boolean }
+        allow_unsigned_plugins: { type: boolean }
     NodeMetrics:
       type: object
       required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
@@ -1473,6 +1516,36 @@ components:
         key: { type: string }
         kind: { type: string, enum: [added, removed, changed] }
         details: { type: array, items: { type: string }, description: "What changed in it, as path: before → after" }
+    Plugin:
+      type: object
+      required: [id, package_id, package, engine, version, role, permissions, sockets, emits, signature_status, sha256, enabled, installed_at]
+      properties:
+        id: { type: string }
+        package_id: { type: string }
+        package: { type: string, description: The package's id, such as examples/hello }
+        engine: { type: string }
+        version: { type: string }
+        role: { type: string, enum: [server, client] }
+        permissions:
+          type: array
+          items: { type: string, enum: [net.listen, net.connect, accounts.read, state.read, state.write, events.emit, events.deliver, media.read, sd] }
+        sockets:
+          type: array
+          items:
+            type: object
+            required: [name, network, default_port]
+            properties:
+              name: { type: string }
+              network: { type: string, enum: [tcp, udp] }
+              default_port: { type: integer }
+        emits: { type: array, items: { type: string } }
+        signature_status: { type: string, enum: [official, trusted, unsigned, invalid] }
+        signer: { type: string }
+        sha256: { type: string }
+        enabled: { type: boolean }
+        approved_by: { type: string, description: Who enabled it last, approving its permissions }
+        approved_at: { type: string, format: date-time }
+        installed_at: { type: string, format: date-time }
     TrustedKey:
       type: object
       required: [name, key_id, public_key, builtin]
@@ -1623,9 +1696,10 @@ components:
         problems: { type: array, items: { $ref: "#/components/schemas/ImportProblem" } }
     ImportResult:
       type: object
-      required: [profile, report, created]
+      required: [report, created]
       properties:
         profile: { $ref: "#/components/schemas/Profile" }
+        plugin: { $ref: "#/components/schemas/Plugin" }
         report: { $ref: "#/components/schemas/ImportReport" }
         created: { type: boolean }
         job_id: { type: string, description: The import job, with the steps in its history }

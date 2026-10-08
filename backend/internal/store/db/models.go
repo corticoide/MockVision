@@ -215,6 +215,21 @@ type Package struct {
 	Source          string
 }
 
+type Plugin struct {
+	ID              string
+	PackageID       string
+	Engine          string
+	EngineVersion   string
+	Executable      string
+	Dir             string
+	PermissionsJson string
+	DescriptorJson  string
+	Enabled         int64
+	ApprovedBy      string
+	ApprovedAt      sql.NullInt64
+	InstalledAt     int64
+}
+
 type Profile struct {
 	ID           string
 	PackageID    string

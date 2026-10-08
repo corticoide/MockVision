@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
+	"github.com/corticoide/mockvision/backend/internal/engines"
 	"github.com/corticoide/mockvision/backend/internal/minisign"
 	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
@@ -339,7 +340,7 @@ func TestExportAndDuplicate(t *testing.T) {
 	if name != "milesight-demo-0.7.0.mvpkg" || !strings.HasPrefix(string(data), "PK") {
 		t.Fatalf("export %s", name)
 	}
-	if res := pkg.Inspect(data, name, svc.catalog, pkg.Options{}); !res.Report.OK() || res.Report.ID != "milesight/demo" || res.Report.Version != "0.7.0" {
+	if res := pkg.Inspect(data, name, engines.Builtin(), pkg.Options{}); !res.Report.OK() || res.Report.ID != "milesight/demo" || res.Report.Version != "0.7.0" {
 		t.Fatalf("exported package: %+v", res.Report)
 	}
 

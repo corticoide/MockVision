@@ -70,7 +70,7 @@ func (s *Service) runSelfTest(ctx context.Context, res *pkg.Result, step func(st
 		if err != nil {
 			return selftest.Report{}, err
 		}
-		eng, err := s.catalog.Resolve(name, rng)
+		eng, err := s.engineCatalog().Resolve(name, rng)
 		if err != nil {
 			return selftest.Report{}, err
 		}

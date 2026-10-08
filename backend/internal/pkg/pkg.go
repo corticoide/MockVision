@@ -26,6 +26,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/profile"
 	"github.com/corticoide/mockvision/backend/internal/selftest"
+	"github.com/corticoide/mockvision/sdk/engine"
 )
 
 // Limits of a package (integrity step).
@@ -57,6 +58,8 @@ type Manifest struct {
 	License    string            `json:"license,omitempty"`
 	Provenance Provenance        `json:"provenance"`
 	Files      map[string]string `json:"files"`
+	// Plugin is what a plugin package provides.
+	Plugin *PluginSpec `json:"plugin,omitempty"`
 }
 
 // Requires lists what a package needs.
@@ -64,6 +67,8 @@ type Requires struct {
 	MockVision    string            `json:"mockvision,omitempty"`
 	ProfileSchema int               `json:"profile_schema,omitempty"`
 	Engines       map[string]string `json:"engines,omitempty"`
+	// Contract is the engine contract a plugin implements.
+	Contract int `json:"contract,omitempty"`
 }
 
 // Provenance says where the content comes from.
@@ -123,6 +128,8 @@ type Result struct {
 	// Fixtures are the recordings of the device the node replays against
 	// an ephemeral camera of the profile.
 	Fixtures []selftest.Fixture `json:"fixtures,omitempty"`
+	// Plugin is a plugin package's engine, program and permissions.
+	Plugin *PluginInfo `json:"plugin,omitempty"`
 }
 
 // Options are what the pipeline needs from the node: the keys it trusts
@@ -130,6 +137,9 @@ type Result struct {
 type Options struct {
 	Keys    []TrustedKey               `json:"keys,omitempty"`
 	Parents map[string]*profile.Parent `json:"parents,omitempty"`
+	// Plugins describe the engines of the enabled plugins, which profiles
+	// may use besides the built-in ones.
+	Plugins []engine.Descriptor `json:"plugins,omitempty"`
 }
 
 // Need is a parent the pipeline asks for: a profile ID and a version
@@ -143,6 +153,8 @@ type Need struct {
 type inspector struct {
 	res     *Result
 	engines profile.EngineCatalog
+	// builtin is the catalog without the plugins.
+	builtin profile.EngineCatalog
 	opts    Options
 }
 
@@ -166,7 +178,7 @@ func (in *inspector) step(name, status, note string) {
 func Inspect(data []byte, filename string, engines profile.EngineCatalog, opts Options) *Result {
 	sum := sha256.Sum256(data)
 	in := &inspector{res: &Result{Report: Report{SHA256: hex.EncodeToString(sum[:]), Signature: SignatureUnsigned, Problems: []profile.Problem{}}},
-		engines: engines, opts: opts}
+		engines: withPlugins(engines, opts.Plugins), builtin: engines, opts: opts}
 	if isZip(data) {
 		in.inspectPackage(data)
 	} else {
@@ -215,7 +227,12 @@ func (in *inspector) inspectPackage(data []byte) {
 	if !in.compatibility(man) {
 		return
 	}
-	if man.Kind != "profile" {
+	switch man.Kind {
+	case "profile":
+	case "plugin":
+		in.inspectPlugin(man, files)
+		return
+	default:
 		in.problem(profile.StepCompatibility, "manifest.yaml", 0, "%s packages are not supported yet", man.Kind)
 		return
 	}

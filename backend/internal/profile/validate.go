@@ -906,3 +906,13 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// CheckEngineSchema compiles an engine's configuration schema, as profiles
+// that use the engine will.
+func CheckEngineSchema(d engine.Descriptor) error {
+	if len(d.ConfigSchema) == 0 {
+		return nil
+	}
+	_, err := compileSchema("engine-"+d.Name+".json", d.ConfigSchema)
+	return err
+}

@@ -167,7 +167,7 @@ func (s *Service) deliveredTransports(b *cameraBundle) map[string]bool {
 		if err != nil {
 			continue
 		}
-		eng, err := s.catalog.Resolve(name, rng)
+		eng, err := s.engineCatalog().Resolve(name, rng)
 		if err != nil {
 			continue
 		}

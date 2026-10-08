@@ -826,7 +826,7 @@ func (s *Service) instancePort(doc *profile.Document, inst string) (int, error) 
 	if err != nil {
 		return 0, err
 	}
-	eng, err := s.catalog.Resolve(name, rng)
+	eng, err := s.engineCatalog().Resolve(name, rng)
 	if err != nil {
 		return 0, err
 	}
@@ -1083,7 +1083,18 @@ func (s *Service) endpointViewsFrom(b *cameraBundle, ip string, eps []ipcEndpoin
 			ev.Protocol = "http"
 			ev.URL = "http://" + hostPort(ip, ep.port, 80) + "/"
 		default:
-			continue
+			// A plugin's engine: its socket, by network.
+			p, ok := s.engs.Load().plugins[name]
+			if !ok {
+				continue
+			}
+			ev.Protocol = "tcp"
+			for _, so := range p.Descriptor.Sockets {
+				if so.Name == ep.socket {
+					ev.Protocol = so.Network
+				}
+			}
+			ev.URL = ev.Protocol + "://" + ip + ":" + strconv.Itoa(ep.port)
 		}
 		out = append(out, ev)
 	}

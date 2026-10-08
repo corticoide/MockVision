@@ -605,6 +605,13 @@ func (ss *session) supervise(ctx context.Context, conn *ipc.Conn, b *cameraBundl
 		case <-conn.Done():
 			ss.fail(ss.exited("the camera process exited"))
 			return
+		case r := <-ss.ready:
+			// A running camera that cannot go on, such as one whose
+			// plugin keeps failing, says why before it stops.
+			if r.failed != "" {
+				ss.fail(failed(ReasonCameraFailed, "%s", r.failed))
+				return
+			}
 		case l := <-ss.leases:
 			ss.leaseChanged(ctx, b, l)
 		case reason := <-ss.dhcpLost:
@@ -1056,7 +1063,7 @@ func (s *Service) cameraSpec(b *cameraBundle) (netctl.CameraSpec, error) {
 		if err != nil {
 			return spec, err
 		}
-		eng, err := s.catalog.Resolve(name, rng)
+		eng, err := s.engineCatalog().Resolve(name, rng)
 		if err != nil {
 			return spec, err
 		}
@@ -1163,6 +1170,9 @@ func (s *Service) buildConfigure(b *cameraBundle, streams []ipc.Stream, ip strin
 		return cfg, err
 	}
 	cfg.Targets = targets
+	if cfg.Plugins, err = s.pluginsFor(b.doc); err != nil {
+		return cfg, err
+	}
 	cfg.VCA = vcaConfig(b)
 	cfg.Faults = s.startFaults(s.baseCtx, b.cam.ID)
 	if err := s.ensureSDDir(b.cam.ID); err != nil {

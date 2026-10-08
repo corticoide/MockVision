@@ -238,7 +238,10 @@ func (s *Server) Handler() http.Handler {
 	auth("POST /api/v1/profiles/{vendor}/{model}/versions/{version}/actions/{action}", s.handleProfileAction)
 	auth("POST /api/v1/profiles/{vendor}/{model}/versions/{version}/actions/duplicate", s.handleDuplicateProfile)
 
-	// A leaked token cannot make the node trust a key.
+	// A leaked token can neither make the node trust a key nor run a
+	// plugin.
+	auth("GET /api/v1/plugins", s.handleListPlugins)
+	panel("PATCH /api/v1/plugins/{id}", s.handleUpdatePlugin)
 	auth("GET /api/v1/trusted-keys", s.handleListTrustedKeys)
 	panel("POST /api/v1/trusted-keys", s.handleAddTrustedKey)
 	panel("DELETE /api/v1/trusted-keys/{id}", s.handleDeleteTrustedKey)

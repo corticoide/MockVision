@@ -277,9 +277,12 @@ type ProfileDetail struct {
 
 // ImportResult is the outcome of a package import.
 type ImportResult struct {
-	Profile ProfileView `json:"profile"`
-	Report  pkg.Report  `json:"report"`
-	Created bool        `json:"created"`
+	// Profile is the profile version a profile package installed, Plugin
+	// the plugin a plugin package did.
+	Profile *ProfileView `json:"profile,omitempty"`
+	Plugin  *PluginView  `json:"plugin,omitempty"`
+	Report  pkg.Report   `json:"report"`
+	Created bool         `json:"created"`
 	// JobID is the import job, whose history keeps the steps.
 	JobID string `json:"job_id,omitempty"`
 }

@@ -56,7 +56,7 @@ func (s *Service) instanceDescriptor(b *cameraBundle, instance string) (engine.D
 	if err != nil {
 		return engine.Descriptor{}, err
 	}
-	eng, err := s.catalog.Resolve(name, rng)
+	eng, err := s.engineCatalog().Resolve(name, rng)
 	if err != nil {
 		return engine.Descriptor{}, err
 	}

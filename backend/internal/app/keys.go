@@ -96,7 +96,7 @@ func (s *Service) DeleteTrustedKey(ctx context.Context, actor Actor, id string) 
 
 // inspectOptions are the keys the import pipeline trusts now.
 func (s *Service) inspectOptions(ctx context.Context) (pkg.Options, error) {
-	opts := pkg.Options{Keys: pkg.OfficialKeys()}
+	opts := pkg.Options{Keys: pkg.OfficialKeys(), Plugins: s.pluginDescriptors()}
 	rows, err := s.store.R().ListTrustedKeys(ctx)
 	if err != nil {
 		return opts, err
