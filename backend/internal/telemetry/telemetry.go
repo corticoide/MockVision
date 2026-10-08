@@ -305,6 +305,17 @@ func (c *Cameras) History(id string, since time.Time) []CameraSample {
 	return out
 }
 
+// IDs lists the cameras with samples.
+func (c *Cameras) IDs() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.byID))
+	for id := range c.byID {
+		out = append(out, id)
+	}
+	return out
+}
+
 // Remove forgets a camera.
 func (c *Cameras) Remove(id string) {
 	c.mu.Lock()

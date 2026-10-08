@@ -36,6 +36,8 @@ tags:
     description: Failures injected into a camera (D43) and its simulated reboot
   - name: storage
     description: A camera's simulated SD card or NAS share and the recordings of its events (D68, D69)
+  - name: diagnostics
+    description: What each camera served, its clients, the requests its profile does not know and its log (D79, D92)
 
 paths:
   /auth/setup:
@@ -896,7 +898,11 @@ paths:
   /cameras/{id}/metrics:
     parameters:
       - $ref: "#/components/parameters/ID"
-      - { name: since, in: query, schema: { type: integer, description: Unix milliseconds } }
+      - { name: since, in: query, schema: { type: integer, description: Unix milliseconds, within the last ten minutes } }
+      - name: range
+        in: query
+        description: "A window instead of since: 10m (a sample a second, from memory), 1h and 24h (one every 10 s), 7d (one a minute) (D92)"
+        schema: { type: string, enum: [10m, 1h, 24h, 7d] }
     get:
       tags: [cameras]
       operationId: getCameraMetrics
@@ -910,6 +916,94 @@ paths:
                 required: [samples]
                 properties:
                   samples: { type: array, items: { $ref: "#/components/schemas/CameraMetrics" } }
+  /cameras/{id}/requests:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - $ref: "#/components/parameters/Window"
+      - name: format
+        in: query
+        description: Download the window a minute at a time, by client and route, as CSV or JSON
+        schema: { type: string, enum: [csv, json] }
+    get:
+      tags: [diagnostics]
+      operationId: getCameraRequests
+      summary: What the camera served over a window, by route and client, and a minute at a time
+      responses:
+        "200":
+          description: Requests; with format, the file to download instead
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/RequestsView" } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/clients:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - $ref: "#/components/parameters/Window"
+    get:
+      tags: [diagnostics]
+      operationId: getCameraClients
+      summary: The camera's clients over a window, the most recent first
+      description: |
+        For each address: what it asks and how often, its connections and
+        how long they last, its errors, refused credentials and requests
+        the profile does not know. It diagnoses the equipment under test.
+      responses:
+        "200":
+          description: Clients
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/CameraClient" } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/gaps:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [diagnostics]
+      operationId: getCameraGaps
+      summary: Requests the camera's profile does not know (D79), the most recent first
+      responses:
+        "200":
+          description: Gaps
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Gap" } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/logs:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: before, in: query, description: The id the previous page ended at, schema: { type: integer } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+    get:
+      tags: [diagnostics]
+      operationId: getCameraLogs
+      summary: The camera's log, the newest first; what it logged and what the service did with it
+      responses:
+        "200":
+          description: Lines
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/CameraLog" } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /metrics:
+    get:
+      tags: [diagnostics]
+      operationId: getPrometheusMetrics
+      summary: The node's and the cameras' latest metrics, in Prometheus' text format
+      description: For a Prometheus server with an API token (Authorization Bearer).
+      responses:
+        "200": { description: Metrics, content: { text/plain: { schema: { type: string } } } }
   /cameras/{id}/snapshot:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1230,6 +1324,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    Window:
+      name: window
+      in: query
+      description: The last hour, day or week; an hour by default
+      schema: { type: string, enum: [1h, 24h, 7d], default: 1h }
   responses:
     Problem:
       description: Problem
@@ -1546,6 +1645,74 @@ components:
         approved_by: { type: string, description: Who enabled it last, approving its permissions }
         approved_at: { type: string, format: date-time }
         installed_at: { type: string, format: date-time }
+    RouteStat:
+      type: object
+      required: [route, client_ip, count, errors, auth_failures, p50_ms, p95_ms, max_ms, interval_ms, first_at, last_at]
+      properties:
+        route: { type: string, description: "The profile's route id; rtsp:METHOD for RTSP; auth for a challenge, auth-failed for credentials refused" }
+        client_ip: { type: string }
+        count: { type: integer }
+        errors: { type: integer, description: Answers of 400 or more, but a challenge's 401 }
+        auth_failures: { type: integer }
+        p50_ms: { type: number }
+        p95_ms: { type: number }
+        max_ms: { type: number }
+        interval_ms: { type: number, description: How often the client asks, on average }
+        first_at: { type: string, format: date-time }
+        last_at: { type: string, format: date-time }
+    RequestsView:
+      type: object
+      required: [since, routes, minutes]
+      properties:
+        since: { type: string, format: date-time }
+        routes: { type: array, items: { $ref: "#/components/schemas/RouteStat" } }
+        minutes:
+          type: array
+          items:
+            type: object
+            required: [minute, count, errors, auth_failures]
+            properties:
+              minute: { type: string, format: date-time }
+              count: { type: integer }
+              errors: { type: integer }
+              auth_failures: { type: integer }
+    CameraClient:
+      type: object
+      required: [ip, protocols, connected, first_seen, last_seen, connections, mean_session_ms, max_session_ms, requests, errors, auth_failures, gaps, routes]
+      properties:
+        ip: { type: string }
+        protocols: { type: array, items: { type: string } }
+        connected: { type: boolean }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        connections: { type: integer, description: Connections it opened; a client that keeps reconnecting opens many }
+        mean_session_ms: { type: integer }
+        max_session_ms: { type: integer }
+        requests: { type: integer }
+        errors: { type: integer }
+        auth_failures: { type: integer }
+        gaps: { type: integer }
+        routes: { type: array, items: { $ref: "#/components/schemas/RouteStat" } }
+    Gap:
+      type: object
+      required: [protocol, summary, client_ip, count, first_at, last_at]
+      properties:
+        protocol: { type: string }
+        summary: { type: string, description: "The request, such as GET /cgi-bin/unknown.cgi?action=x" }
+        client_ip: { type: string }
+        count: { type: integer }
+        first_at: { type: string, format: date-time }
+        last_at: { type: string, format: date-time }
+    CameraLog:
+      type: object
+      required: [id, at, level, source, msg, attrs]
+      properties:
+        id: { type: integer }
+        at: { type: string, format: date-time }
+        level: { type: string, enum: [DEBUG, INFO, WARN, ERROR] }
+        source: { type: string, enum: [camera, service] }
+        msg: { type: string }
+        attrs: { type: object, additionalProperties: true }
     TrustedKey:
       type: object
       required: [name, key_id, public_key, builtin]

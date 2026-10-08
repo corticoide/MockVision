@@ -64,6 +64,11 @@ type session struct {
 	// share a small budget (audit B1).
 	lastSample time.Time
 	notices    tokenBucket
+	// clients are the clients connected now, by protocol|ip, as the
+	// camera's notices say.
+	clients map[string]bool
+	// stats paces the camera's statistics reports.
+	stats tokenBucket
 
 	// Network: the address source, the MAC it answers with, the DNS
 	// servers it uses and the firewall in place (nil: none).
@@ -296,6 +301,24 @@ func (ss *session) setState(st domain.CameraState, code, reason string) {
 	ss.mu.Unlock()
 	if prev != st && !prev.CanTransition(st) && prev != domain.StateStopped {
 		ss.s.log.Debug("unusual camera transition", "camera", ss.id, "from", prev, "to", st)
+	}
+	if prev != st {
+		level := slog.LevelInfo
+		switch st {
+		case domain.StateError:
+			level = slog.LevelError
+		case domain.StateDegraded:
+			level = slog.LevelWarn
+		}
+		var attrs map[string]any
+		if code != "" {
+			attrs = map[string]any{"reason_code": code}
+		}
+		msg := string(st)
+		if reason != "" {
+			msg += ": " + reason
+		}
+		ss.s.recordLog(context.Background(), ss.id, "service", level, msg, attrs)
 	}
 	if err := ss.s.saveStatus(context.Background(), ss.id, st, code, reason, started, time.Now()); err != nil {
 		ss.s.log.Warn("cannot save camera status", "camera", ss.id, "error", err)
@@ -895,10 +918,25 @@ func (ss *session) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 		}
 		s.setNASState(ss.id, st)
 	case ipc.TypeClient, ipc.TypeGap, ipc.TypeLog:
+		if msg.Type == ipc.TypeClient {
+			ss.clientNotice(msg)
+		}
 		if !ss.allowNotice() {
 			return nil, nil // over budget: dropped
 		}
 		ss.notice(ctx, msg)
+	case ipc.TypeRequestStats:
+		ss.mu.Lock()
+		ok := ss.stats.take(time.Now(), 5, 0.5)
+		ss.mu.Unlock()
+		if !ok {
+			return nil, nil // over budget: dropped
+		}
+		var st ipc.RequestStats
+		if err := msg.Decode(&st); err != nil {
+			return nil, err
+		}
+		s.recordStats(ctx, ss.id, st)
 	case ipc.TypeBye:
 	default:
 		return nil, ipc.Errorf("unsupported", "unknown message type %q", msg.Type)
@@ -926,6 +964,28 @@ func (b *tokenBucket) take(now time.Time, burst, rate float64) bool {
 	}
 	b.tokens--
 	return true
+}
+
+// maxLiveClients bounds the clients a session keeps.
+const maxLiveClients = 1024
+
+// clientNotice keeps which clients are connected now.
+func (ss *session) clientNotice(msg *ipc.Envelope) {
+	var c ipc.ClientMsg
+	if msg.Decode(&c) != nil {
+		return
+	}
+	key := truncate(c.Protocol, 16) + "|" + truncate(c.IP, 64)
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.clients == nil {
+		ss.clients = map[string]bool{}
+	}
+	if c.Connected && len(ss.clients) < maxLiveClients {
+		ss.clients[key] = true
+	} else if !c.Connected {
+		delete(ss.clients, key)
+	}
 }
 
 func (ss *session) allowNotice() bool {
@@ -960,6 +1020,7 @@ func (ss *session) notice(ctx context.Context, msg *ipc.Envelope) {
 			l.Attrs = map[string]any{"attrs": "dropped: larger than 4 KiB"}
 		}
 		s.log.Log(ctx, level, l.Msg, "camera", ss.id, "attrs", l.Attrs)
+		s.recordLog(ctx, ss.id, "camera", level, l.Msg, l.Attrs)
 		s.pub.Publish("camera:"+ss.id, "log", l)
 	}
 }

@@ -64,6 +64,28 @@ type Camera struct {
 	FactoryRulesApplied int64
 }
 
+type CameraLog struct {
+	ID        int64
+	CameraID  string
+	At        int64
+	Level     string
+	Source    string
+	Msg       string
+	AttrsJson string
+}
+
+type CameraMetric struct {
+	CameraID   string
+	Resolution int64
+	At         int64
+	CpuPercent float64
+	RssBytes   int64
+	Clients    int64
+	BytesIn    int64
+	BytesOut   int64
+	Requests   int64
+}
+
 type CameraNetwork struct {
 	CameraID string
 	Mode     string
@@ -137,6 +159,17 @@ type CameraUser struct {
 	Role        string
 }
 
+type ConnectionStat struct {
+	CameraID      string
+	Minute        int64
+	Protocol      string
+	ClientIp      string
+	Opened        int64
+	Closed        int64
+	DurationMs    int64
+	MaxDurationMs int64
+}
+
 type Delivery struct {
 	ID         string
 	EventID    string
@@ -171,6 +204,16 @@ type Fault struct {
 	EndedAt    sql.NullInt64
 	EndedBy    string
 	CreatedBy  string
+}
+
+type Gap struct {
+	CameraID string
+	Protocol string
+	Summary  string
+	ClientIp string
+	Count    int64
+	FirstAt  int64
+	LastAt   int64
 }
 
 type Job struct {
@@ -275,6 +318,21 @@ type Rendition struct {
 	Status    string
 	Error     string
 	CreatedAt int64
+}
+
+type RequestStat struct {
+	CameraID     string
+	Minute       int64
+	ClientIp     string
+	Route        string
+	Count        int64
+	Errors       int64
+	AuthFailures int64
+	P50Ms        float64
+	P95Ms        float64
+	MaxMs        float64
+	FirstAt      int64
+	LastAt       int64
 }
 
 type Rule struct {

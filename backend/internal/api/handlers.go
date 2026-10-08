@@ -819,6 +819,15 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCameraMetrics(w http.ResponseWriter, r *http.Request) {
+	if rng := r.URL.Query().Get("range"); rng != "" {
+		samples, err := s.svc.CameraMetricsRange(r.Context(), r.PathValue("id"), rng)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"samples": samples})
+		return
+	}
 	since := time.Now().Add(-10 * time.Minute)
 	if v := r.URL.Query().Get("since"); v != "" {
 		ms, err := strconv.ParseInt(v, 10, 64)
@@ -834,6 +843,80 @@ func (s *Server) handleCameraMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"samples": samples})
+}
+
+// window is the window a diagnostics view asks for: an hour by default.
+func window(r *http.Request) string {
+	if w := r.URL.Query().Get("window"); w != "" {
+		return w
+	}
+	return "1h"
+}
+
+func (s *Server) handleCameraRequests(w http.ResponseWriter, r *http.Request) {
+	if format := r.URL.Query().Get("format"); format != "" {
+		data, err := s.svc.ExportRequests(r.Context(), r.PathValue("id"), window(r), format)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		ctype := "text/csv; charset=utf-8"
+		if format == "json" {
+			ctype = "application/json"
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="requests-%s-%s.%s"`, r.PathValue("id"), window(r), format))
+		_, _ = w.Write(data)
+		return
+	}
+	v, err := s.svc.CameraRequests(r.Context(), r.PathValue("id"), window(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) handleCameraClients(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.CameraClients(r.Context(), r.PathValue("id"), window(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleCameraGaps(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.CameraGaps(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleCameraLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	list, err := s.svc.CameraLogs(r.Context(), r.PathValue("id"), before, limit)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+// handlePrometheus serves the node's and the cameras' metrics to a
+// Prometheus server that holds an API token.
+func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
+	data, err := s.svc.PrometheusMetrics(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {

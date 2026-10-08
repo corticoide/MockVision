@@ -231,6 +231,7 @@ func (s *Service) Run(ctx context.Context) error {
 	s.measureInterface(ctx)
 	s.goLoop(func(ctx context.Context) { s.node.Run(ctx, 2*time.Second) })
 	s.goLoop(s.publishNodeMetrics)
+	s.goLoop(s.metricsLoop)
 	s.goLoop(s.watchExits)
 	s.goLoop(s.retentionLoop)
 	s.goLoop(s.faultLoop)
@@ -366,6 +367,7 @@ func (s *Service) applyRetention(ctx context.Context) {
 		s.log.Info("retention: deleted jobs", "count", n)
 	}
 	_, _ = w.DeleteExpiredSessions(ctx, now.UnixMilli())
+	s.applyDiagnosticsRetention(ctx, now)
 	s.collectRenditions(ctx, now)
 	s.sweepJobFiles(ctx, now)
 }
