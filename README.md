@@ -448,6 +448,48 @@ a local draft.
   defaults), then applies it and restarts the camera if it runs.
   **Export** downloads a version as the package it was imported as.
 
+### Plugins
+
+A plugin package brings an engine MockVision does not have: a program,
+written with the Go SDK (`sdk/engine`, `sdk/plugin`), that serves a protocol
+on the camera's ports, reads and changes its state and raises its events.
+`examples/plugins/hello` is a complete one.
+
+```yaml
+# manifest.yaml of a plugin package
+format: 1
+kind: plugin
+id: examples/hello
+version: 1.0.0              # the engine's version
+requires: { contract: 1 }   # the engine contract it implements
+plugin:
+  engine: hello
+  executable: hello         # bin/linux-amd64/hello, bin/linux-arm64/hello...
+  permissions: [net.listen, state.read, events.emit]
+```
+
+- **Installing** runs the pipeline, then the program once, confined and
+  unable to connect anywhere, to ask what it is; it must be what the
+  manifest says. It installs **disabled**.
+- **Enabling** it in **Plugins** approves its permissions: `net.listen`
+  (its ports), `net.connect`, `accounts.read`, `state.read`,
+  `state.write`, `events.emit`, `events.deliver`, `media.read` and `sd`.
+  Profiles can then use its engine (`engine: hello@^1`). One version of an
+  engine is enabled at a time. A plugin no trusted key signed is enabled
+  only while **Allow unsigned plugins** is on; turning it off disables
+  them.
+- **Running.** A camera whose profile uses the engine starts the program
+  as its own process: same user as the camera, no capabilities, seccomp,
+  Landlock (it reads only its package, and connects nowhere without
+  `net.connect`), and it dies with its camera. It gets the sockets of its
+  ports and talks to its camera over gRPC on inherited sockets; whatever
+  it asks without the permission is refused. A plugin that exits starts
+  again after 1, 2, 4, 8 and 16 s; after five failures in a row the camera
+  fails, with the reason.
+
+Faults on a protocol (down, slow) do not reach a plugin's ports yet; the
+plugin asks the status fault of its instance with `Faults().Status`.
+
 ### Network
 
 The camera's **Network** tab, and the new-camera dialog, choose how it joins
@@ -524,6 +566,7 @@ mockvision run      root, 9 capabilities   network helper: namespaces, macvlan/i
  └─ mockvision serve   uid mockvision, none   panel, REST API, WebSocket, SQLite, reconciler
      └─ FFmpeg, package validator   confined: seccomp and Landlock
  └─ mockvision camera  uid mockvision-cam, none   one per camera, in its network and PID namespaces
+     └─ plugins            confined: seccomp and Landlock, the camera's user
 ```
 
 - The **network helper** is the only privileged process. It accepts a closed

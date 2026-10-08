@@ -472,6 +472,49 @@ como borrador local.
   cámara si está funcionando. **Exportar** descarga una versión como el
   paquete con que se importó.
 
+### Plugins
+
+Un paquete de plugin trae un motor que MockVision no tiene: un programa,
+escrito con el SDK de Go (`sdk/engine`, `sdk/plugin`), que sirve un
+protocolo en los puertos de la cámara, lee y cambia su estado y genera sus
+eventos. `examples/plugins/hello` es uno completo.
+
+```yaml
+# manifest.yaml de un paquete de plugin
+format: 1
+kind: plugin
+id: examples/hello
+version: 1.0.0              # la versión del motor
+requires: { contract: 1 }   # el contrato de motor que implementa
+plugin:
+  engine: hello
+  executable: hello         # bin/linux-amd64/hello, bin/linux-arm64/hello...
+  permissions: [net.listen, state.read, events.emit]
+```
+
+- **Instalarlo** corre el pipeline y después el programa una vez,
+  confinado y sin poder conectarse a ningún lado, para preguntarle qué es;
+  tiene que ser lo que dice el manifest. Se instala **deshabilitado**.
+- **Habilitarlo** en **Plugins** aprueba sus permisos: `net.listen` (sus
+  puertos), `net.connect`, `accounts.read`, `state.read`, `state.write`,
+  `events.emit`, `events.deliver`, `media.read` y `sd`. Desde ahí los
+  perfiles pueden usar su motor (`engine: hello@^1`). Se habilita una
+  versión de cada motor a la vez. Un plugin que no firmó ninguna clave de
+  confianza solo se habilita mientras **Permitir plugins sin firma** está
+  activo; al desactivarlo se deshabilitan.
+- **En marcha.** Una cámara cuyo perfil usa el motor arranca el programa
+  como un proceso propio: mismo usuario que la cámara, sin capacidades,
+  seccomp, Landlock (solo lee su paquete y no se conecta a ningún lado sin
+  `net.connect`), y muere con su cámara. Recibe los sockets de sus puertos
+  y habla con su cámara por gRPC sobre sockets heredados; lo que pide sin
+  el permiso se le niega. Un plugin que termina vuelve a arrancar tras 1,
+  2, 4, 8 y 16 s; tras cinco fallas seguidas la cámara falla, con el
+  motivo.
+
+Las fallas de un protocolo (caído, lento) todavía no llegan a los puertos
+de un plugin; el plugin consulta la falla de estado de su instancia con
+`Faults().Status`.
+
 ### Red
 
 La pestaña **Red** de la cámara, y el diálogo de nueva cámara, eligen cómo
@@ -553,6 +596,7 @@ mockvision run      root, 9 capacidades     helper de red: namespaces, macvlan/i
  └─ mockvision serve   uid mockvision, ninguna   panel, API REST, WebSocket, SQLite, reconciliador
      └─ FFmpeg, validador de paquetes   confinados: seccomp y Landlock
  └─ mockvision camera  uid mockvision-cam, ninguna   una por cámara, en sus namespaces de red y de PID
+     └─ plugins            confinados: seccomp y Landlock, el usuario de la cámara
 ```
 
 - El **helper de red** es el único proceso con privilegios. Acepta un

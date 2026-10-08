@@ -138,11 +138,21 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 
 ### Isolation
 
-- **No external plugins.** The engine contract (`sdk/engine`, with its gRPC
-  mirror in `sdk/proto`) is respected, but only the built-in engines exist
-  and the gRPC transport is not implemented. Cameras drop every privilege
-  as they start, so launching sandboxed plugin processes from a camera will
-  need a helper request of its own.
+- **Plugins run as their camera's user**, not a user of their own, and
+  without a cgroup of their own: the camera's limits cover both. They are
+  confined by seccomp, no_new_privs and Landlock (their package, read only;
+  no TCP connection without `net.connect` where the kernel has Landlock
+  ABI 4), and die with their camera. A plugin package provides one engine.
+- **Installing a plugin runs its program** once as the service user,
+  confined the same way and unable to connect, to compare what it says it
+  is with its manifest; a token that may import packages may trigger that
+  run, but only a panel session enables a plugin.
+- **Faults do not reach a plugin's sockets.** The sockets are handed to
+  the plugin's process, past the camera's fault gate: *down* and *slow*
+  apply to built-in engines only; a plugin asks the status fault itself.
+- **Plugins are written in Go** with `sdk/plugin`; another language needs
+  the gRPC services of `sdk/proto` and the descriptor numbers (fd 3 the
+  engine's, fd 4 the camera's, 5 on the sockets) by hand.
 - **One user for all cameras** (`mockvision-cam`), not one per camera.
   Cameras cannot reach the service's data, but they share a uid among
   themselves. Each runs in a PID namespace of its own, so one cannot signal

@@ -15,9 +15,11 @@
 # node bridge, ipvlan where the kernel has it, faults, the SD card and a NAS
 # share (over SMB when the machine has Samba), the Dahua profile, packages
 # (the catalog, signatures, the self-test, inheritance, export and a
-# camera's upgrade), clean stop, and cameras coming back after a restart.
+# camera's upgrade), an external plugin, clean stop, and cameras coming
+# back after a restart.
 #
-# Run as root on Linux with iproute2, ffmpeg, curl, ping and python3:
+# Run as root on Linux with iproute2, ffmpeg, curl, ping, python3 and Go
+# (to build the example plugin):
 #   sudo backend/e2e/run.sh
 #
 # E2E_BIN=path uses an already built binary instead of building one.
@@ -82,8 +84,8 @@ trap cleanup EXIT
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 2; }
 case "$MODE" in
-binary) tools="ip ffprobe ffmpeg curl ping python3" ;;
-compose) tools="ip ffprobe curl ping python3 docker" ;;
+binary) tools="ip ffprobe ffmpeg curl ping python3 go" ;;
+compose) tools="ip ffprobe curl ping python3 docker go" ;;
 *) echo "E2E_MODE must be binary or compose" >&2; exit 2 ;;
 esac
 for tool in $tools; do
@@ -1003,6 +1005,67 @@ GATE_IP=$(api GET "/cameras/$CID" | json 'd["network"]["ip"]')
 client ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 \
 	"rtsp://admin:e2e-new-pw@$GATE_IP/main" | grep -q . || fail "after the upgrade, RTSP does not play"
 ok "Gate 1 runs milesight/demo@0.8.0 after the plan said it would restart; its stream plays"
+
+step "plugins: a signed example plugin, approved, runs confined in a camera (D84, D85, D86)"
+# The example plugin, built for this machine and signed with the key above.
+mkdir -p "$PK/hello/bin/linux-$(cd "$ROOT" && go env GOARCH)"
+(cd "$ROOT" && CGO_ENABLED=0 go build -o "$PK/hello/bin/linux-$(go env GOARCH)/hello" ./examples/plugins/hello) || fail "building the example plugin"
+printf 'format: 1\nkind: plugin\nid: examples/hello\nversion: 1.0.0\nrequires: { contract: 1 }\nplugin: { engine: hello, executable: hello, permissions: [net.listen, state.read, events.emit] }\n' \
+	>"$PK/hello/manifest.yaml"
+chmod -R a+rwX "$PK"
+mvcli pkg build "$PK/hello" -o "$PK/hello.mvpkg" -k "$PK/acme.key" >/dev/null || fail "pkg build of the plugin"
+IMP=$(api POST /packages -F "file=@$PK/hello.mvpkg")
+PLID=$(echo "$IMP" | json 'd["plugin"]["id"]') || fail "the plugin package: $IMP"
+[ "$(echo "$IMP" | json 'd["plugin"]["signature_status"] + " " + str(d["plugin"]["enabled"]) + " " + ",".join(d["plugin"]["permissions"])')" = \
+	"trusted False net.listen,state.read,events.emit" ] || fail "the plugin as installed: $IMP"
+ok "examples/hello 1.0.0 installed disabled, signed by Acme; its program described itself confined"
+# Until it is enabled no profile may use its engine.
+sed -e 's/^  id: milesight\/demo$/  id: examples\/hello-cam/' -e 's/^  version: 0.7.0$/  version: 0.1.0/' \
+	-e 's/^engines:$/engines:\n  hello:\n    engine: hello@^1\n    port: 7000\n    greeting: HELLO/' \
+	-e 's/^events:$/events:\n  motion: { vendor_name: Motion }/' "$ROOT/profiles/milesight-demo.yaml" >"$PK/hello-cam.yaml"
+code=$(api POST /packages -F "file=@$PK/hello-cam.yaml" -o "$PK/hello-cam.json" -w '%{http_code}')
+[ "$code" = 422 ] && grep -q 'unknown engine' "$PK/hello-cam.json" || fail "a profile with a disabled plugin answered $code"
+[ "$(api PATCH "/plugins/$PLID" -H 'Content-Type: application/json' -d '{"enabled":true}' | json 'd["enabled"]')" = True ] || fail "enabling the plugin"
+[ "$(api POST /packages -F "file=@$PK/hello-cam.yaml" | json 'd["profile"]["profile_id"]')" = examples/hello-cam ] || fail "the profile with the plugin"
+ok "enabled, which approves its permissions: a profile now uses engine hello@^1"
+PL_IP=10.77.0.14
+PL=$(api POST /cameras -H 'Content-Type: application/json' -d "{\"name\": \"Plugged\", \"profile_id\": \"examples/hello-cam\",
+	\"profile_version\": \"0.1.0\", \"network\": {\"ip\": \"$PL_IP\"}, \"start\": true}" | json 'd["id"]')
+wait_state "$PL" running 120
+PL_SERIAL=$(api GET "/cameras/$PL" | json 'd["serial"]')
+hello() { client python3 - "$PL_IP" "$@" <<'PY'
+import socket, sys
+c = socket.create_connection((sys.argv[1], 7000), timeout=5)
+f = c.makefile("rw")
+print(f.readline().strip())
+for cmd in sys.argv[2:]:
+    f.write(cmd + "\n"); f.flush()
+    print(f.readline().strip())
+PY
+}
+out=$(hello event "set Lobby")
+echo "$out" | sed 's/^/   /'
+[ "$(echo "$out" | sed -n 1p)" = "HELLO $PL_SERIAL Network Camera" ] || fail "the plugin's greeting: $out"
+echo "$out" | sed -n 2p | grep -q '^EMITTED ' || fail "the plugin did not raise its event: $out"
+echo "$out" | sed -n 3p | grep -q '^DENIED .*state.write' || fail "a write without state.write: $out"
+for _ in $(seq 1 20); do
+	[ "$(api GET "/events?camera_id=$PL&type=motion" | json 'len(d["items"])')" -ge 1 ] && break
+	sleep 0.25
+done
+[ "$(api GET "/events?camera_id=$PL&type=motion" | json 'len(d["items"])')" -ge 1 ] || fail "the plugin's event is not in the log"
+ok "from the LAN: its greeting reads the camera's serial and state, its event is logged, a write without state.write is denied"
+HPID=$(node_exec sh -c 'for d in /proc/[0-9]*; do
+	tr "\0" " " 2>/dev/null <"$d/cmdline" | grep -q "/bin/linux-[a-z0-9]*/hello" && basename "$d"
+done; true' | head -n 1)
+[ -n "$HPID" ] || fail "the plugin's process was not found"
+hst=$(node_exec cat "/proc/$HPID/status")
+huid=$(echo "$hst" | awk '/^Uid:/{print $2}')
+cuid=$(node_exec cat "/proc/$(echo "$hst" | awk '/^PPid:/{print $2}')/status" | awk '/^Uid:/{print $2}')
+[ "$huid" = "$cuid" ] && [ "$huid" != 0 ] || fail "the plugin runs as $huid, its camera as $cuid"
+echo "$hst" | grep -q 'NoNewPrivs:\s*1' && echo "$hst" | grep -q 'Seccomp:\s*2' || fail "the plugin is not confined: $(echo "$hst" | grep -E 'NoNewPrivs|Seccomp')"
+echo "$hst" | grep -E '^CapEff' | awk '{print $2}' | grep -q '^0*$' || fail "the plugin holds capabilities"
+ok "the plugin (pid $HPID) runs as its camera's user $huid, with no capabilities, no_new_privs and a seccomp filter"
+api DELETE "/cameras/$PL" -o /dev/null
 
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null
