@@ -123,6 +123,10 @@ func verifyCmd(args []string, engines profile.EngineCatalog) int {
 		fmt.Println("result: rejected")
 		return 1
 	}
+	if len(res.Fixtures) > 0 {
+		fmt.Printf("result: accepted, level %s until the node imports it and replays its %d fixtures\n", r.Level, len(res.Fixtures))
+		return 0
+	}
 	fmt.Printf("result: accepted, level %s\n", r.Level)
 	return 0
 }

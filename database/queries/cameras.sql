@@ -142,3 +142,12 @@ SELECT camera_targets.camera_id, camera_targets.event_types_json, camera_targets
 FROM camera_targets
 JOIN targets ON targets.id = camera_targets.target_id
 ORDER BY camera_targets.camera_id, targets.name;
+
+-- name: SetCameraProfileVersion :exec
+UPDATE cameras SET profile_version = @profile_version, updated_at = @updated_at WHERE id = @id;
+
+-- name: DeleteCameraProtocols :exec
+DELETE FROM camera_protocols WHERE camera_id = @camera_id;
+
+-- name: DeleteCameraStreams :exec
+DELETE FROM camera_streams WHERE camera_id = @camera_id;

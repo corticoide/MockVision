@@ -449,6 +449,77 @@ func (s *Server) handleProfileAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
+	id, version := profileRef(r)
+	name, data, err := s.svc.ExportProfile(r.Context(), id, version)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleDiffProfile(w http.ResponseWriter, r *http.Request) {
+	id, version := profileRef(r)
+	changes, err := s.svc.DiffProfiles(r.Context(), id, version, r.PathValue("to"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": version, "to": r.PathValue("to"), "changes": changes})
+}
+
+func (s *Server) handleDuplicateProfile(w http.ResponseWriter, r *http.Request) {
+	id, version := profileRef(r)
+	var in app.DuplicateInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	res, err := s.svc.DuplicateProfile(r.Context(), actor(r), id, version, in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
+// --- Trusted keys ---
+
+func (s *Server) handleListTrustedKeys(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListTrustedKeys(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleAddTrustedKey(w http.ResponseWriter, r *http.Request) {
+	var in app.TrustedKeyInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	k, err := s.svc.AddTrustedKey(r.Context(), actor(r), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, k)
+}
+
+func (s *Server) handleDeleteTrustedKey(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.DeleteTrustedKey(r.Context(), actor(r), r.PathValue("id")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Cameras ---
 
 func (s *Server) handleListCameras(w http.ResponseWriter, r *http.Request) {
@@ -592,6 +663,36 @@ func (s *Server) handleResetCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, v)
+}
+
+// handleUpgradeProfile moves a camera to another version of its profile,
+// or with dry_run only says what that would do (D05).
+func (s *Server) handleUpgradeProfile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Version string `json:"version"`
+		DryRun  bool   `json:"dry_run"`
+	}
+	if err := decode(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if body.DryRun {
+		plan, err := s.svc.PlanProfileUpgrade(r.Context(), r.PathValue("id"), body.Version)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"plan": plan})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res, err := s.svc.UpgradeCameraProfile(ctx, actor(r), r.PathValue("id"), body.Version)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleCloneCamera(w http.ResponseWriter, r *http.Request) {

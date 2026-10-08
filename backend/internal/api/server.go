@@ -233,7 +233,15 @@ func (s *Server) Handler() http.Handler {
 	auth("POST /api/v1/packages", s.handleImportPackage)
 	auth("GET /api/v1/profiles", s.handleListProfiles)
 	auth("GET /api/v1/profiles/{vendor}/{model}/versions/{version}", s.handleGetProfile)
+	auth("GET /api/v1/profiles/{vendor}/{model}/versions/{version}/export", s.handleExportProfile)
+	auth("GET /api/v1/profiles/{vendor}/{model}/versions/{version}/diff/{to}", s.handleDiffProfile)
 	auth("POST /api/v1/profiles/{vendor}/{model}/versions/{version}/actions/{action}", s.handleProfileAction)
+	auth("POST /api/v1/profiles/{vendor}/{model}/versions/{version}/actions/duplicate", s.handleDuplicateProfile)
+
+	// A leaked token cannot make the node trust a key.
+	auth("GET /api/v1/trusted-keys", s.handleListTrustedKeys)
+	panel("POST /api/v1/trusted-keys", s.handleAddTrustedKey)
+	panel("DELETE /api/v1/trusted-keys/{id}", s.handleDeleteTrustedKey)
 
 	panel("GET /api/v1/tokens", s.handleListTokens)
 	panel("POST /api/v1/tokens", s.handleCreateToken)
@@ -256,6 +264,7 @@ func (s *Server) Handler() http.Handler {
 	auth("POST /api/v1/cameras/{id}/actions/factory-reset", s.handleResetCamera)
 	auth("POST /api/v1/cameras/{id}/actions/clone", s.handleCloneCamera)
 	auth("POST /api/v1/cameras/{id}/actions/reboot", s.handleRebootCamera)
+	auth("POST /api/v1/cameras/{id}/actions/upgrade-profile", s.handleUpgradeProfile)
 	auth("GET /api/v1/cameras/{id}/faults", s.handleListFaults)
 	auth("POST /api/v1/cameras/{id}/faults", s.handleInjectFault)
 	auth("DELETE /api/v1/cameras/{id}/faults/{fault}", s.handleEndFault)

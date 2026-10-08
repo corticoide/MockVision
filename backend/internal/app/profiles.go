@@ -37,6 +37,8 @@ type importParams struct {
 	Filename string `json:"filename"`
 	Upload   string `json:"upload"` // file in the jobs directory
 	Actor    Actor  `json:"actor"`
+	// Source is where the package came from; empty is an upload.
+	Source string `json:"source,omitempty"`
 }
 
 type importCheckpoint struct {
@@ -54,6 +56,10 @@ type importOutcome struct {
 // SubmitImport stores an uploaded package or loose profile.yaml and queues
 // its import. The same content already being imported joins that job.
 func (s *Service) SubmitImport(ctx context.Context, actor Actor, filename string, data []byte) (worker.Job, error) {
+	return s.submitImport(ctx, actor, filename, data, sourceUpload)
+}
+
+func (s *Service) submitImport(ctx context.Context, actor Actor, filename string, data []byte, source string) (worker.Job, error) {
 	if len(data) == 0 {
 		return worker.Job{}, domain.Invalid("file", "the file is empty")
 	}
@@ -73,7 +79,7 @@ func (s *Service) SubmitImport(ctx context.Context, actor Actor, filename string
 		name = "package"
 	}
 	j, created, err := s.jobs.Submit(ctx, worker.Spec{
-		Type: JobImport, Title: "Import " + name, Params: importParams{Filename: name, Upload: upload, Actor: actor},
+		Type: JobImport, Title: "Import " + name, Params: importParams{Filename: name, Upload: upload, Actor: actor, Source: source},
 		Key: "import:" + hex.EncodeToString(sum[:]), CreatedBy: actorLabel(actor),
 	})
 	if err != nil || !created {
@@ -85,7 +91,12 @@ func (s *Service) SubmitImport(ctx context.Context, actor Actor, filename string
 // ImportPackage imports a package and waits for the result: an immutable
 // profile version (RN-02) or the report of why it was rejected.
 func (s *Service) ImportPackage(ctx context.Context, actor Actor, filename string, data []byte) (*ImportResult, error) {
-	j, err := s.SubmitImport(ctx, actor, filename, data)
+	return s.importAs(ctx, actor, filename, data, sourceUpload)
+}
+
+// importAs imports a package that came from source and waits for it.
+func (s *Service) importAs(ctx context.Context, actor Actor, filename string, data []byte, source string) (*ImportResult, error) {
+	j, err := s.submitImport(ctx, actor, filename, data, source)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +180,11 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 	rep := res.Report
 	run.Logf("%s %s@%s: level %s, signature %s", rep.Kind, rep.ID, rep.Version, rep.Level, rep.Signature)
 	run.Step("Installing", 0.8)
-	out, err := s.installPackage(ctx, p.Actor, data, res, sourceUpload)
+	source := p.Source
+	if source == "" {
+		source = sourceUpload
+	}
+	out, err := s.installPackage(ctx, p.Actor, data, res, source)
 	if err != nil {
 		return importOutcome{Report: &rep, Error: describeError(err)}, err
 	}
@@ -425,6 +440,10 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 		d.FactoryUsers = append(d.FactoryUsers, UserView{Username: u.Username, Role: u.Role})
 	}
 	d.FactoryIP = doc.Identity.Factory.Network.IP
+	var rep pkg.Report
+	if json.Unmarshal([]byte(pk.ReportJson), &rep) == nil && rep.Kind != "" {
+		d.Report = &rep
+	}
 	for _, key := range profile.SortedKeys(doc.State) {
 		p := doc.State[key]
 		d.Params = append(d.Params, ParamView{Key: key, Type: p.Type, Value: p.Default, Default: p.Default, Values: p.Values,

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/minisign"
 	"github.com/corticoide/mockvision/backend/internal/netctl"
 	"github.com/corticoide/mockvision/backend/internal/pkg"
@@ -323,4 +325,120 @@ func TestSelfTestEarnsCaptured(t *testing.T) {
 	if !strings.Contains(detail, `$.model is "MS-DEMO", the device sent "MS-C2964"`) {
 		t.Fatalf("detail %q", detail)
 	}
+}
+
+// A profile exports as the package it was imported as, or wrapped in one;
+// a duplicate is a new unsigned profile of its own (D19, D22).
+func TestExportAndDuplicate(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	name, data, err := svc.ExportProfile(ctx, "milesight/demo", "0.7.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "milesight-demo-0.7.0.mvpkg" || !strings.HasPrefix(string(data), "PK") {
+		t.Fatalf("export %s", name)
+	}
+	if res := pkg.Inspect(data, name, svc.catalog, pkg.Options{}); !res.Report.OK() || res.Report.ID != "milesight/demo" || res.Report.Version != "0.7.0" {
+		t.Fatalf("exported package: %+v", res.Report)
+	}
+
+	res, err := svc.DuplicateProfile(ctx, testActor, "milesight/demo", "0.7.0", DuplicateInput{ProfileID: "acme/demo-copy", Name: "Our demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Profile.ProfileID != "acme/demo-copy" || res.Profile.Version != "0.1.0" || res.Profile.Name != "Our demo" ||
+		res.Profile.Source != sourceDuplicate || res.Profile.SignatureStatus != pkg.SignatureUnsigned {
+		t.Fatalf("duplicate %+v", res.Profile)
+	}
+	if _, err := svc.DuplicateProfile(ctx, testActor, "milesight/demo", "0.7.0", DuplicateInput{ProfileID: "acme/demo-copy"}); err == nil {
+		t.Fatal("a second copy under the same version was accepted")
+	}
+	if _, err := svc.DuplicateProfile(ctx, testActor, "milesight/demo", "0.7.0", DuplicateInput{ProfileID: "not an id"}); err == nil {
+		t.Fatal("a bad id was accepted")
+	}
+	// The copy keeps the comments of the original.
+	_, copyData, err := svc.ExportProfile(ctx, "acme/demo-copy", "0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := pkg.Files(copyData)
+	if err != nil || !strings.Contains(string(files["profile.yaml"]), "# MockVision demo profile") {
+		t.Fatalf("the copy lost its comments: %v", err)
+	}
+}
+
+// Moving a camera to another version keeps what someone set when the new
+// version accepts it, follows the new defaults otherwise, and says so
+// first (D05).
+func TestUpgradeCameraProfile(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	cam := createCamera(t, svc, "Gate", false)
+	if _, err := svc.UpdateCameraConfig(ctx, testActor, cam.ID, map[string]any{"Image.Brightness": 70}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "profiles", "milesight-demo.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := strings.Replace(string(raw), "  version: 0.7.0\n", "  version: 0.7.1\n", 1)
+	next = strings.Replace(next, "    default: \"Network Camera\"\n", "    default: \"IP Camera\"\n", 1)
+	next = strings.Replace(next, "    default: 50\n    min: 0\n    max: 100\n", "    default: 50\n    min: 0\n    max: 60\n", 1)
+	next = strings.Replace(next, "\nstate:\n", "\nstate:\n  System.Location:\n    type: string\n    default: \"Gate\"\n", 1)
+	if _, err := svc.ImportPackage(ctx, testActor, "demo.yaml", []byte(next)); err != nil {
+		t.Fatal(err)
+	}
+
+	changes, err := svc.DiffProfiles(ctx, "milesight/demo", "0.7.0", "0.7.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]string{}
+	for _, c := range changes {
+		found[c.Section+":"+c.Key] = c.Kind
+	}
+	if found["state:System.Location"] != "added" || found["state:Image.Brightness"] != "changed" || found["state:System.DeviceName"] != "changed" {
+		t.Fatalf("changes %+v", changes)
+	}
+
+	plan, err := svc.PlanProfileUpgrade(ctx, cam.ID, "0.7.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := map[string]string{}
+	for _, p := range plan.Params {
+		actions[p.Key] = p.Action
+	}
+	if actions["Image.Brightness"] != UpgradeReset || actions["System.DeviceName"] != UpgradeDefault || actions["System.Location"] != UpgradeAdded || plan.Restart {
+		t.Fatalf("plan %+v", plan.Params)
+	}
+	if _, err := svc.PlanProfileUpgrade(ctx, cam.ID, "0.7.0"); err == nil {
+		t.Fatal("an upgrade to the version it runs was planned")
+	}
+
+	res, err := svc.UpgradeCameraProfile(ctx, testActor, cam.ID, "0.7.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Camera.Profile.Version != "0.7.1" {
+		t.Fatalf("camera %+v", res.Camera)
+	}
+	params, err := svc.CameraConfig(ctx, cam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]any{}
+	for _, p := range params {
+		values[p.Key] = p.Value
+	}
+	if fmt.Sprint(values["Image.Brightness"]) != "50" || values["System.DeviceName"] != "IP Camera" || values["System.Location"] != "Gate" {
+		t.Fatalf("values after the upgrade: %v", values)
+	}
+	// It runs on the new version.
+	if _, err := svc.StartCamera(ctx, testActor, cam.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, svc, cam.ID, domain.StateRunning)
 }

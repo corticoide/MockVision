@@ -207,6 +207,114 @@ paths:
       operationId: profileAction
       responses:
         "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileDetail" } } } }
+  /profiles/{vendor}/{model}/versions/{version}/actions/duplicate:
+    parameters:
+      - { name: vendor, in: path, required: true, schema: { type: string } }
+      - { name: model, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [profiles]
+      operationId: duplicateProfile
+      summary: Copy a profile version under another ID, to change one that is read only (D19)
+      description: The copy is a new unsigned package, imported as any other; export it, edit it and import a new version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_id]
+              properties:
+                profile_id: { type: string, description: "vendor/model of the copy" }
+                version: { type: string, description: Defaults to 0.1.0 }
+                name: { type: string }
+      responses:
+        "201": { description: The copy, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /profiles/{vendor}/{model}/versions/{version}/export:
+    parameters:
+      - { name: vendor, in: path, required: true, schema: { type: string } }
+      - { name: model, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [profiles]
+      operationId: exportProfile
+      summary: Download a profile version as a .mvpkg (D22)
+      description: The package as it was imported, signature included; a loose profile.yaml comes wrapped in an unsigned package.
+      responses:
+        "200": { description: The package, content: { application/zip: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+  /profiles/{vendor}/{model}/versions/{version}/diff/{to}:
+    parameters:
+      - { name: vendor, in: path, required: true, schema: { type: string } }
+      - { name: model, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+      - { name: to, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [profiles]
+      operationId: diffProfile
+      summary: What changes from one version of a profile to another (D05)
+      responses:
+        "200":
+          description: The differences
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, changes]
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  changes: { type: array, items: { $ref: "#/components/schemas/ProfileChange" } }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /trusted-keys:
+    get:
+      tags: [packages]
+      operationId: listTrustedKeys
+      summary: Keys whose package signatures the node trusts, official ones first (D83)
+      responses:
+        "200":
+          description: Keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/TrustedKey" } }
+    post:
+      tags: [packages]
+      operationId: addTrustedKey
+      summary: Trust a minisign public key (panel session only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, public_key]
+              properties:
+                name: { type: string, maxLength: 64 }
+                public_key: { type: string, description: The .pub file or its base64 line }
+      responses:
+        "201": { description: Trusted, content: { application/json: { schema: { $ref: "#/components/schemas/TrustedKey" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /trusted-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      tags: [packages]
+      operationId: deleteTrustedKey
+      summary: Stop trusting a key (panel session only); packages imported before keep their status
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /tokens:
     get:
@@ -467,6 +575,41 @@ paths:
       responses:
         "202": { description: Rebooting, content: { application/json: { schema: { $ref: "#/components/schemas/Camera" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /cameras/{id}/actions/upgrade-profile:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [cameras]
+      operationId: upgradeCameraProfile
+      summary: Move a camera to another version of its profile (D05)
+      description: >
+        Parameters keep the values someone set when the new version accepts
+        them; the rest follow its defaults. Protocols, streams, rules and
+        triggers follow what the version has; a running camera restarts.
+        With dry_run it only answers the plan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string }
+                dry_run: { type: boolean }
+      responses:
+        "200":
+          description: The plan, and the camera when applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plan]
+                properties:
+                  plan: { $ref: "#/components/schemas/UpgradePlan" }
+                  camera: { $ref: "#/components/schemas/Camera" }
+        "404": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /cameras/{id}/faults:
     parameters:
@@ -1314,11 +1457,63 @@ components:
         model: { type: string }
         firmware: { type: array, items: { type: string } }
         level: { type: string, enum: [draft, documented, captured, verified] }
-        signature_status: { type: string }
+        signature_status: { type: string, enum: [official, trusted, unsigned, invalid] }
+        signer: { type: string, description: The trusted key that signed the package }
+        source: { type: string, enum: [upload, catalog, duplicate], description: "catalog: shipped in the binary, read only" }
+        extends: { type: string, description: The parent the profile was resolved with, pinned }
         archived: { type: boolean }
         camera_count: { type: integer }
         created_at: { type: string, format: date-time }
         coverage: { type: object, additionalProperties: { type: string } }
+    ProfileChange:
+      type: object
+      required: [section, key, kind]
+      properties:
+        section: { type: string, enum: [state, streams, engines, routes, events, identity, vca, storage] }
+        key: { type: string }
+        kind: { type: string, enum: [added, removed, changed] }
+        details: { type: array, items: { type: string }, description: "What changed in it, as path: before → after" }
+    TrustedKey:
+      type: object
+      required: [name, key_id, public_key, builtin]
+      properties:
+        id: { type: string, description: Empty for an official key }
+        name: { type: string }
+        key_id: { type: string }
+        public_key: { type: string }
+        builtin: { type: boolean, description: An official catalog key of this build }
+        added_at: { type: string, format: date-time }
+    UpgradeItem:
+      type: object
+      required: [key, action]
+      properties:
+        key: { type: string }
+        action: { type: string, enum: [kept, default, reset, added, dropped] }
+        value: {}
+        reason: { type: string }
+    UpgradePlan:
+      type: object
+      required: [profile_id, from, to, changes, params, protocols, streams, rules, triggers, restart]
+      properties:
+        profile_id: { type: string }
+        from: { type: string }
+        to: { type: string }
+        changes: { type: array, items: { $ref: "#/components/schemas/ProfileChange" } }
+        params: { type: array, items: { $ref: "#/components/schemas/UpgradeItem" } }
+        protocols: { type: array, items: { $ref: "#/components/schemas/UpgradeItem" } }
+        streams: { type: array, items: { $ref: "#/components/schemas/UpgradeItem" } }
+        rules: { type: array, items: { $ref: "#/components/schemas/UpgradeItem" } }
+        triggers: { type: array, items: { $ref: "#/components/schemas/UpgradeItem" } }
+        restart: { type: boolean }
+    SelfTestResult:
+      type: object
+      required: [id, covers, status]
+      properties:
+        id: { type: string }
+        file: { type: string }
+        covers: { type: string, description: "route:<instance>/<id>, request:<method> <path> or event:<type>" }
+        status: { type: string, enum: [passed, failed, skipped] }
+        detail: { type: string }
     ProfileStream:
       type: object
       required: [name, codecs, resolutions, fps_min, fps_max, default]
@@ -1379,6 +1574,7 @@ components:
             factory_users: { type: array, items: { $ref: "#/components/schemas/CameraUser" } }
             factory_ip: { type: string }
             params: { type: array, items: { $ref: "#/components/schemas/Param" } }
+            report: { $ref: "#/components/schemas/ImportReport" }
     ImportProblem:
       type: object
       required: [step, severity, message]
@@ -1398,8 +1594,23 @@ components:
         version: { type: string }
         sha256: { type: string }
         signature: { type: string }
+        signer: { type: string }
+        key_id: { type: string, description: The minisign key ID of any signature, trusted or not }
         level: { type: string }
-        coverage: { type: object, additionalProperties: { type: string } }
+        coverage: { type: object, additionalProperties: { type: string }, description: What the author declares }
+        self_test:
+          description: The replay of the package's fixtures against an ephemeral camera of the profile (D88)
+          type: object
+          required: [results, passed, failed, skipped]
+          properties:
+            results: { type: array, items: { $ref: "#/components/schemas/SelfTestResult" } }
+            passed: { type: integer }
+            failed: { type: integer }
+            skipped: { type: integer }
+        verified:
+          description: "Every route (route:<instance>/<id>) and event (event:<type>): verified, failed or declared"
+          type: object
+          additionalProperties: { type: string, enum: [verified, failed, declared] }
         steps:
           type: array
           items:
@@ -1407,7 +1618,7 @@ components:
             required: [name, status]
             properties:
               name: { type: string }
-              status: { type: string, enum: [passed, failed, skipped] }
+              status: { type: string, enum: [passed, failed, skipped, pending] }
               note: { type: string }
         problems: { type: array, items: { $ref: "#/components/schemas/ImportProblem" } }
     ImportResult:

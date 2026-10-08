@@ -93,12 +93,30 @@ func (q *Queries) DeleteCamera(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected()
 }
 
+const deleteCameraProtocols = `-- name: DeleteCameraProtocols :exec
+DELETE FROM camera_protocols WHERE camera_id = ?1
+`
+
+func (q *Queries) DeleteCameraProtocols(ctx context.Context, cameraID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCameraProtocols, cameraID)
+	return err
+}
+
 const deleteCameraState = `-- name: DeleteCameraState :exec
 DELETE FROM camera_state WHERE camera_id = ?1
 `
 
 func (q *Queries) DeleteCameraState(ctx context.Context, cameraID string) error {
 	_, err := q.db.ExecContext(ctx, deleteCameraState, cameraID)
+	return err
+}
+
+const deleteCameraStreams = `-- name: DeleteCameraStreams :exec
+DELETE FROM camera_streams WHERE camera_id = ?1
+`
+
+func (q *Queries) DeleteCameraStreams(ctx context.Context, cameraID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCameraStreams, cameraID)
 	return err
 }
 
@@ -837,6 +855,21 @@ type SetCameraDesiredParams struct {
 
 func (q *Queries) SetCameraDesired(ctx context.Context, arg SetCameraDesiredParams) error {
 	_, err := q.db.ExecContext(ctx, setCameraDesired, arg.DesiredState, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const setCameraProfileVersion = `-- name: SetCameraProfileVersion :exec
+UPDATE cameras SET profile_version = ?1, updated_at = ?2 WHERE id = ?3
+`
+
+type SetCameraProfileVersionParams struct {
+	ProfileVersion string
+	UpdatedAt      int64
+	ID             string
+}
+
+func (q *Queries) SetCameraProfileVersion(ctx context.Context, arg SetCameraProfileVersionParams) error {
+	_, err := q.db.ExecContext(ctx, setCameraProfileVersion, arg.ProfileVersion, arg.UpdatedAt, arg.ID)
 	return err
 }
 

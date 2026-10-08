@@ -270,6 +270,9 @@ type ProfileDetail struct {
 	FactoryUsers []UserView          `json:"factory_users"`
 	FactoryIP    string              `json:"factory_ip,omitempty"`
 	Params       []ParamView         `json:"params"`
+	// Report is what the import found: its steps, problems, self-test and
+	// the coverage it verified.
+	Report *pkg.Report `json:"report,omitempty"`
 }
 
 // ImportResult is the outcome of a package import.
