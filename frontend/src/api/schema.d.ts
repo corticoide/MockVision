@@ -287,6 +287,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Installed plugins, the engines they provide and the permissions they ask for (D85, D86) */
+        get: operations["listPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plugins/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Enable a plugin, approving its permissions, or disable it (panel session only)
+         * @description One version of an engine is enabled at a time: enabling one disables
+         *     the others. An unsigned plugin is enabled only where the settings
+         *     allow unsigned plugins (D84). Running cameras keep the engine they
+         *     started with until they restart.
+         */
+        patch: operations["updatePlugin"];
+        trace?: never;
+    };
     "/trusted-keys": {
         parameters: {
             query?: never;
@@ -1225,6 +1267,8 @@ export interface components {
             job_step_timeout_seconds: number;
             /** @description Let the node reach its macvlan cameras through an extra interface (D26); off by default */
             node_bridge?: boolean;
+            /** @description Let an admin enable plugins no trusted key signed (D84); turning it off disables them */
+            allow_unsigned_plugins?: boolean;
         };
         SettingsPatch: {
             max_cameras?: number;
@@ -1235,6 +1279,7 @@ export interface components {
             max_jobs?: number;
             job_step_timeout_seconds?: number;
             node_bridge?: boolean;
+            allow_unsigned_plugins?: boolean;
         };
         NodeMetrics: {
             /** Format: date-time */
@@ -1383,6 +1428,35 @@ export interface components {
             /** @description What changed in it, as path: before → after */
             details?: string[];
         };
+        Plugin: {
+            id: string;
+            package_id: string;
+            /** @description The package's id */
+            package: string;
+            engine: string;
+            version: string;
+            /** @enum {string} */
+            role: "server" | "client";
+            permissions: ("net.listen" | "net.connect" | "accounts.read" | "state.read" | "state.write" | "events.emit" | "events.deliver" | "media.read" | "sd")[];
+            sockets: {
+                name: string;
+                /** @enum {string} */
+                network: "tcp" | "udp";
+                default_port: number;
+            }[];
+            emits: string[];
+            /** @enum {string} */
+            signature_status: "official" | "trusted" | "unsigned" | "invalid";
+            signer?: string;
+            sha256: string;
+            enabled: boolean;
+            /** @description Who enabled it last */
+            approved_by?: string;
+            /** Format: date-time */
+            approved_at?: string;
+            /** Format: date-time */
+            installed_at: string;
+        };
         TrustedKey: {
             /** @description Empty for an official key */
             id?: string;
@@ -1513,7 +1587,8 @@ export interface components {
             problems: components["schemas"]["ImportProblem"][];
         };
         ImportResult: {
-            profile: components["schemas"]["Profile"];
+            profile?: components["schemas"]["Profile"];
+            plugin?: components["schemas"]["Plugin"];
             report: components["schemas"]["ImportReport"];
             created: boolean;
             /** @description The import job */
@@ -2607,6 +2682,59 @@ export interface operations {
                 };
             };
             404: components["responses"]["Problem"];
+        };
+    };
+    listPlugins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plugins */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Plugin"][];
+                    };
+                };
+            };
+        };
+    };
+    updatePlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plugin"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listTrustedKeys: {

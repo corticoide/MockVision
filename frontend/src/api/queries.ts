@@ -48,6 +48,7 @@ export const keys = {
   profile: (id: string, version: string) => ["profiles", id, version] as const,
   profileDiff: (id: string, from: string, to: string) => ["profiles", id, from, "diff", to] as const,
   trustedKeys: ["trusted-keys"] as const,
+  plugins: ["plugins"] as const,
   assets: ["assets"] as const,
   targets: ["targets"] as const,
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
@@ -493,7 +494,29 @@ export function useImportPackage() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => upload<ImportAnswer>("/packages", file),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.profiles });
+      qc.invalidateQueries({ queryKey: keys.plugins });
+    },
+  });
+}
+
+// --- Plugins ---
+
+export function usePlugins() {
+  return useQuery({ queryKey: keys.plugins, queryFn: async () => unwrap(await api.GET("/plugins")).items });
+}
+
+/** Enables a plugin, approving its permissions, or disables it. */
+export function useUpdatePlugin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) =>
+      unwrap(await api.PATCH("/plugins/{id}", { params: { path: { id } }, body: { enabled } })),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.plugins });
+      qc.invalidateQueries({ queryKey: keys.profiles });
+    },
   });
 }
 

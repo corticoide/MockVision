@@ -11,6 +11,7 @@ export type ImportResult = Schemas["ImportResult"];
 export type ImportReport = Schemas["ImportReport"];
 export type ProfileChange = Schemas["ProfileChange"];
 export type TrustedKey = Schemas["TrustedKey"];
+export type Plugin = Schemas["Plugin"];
 export type UpgradePlan = Schemas["UpgradePlan"];
 export type UpgradeItem = Schemas["UpgradeItem"];
 export type SelfTestResult = Schemas["SelfTestResult"];

@@ -15,6 +15,7 @@ import { DashboardPage } from "@/pages/Dashboard";
 import { EventsPage } from "@/pages/Events";
 import { JobsPage } from "@/pages/Jobs";
 import { LoginPage } from "@/pages/Login";
+import { PluginsPage } from "@/pages/Plugins";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { ProfilesPage } from "@/pages/Profiles";
 import { SettingsPage } from "@/pages/Settings";
@@ -28,6 +29,7 @@ const pages: Record<string, ComponentType> = {
   "/cameras": CamerasPage,
   "/events": EventsPage,
   "/profiles": ProfilesPage,
+  "/plugins": PluginsPage,
   "/assets": AssetsPage,
   "/targets": TargetsPage,
   "/jobs": JobsPage,

@@ -16,8 +16,9 @@ export function profileHref(id: string, version: string) {
   return `/profiles/${id}/${encodeURIComponent(version)}`;
 }
 
-export function ProfilesPage() {
-  const { data: profiles, isLoading, error } = useProfiles();
+/** Imports a package picked in a file input: a profile or a plugin. The
+ * report of the last import stays until dismissed. */
+export function useImportFlow() {
   const importer = useImportPackage();
   const input = useRef<HTMLInputElement>(null);
   const [report, setReport] = useState<{ report: ImportReport; ok: boolean; message: string } | null>(null);
@@ -34,6 +35,13 @@ export function ProfilesPage() {
           navigate("/jobs");
           return;
         }
+        if (res.plugin) {
+          const id = `${res.plugin.engine} ${res.plugin.version}`;
+          setReport({ report: res.report, ok: true, message: res.created ? t("Imported plugin {id}", { id }) : t("{id} was already installed", { id }) });
+          toast(t("Plugin {name} installed: review its permissions and enable it in Plugins.", { name: res.plugin.engine }), "ok");
+          return;
+        }
+        if (!res.profile) return;
         const id = `${res.profile.profile_id}@${res.profile.version}`;
         setReport({
           report: res.report,
@@ -50,6 +58,16 @@ export function ProfilesPage() {
     });
     if (input.current) input.current.value = "";
   };
+  const picker = (
+    <input ref={input} type="file" accept=".yaml,.yml,.mvpkg" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+  );
+  return { picker, pick: () => input.current?.click(), pending: importer.isPending, report, dismiss: () => setReport(null) };
+}
+
+export function ProfilesPage() {
+  const { data: profiles, isLoading, error } = useProfiles();
+  const flow = useImportFlow();
+  const t = useT();
 
   return (
     <>
@@ -58,21 +76,15 @@ export function ProfilesPage() {
         description={t("Camera models: what each one serves and how. The official catalog comes with MockVision; a profile imported by hand starts as a draft.")}
         actions={
           <>
-            <input
-              ref={input}
-              type="file"
-              accept=".yaml,.yml,.mvpkg"
-              className="hidden"
-              onChange={(e) => onFile(e.target.files?.[0])}
-            />
-            <Button variant="primary" onClick={() => input.current?.click()} disabled={importer.isPending}>
-              <Upload /> {importer.isPending ? t("Validating…") : t("Import profile")}
+            {flow.picker}
+            <Button variant="primary" onClick={flow.pick} disabled={flow.pending}>
+              <Upload /> {flow.pending ? t("Validating…") : t("Import profile")}
             </Button>
           </>
         }
       />
       {error && <Notice tone="error">{errorMessage(error)}</Notice>}
-      {report && <ReportCard {...report} onClose={() => setReport(null)} />}
+      {flow.report && <ReportCard {...flow.report} onClose={flow.dismiss} />}
       <Card>
         {isLoading ? (
           <Empty title={t("Loading profiles…")} />
@@ -263,4 +275,6 @@ const stepLabels: Record<string, string> = {
   inheritance: "Inheritance",
   templates: "Templates",
   selftest: "Self-test",
+  plugin: "Plugin",
+  describe: "Program run",
 };

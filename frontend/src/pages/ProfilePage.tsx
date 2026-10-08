@@ -312,8 +312,9 @@ function DuplicateDialog({ open, onClose, id, version, name }: { open: boolean; 
       { id, version, body: { profile_id: profileID.trim(), version: copyVersion.trim() || undefined, name: copyName.trim() || undefined } },
       {
         onSuccess: (res) => {
-          toast(t("Profile {name} ready", { name: res.profile.name }), "ok");
           onClose();
+          if (!res.profile) return;
+          toast(t("Profile {name} ready", { name: res.profile.name }), "ok");
           navigate(profileHref(res.profile.profile_id, res.profile.version));
         },
         onError: (err) => {
