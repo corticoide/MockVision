@@ -81,6 +81,8 @@ type Runtime struct {
 
 	dhcp *dhcpClient
 	dns  dnsServers
+	// sink receives what a self-test camera's events push.
+	sink *selfTestSink
 
 	mu         sync.Mutex
 	running    []*runningEngine
@@ -222,6 +224,7 @@ loop:
 	r.vca.stop()
 	r.stopEngines(stopCtx)
 	r.files.close()
+	r.sink.close()
 	_ = r.conn.Notify(ipc.TypeBye, ipc.Bye{Reason: reason})
 	r.conn.Close()
 	<-runDone
@@ -345,6 +348,16 @@ func (r *Runtime) handle(ctx context.Context, msg *ipc.Envelope) (any, error) {
 			return nil, err
 		}
 		return r.files.readFile(ctx, rq)
+	case ipc.TypeSelfTest:
+		var st ipc.SelfTest
+		if err := msg.Decode(&st); err != nil {
+			return nil, err
+		}
+		rep, err := r.runSelfTest(ctx, st)
+		if err != nil {
+			return nil, ipc.Errorf("selftest", "%v", err)
+		}
+		return rep, nil
 	}
 	return nil, ipc.Errorf("unsupported", "unknown message type %q", msg.Type)
 }
@@ -393,6 +406,15 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 			return r.vca.stats.occupancy(r.vca.currentRules(), rule)
 		},
 	})
+	// A self-test camera listens for its own pushes before it is confined:
+	// once it is, it cannot bind.
+	if cfg.SelfTest {
+		sink, err := newSelfTestSink()
+		if err != nil {
+			return ipc.Ready{}, fmt.Errorf("self-test sink: %w", err)
+		}
+		r.sink = sink
+	}
 	if r.opts.Confine {
 		if err := r.confine(cfg.Streams, cfg.Storage.SDDir); err != nil {
 			return ipc.Ready{}, err
@@ -402,6 +424,9 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		return ipc.Ready{}, err
 	}
 	r.events.setTargets(cfg.Targets)
+	if r.sink != nil {
+		r.events.setTargets(append(cfg.Targets, r.sink.target()))
+	}
 
 	enabled := map[string]ipc.EngineConfig{}
 	for _, ec := range cfg.Engines {

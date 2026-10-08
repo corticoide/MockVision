@@ -793,6 +793,23 @@ func (v *validator) lintStream(name string, s Stream) {
 
 // servesAttach reports whether an engine section has a route that streams
 // events, as the HTTP API's events.attach.
+// RouteIDs lists the route ids of an engine section, in order.
+func RouteIDs(section json.RawMessage) []string {
+	var cfg struct {
+		Routes []struct {
+			ID string `json:"id"`
+		} `json:"routes"`
+	}
+	_ = json.Unmarshal(section, &cfg)
+	out := make([]string, 0, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		if r.ID != "" {
+			out = append(out, r.ID)
+		}
+	}
+	return out
+}
+
 func servesAttach(section json.RawMessage) bool {
 	var cfg struct {
 		Routes []struct {

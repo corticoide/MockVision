@@ -160,6 +160,12 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 			return nil, err
 		}
 	}
+	if res.Report.OK() && len(res.Fixtures) > 0 && res.Report.SelfTest == nil {
+		run.Step("Self-test", 0.4)
+		srep, err := s.runSelfTest(ctx, res, func(note string) { run.Logf("%s", note) })
+		applySelfTest(res, srep, err)
+		run.Logf("self-test: %d passed, %d failed, %d not checked", srep.Passed, srep.Failed, srep.Skipped)
+	}
 	rep := res.Report
 	run.Logf("%s %s@%s: level %s, signature %s", rep.Kind, rep.ID, rep.Version, rep.Level, rep.Signature)
 	run.Step("Installing", 0.8)

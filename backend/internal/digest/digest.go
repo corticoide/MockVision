@@ -1,4 +1,7 @@
-package httppush
+// Package digest answers HTTP Digest challenges (RFC 7616) as a client:
+// http-push toward targets that ask for it, and the self-test toward the
+// camera it checks.
+package digest
 
 import (
 	"crypto/md5"
@@ -10,8 +13,8 @@ import (
 	"strings"
 )
 
-// challenge is a Digest challenge of a target (RFC 7616).
-type challenge struct {
+// Challenge is a Digest challenge of a server (RFC 7616).
+type Challenge struct {
 	realm     string
 	nonce     string
 	opaque    string
@@ -20,17 +23,17 @@ type challenge struct {
 	userhash  bool
 }
 
-// parseChallenge picks the Digest challenge among a 401's WWW-Authenticate
-// headers, preferring SHA-256 over MD5 when the target offers both.
-func parseChallenge(headers []string) (*challenge, bool) {
-	var best *challenge
+// ParseChallenge picks the Digest challenge among a 401's WWW-Authenticate
+// headers, preferring SHA-256 over MD5 when the server offers both.
+func ParseChallenge(headers []string) (*Challenge, bool) {
+	var best *Challenge
 	for _, h := range headers {
 		scheme, rest, _ := strings.Cut(strings.TrimSpace(h), " ")
 		if !strings.EqualFold(scheme, "Digest") {
 			continue
 		}
 		p := parseParams(rest)
-		c := &challenge{realm: p["realm"], nonce: p["nonce"], opaque: p["opaque"], algorithm: strings.ToUpper(p["algorithm"]), userhash: strings.EqualFold(p["userhash"], "true")}
+		c := &Challenge{realm: p["realm"], nonce: p["nonce"], opaque: p["opaque"], algorithm: strings.ToUpper(p["algorithm"]), userhash: strings.EqualFold(p["userhash"], "true")}
 		if c.algorithm == "" {
 			c.algorithm = "MD5"
 		}
@@ -62,8 +65,8 @@ func hexHash(newHash func() hash.Hash, parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// authorize builds the Authorization header answering the challenge.
-func (c *challenge) authorize(method, uri, user, password string, body []byte) (string, error) {
+// Authorize builds the Authorization header answering the challenge.
+func (c *Challenge) Authorize(method, uri, user, password string, body []byte) (string, error) {
 	newHash := hashes[strings.TrimSuffix(c.algorithm, "-SESS")]
 	cn := make([]byte, 12)
 	if _, err := rand.Read(cn); err != nil {

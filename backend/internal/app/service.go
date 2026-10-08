@@ -85,6 +85,9 @@ type Service struct {
 	netnsNames map[string]string
 	// claims are the addresses running DHCP cameras hold, to camera ID.
 	claims map[netip.Addr]string
+	// selfTests are the ephemeral cameras of imports' self-tests, which the
+	// reconciler leaves alone.
+	selfTests map[string]bool
 	// exitsChanged is closed and replaced when an exit notice arrives.
 	exitsChanged chan struct{}
 	// bridge is the state of the node's access to its cameras (D26), and
@@ -183,6 +186,7 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		regens:       map[string]*regenState{},
 		netnsNames:   map[string]string{},
 		claims:       map[netip.Addr]string{},
+		selfTests:    map[string]bool{},
 		exitsChanged: make(chan struct{}),
 		storage:      newStorageState(),
 		diskFree:     nodeDiskFree,

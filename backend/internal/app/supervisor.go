@@ -1319,7 +1319,10 @@ func (s *Service) Reconcile(ctx context.Context) {
 		return
 	}
 	for _, id := range live {
-		if s.session(id) == nil {
+		s.mu.Lock()
+		selfTest := s.selfTests[id]
+		s.mu.Unlock()
+		if s.session(id) == nil && !selfTest {
 			s.log.Info("removing orphan camera", "camera", id, "known", known[id])
 			_ = s.rt.Destroy(ctx, id)
 		}

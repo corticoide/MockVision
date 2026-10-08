@@ -259,7 +259,12 @@ func (h *Helper) create(env *ipc.Envelope, fds []int) (createResult, error) {
 	if deleted() {
 		return fail(errDeleted)
 	}
-	link, err := setupInterface(h.host, ns, &spec, cp.stopping)
+	var link linkResult
+	if spec.Mode == ModeIsolated {
+		err = setupLoopback(ns)
+	} else {
+		link, err = setupInterface(h.host, ns, &spec, cp.stopping)
+	}
 	if err != nil {
 		return fail(err)
 	}

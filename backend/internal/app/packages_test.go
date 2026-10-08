@@ -208,3 +208,119 @@ func problemsText(r pkg.Report) string {
 	}
 	return b.String()
 }
+
+// demoFixtures are recordings of the demo camera, as a capture of it would
+// have them: its serial, address, MAC and times differ from any camera's.
+const demoFixtures = `fixtures:
+  - id: device-info
+    request: { method: GET, path: /cgi-bin/operator/operator.cgi, query: { action: get.system.information } }
+    response:
+      status: 200
+      headers: { Content-Type: application/json }
+      body: |
+        {"deviceName": "Network Camera", "vendor": "Milesight", "model": "MS-DEMO", "serialNumber": "6C0123456789",
+         "macAddress": "1C:C3:16:00:00:01", "ipAddress": "192.168.5.190", "firmwareVersion": "demo-1.0.0",
+         "systemTime": "2026-09-20T10:00:00Z"}
+    vary:
+      - { in: body, path: $.serialNumber, as: serial }
+      - { in: body, path: $.macAddress, as: any }
+      - { in: body, path: $.ipAddress, as: any }
+      - { in: body, path: $.systemTime, as: timestamp }
+  - id: brightness
+    route: param-set
+    steps:
+      - request: { method: GET, path: /cgi-bin/operator/param.cgi, query: { action: set, Image.Brightness: "70" } }
+        response: { status: 200, body: "OK\n" }
+      - request: { method: GET, path: /cgi-bin/operator/param.cgi, query: { action: get, name: Image.Brightness } }
+        response: { status: 200, body: "Image.Brightness=70\n" }
+  - id: line-crossing
+    trigger: { type: line_crossing, direction: "A->B" }
+    expect:
+      http_push:
+        headers: { Content-Type: application/json }
+        body: |
+          {"eventType": "LineCrossing", "eventId": "x", "time": "2026-09-20T10:00:00.000Z",
+           "device": {"name": "Network Camera", "serialNumber": "6C0123456789", "macAddress": "x", "ipAddress": "x"},
+           "rule": {"id": "x", "name": "Line 1", "type": "line"}, "direction": "A->B", "object": null}
+        vary:
+          - { in: body, path: $.eventId, as: any }
+          - { in: body, path: $.time, as: timestamp }
+          - { in: body, path: $.device.serialNumber, as: serial }
+          - { in: body, path: $.device.macAddress, as: any }
+          - { in: body, path: $.device.ipAddress, as: any }
+          - { in: body, path: $.rule.id, as: any }
+          - { in: body, path: $.object, as: any }
+`
+
+// demoCaptured packages the demo profile with fixtures, as captured.
+func demoCaptured(t *testing.T, version, fixtures string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "profiles", "milesight-demo.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	prof := strings.Replace(string(raw), "  version: 0.7.0\n", "  version: "+version+"\n", 1)
+	for name, content := range map[string]string{
+		"profile.yaml":           prof,
+		"fixtures/recorded.yaml": fixtures,
+		"manifest.yaml":          "format: 1\nkind: profile\nid: milesight/demo\nversion: " + version + "\nprovenance: { source: captured }\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := pkg.Build(os.DirFS(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// The import replays the fixtures against an ephemeral camera of the
+// profile: all matching makes it captured; one that differs keeps it
+// where it was and says why (D88).
+func TestSelfTestEarnsCaptured(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	res, err := svc.ImportPackage(ctx, testActor, "demo.mvpkg", demoCaptured(t, "0.8.0", demoFixtures))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := res.Report
+	if r.SelfTest == nil || r.SelfTest.Passed != 3 || r.Level != "captured" || res.Profile.Level != "captured" {
+		t.Fatalf("self-test %+v, level %s", r.SelfTest, r.Level)
+	}
+	if r.Verified["route:http/device-info"] != "verified" || r.Verified["route:http/param-set"] != "verified" ||
+		r.Verified["event:line_crossing"] != "verified" || r.Verified["route:http/snapshot"] != "declared" {
+		t.Fatalf("coverage %v", r.Verified)
+	}
+	svc.mu.Lock()
+	left := len(svc.selfTests)
+	svc.mu.Unlock()
+	if left != 0 {
+		t.Fatal("the self-test camera is still registered")
+	}
+
+	wrong := strings.Replace(demoFixtures, `"model": "MS-DEMO"`, `"model": "MS-C2964"`, 1)
+	res, err = svc.ImportPackage(ctx, testActor, "demo.mvpkg", demoCaptured(t, "0.8.1", wrong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = res.Report
+	if r.Level == "captured" || r.SelfTest.Failed != 1 || r.Verified["route:http/device-info"] != "failed" {
+		t.Fatalf("a fixture that differs: level %s, %+v", r.Level, r.SelfTest)
+	}
+	var detail string
+	for _, x := range r.SelfTest.Results {
+		if x.ID == "device-info" {
+			detail = x.Detail
+		}
+	}
+	if !strings.Contains(detail, `$.model is "MS-DEMO", the device sent "MS-C2964"`) {
+		t.Fatalf("detail %q", detail)
+	}
+}

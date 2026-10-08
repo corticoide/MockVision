@@ -326,6 +326,22 @@ func localMACConflict(mac net.HardwareAddr, parent string) string {
 
 // disableIPv6 turns IPv6 off in a namespace before its interface moves in:
 // the interface takes the namespace's defaults.
+// setupLoopback brings up the loopback of an isolated camera's namespace,
+// its only interface.
+func setupLoopback(ns *namespace) error {
+	nh, err := netlink.NewHandleAt(ns.fd)
+	if err != nil {
+		return err
+	}
+	defer nh.Close()
+	disableIPv6(ns)
+	lo, err := nh.LinkByName("lo")
+	if err != nil {
+		return err
+	}
+	return nh.LinkSetUp(lo)
+}
+
 func disableIPv6(ns *namespace) {
 	_ = inNamespace(ns.fd, func() error {
 		for _, conf := range []string{"all", "default"} {

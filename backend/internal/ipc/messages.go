@@ -56,6 +56,8 @@ const (
 	// TypeFileRead reads part of a recording on the camera's NAS share,
 	// for the panel to download it.
 	TypeFileRead = "file.read"
+	// TypeSelfTest asks a self-test camera to replay fixtures.
+	TypeSelfTest = "selftest"
 )
 
 // HeartbeatInterval is how often cameras report; three missed heartbeats
@@ -141,6 +143,10 @@ type Configure struct {
 	Faults []Fault `json:"faults,omitempty"`
 	// Storage is where the camera keeps its recordings.
 	Storage Storage `json:"storage"`
+	// SelfTest makes an ephemeral camera that replays a profile's fixtures:
+	// it receives what its events push over HTTP itself, before it is
+	// confined (D88).
+	SelfTest bool `json:"self_test,omitempty"`
 }
 
 // Storage is where a camera keeps its recordings, and its state. The
@@ -400,4 +406,10 @@ type TargetTestResult struct {
 	HTTPStatus int    `json:"http_status,omitempty"`
 	LatencyMS  int64  `json:"latency_ms"`
 	Error      string `json:"error,omitempty"`
+}
+
+// SelfTest asks a self-test camera to replay a profile's fixtures against
+// itself; the reply is a selftest.Report.
+type SelfTest struct {
+	Fixtures json.RawMessage `json:"fixtures"`
 }

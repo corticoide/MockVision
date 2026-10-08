@@ -41,6 +41,10 @@ func (s *Service) installCatalog(ctx context.Context) {
 			s.log.Error("cannot validate a catalog profile", "profile", p.ID, "version", p.Version, "error", err)
 			continue
 		}
+		if res.Report.OK() && len(res.Fixtures) > 0 {
+			srep, err := s.runSelfTest(ctx, res, func(string) {})
+			applySelfTest(res, srep, err)
+		}
 		out, err := s.installPackage(ctx, actor, p.Data, res, sourceCatalog)
 		if err != nil {
 			s.log.Error("cannot install a catalog profile", "profile", p.ID, "version", p.Version, "error", err, "problems", res.Report.Problems)

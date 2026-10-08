@@ -167,6 +167,11 @@ var (
 	hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 )
 
+// ModeIsolated is a camera with no interface on the LAN: its namespace has
+// only its loopback, where it answers on 127.0.0.1. The import's self-test
+// runs a profile's ephemeral camera this way, reaching nothing (D88).
+const ModeIsolated = "isolated"
+
 // Validate checks every field: the helper runs privileged and trusts
 // nothing it did not check itself.
 func (s *CameraSpec) Validate() error {
@@ -175,6 +180,13 @@ func (s *CameraSpec) Validate() error {
 	}
 	if !netnsPattern.MatchString(s.Netns) {
 		return fmt.Errorf("invalid namespace name %q", s.Netns)
+	}
+	if s.Mode == ModeIsolated {
+		if s.Parent != "" || s.MAC != "" || s.Gateway != "" || s.Firewall != nil || (s.IPMode != "" && s.IPMode != string(domain.IPStatic)) {
+			return fmt.Errorf("an isolated camera has no interface, address or firewall of its own")
+		}
+		s.IPMode, s.IP = string(domain.IPStatic), "127.0.0.1"
+		return s.validateSockets()
 	}
 	if s.Mode != string(domain.NetMacvlan) && s.Mode != string(domain.NetIPvlan) {
 		return fmt.Errorf("network mode %q is not supported", s.Mode)
@@ -215,6 +227,10 @@ func (s *CameraSpec) Validate() error {
 			return err
 		}
 	}
+	return s.validateSockets()
+}
+
+func (s *CameraSpec) validateSockets() error {
 	if len(s.Sockets) > 16 {
 		return fmt.Errorf("too many sockets")
 	}

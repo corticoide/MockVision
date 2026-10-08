@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/corticoide/mockvision/backend/internal/digest"
 	"github.com/corticoide/mockvision/backend/internal/engines/delivery"
 	"github.com/corticoide/mockvision/sdk/engine"
 )
@@ -242,11 +243,11 @@ func Do(ctx context.Context, client *http.Client, method string, target engine.T
 	if resp.StatusCode != http.StatusUnauthorized || target.Auth != AuthDigest || target.Username == "" {
 		return resp.StatusCode, nil
 	}
-	ch, ok := parseChallenge(resp.Header.Values("WWW-Authenticate"))
+	ch, ok := digest.ParseChallenge(resp.Header.Values("WWW-Authenticate"))
 	if !ok {
 		return resp.StatusCode, fmt.Errorf("target answered 401 without a Digest challenge")
 	}
-	auth, err := ch.authorize(method, req.URL.RequestURI(), target.Username, target.Password, body)
+	auth, err := ch.Authorize(method, req.URL.RequestURI(), target.Username, target.Password, body)
 	if err != nil {
 		return resp.StatusCode, err
 	}

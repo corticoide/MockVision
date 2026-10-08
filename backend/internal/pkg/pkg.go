@@ -25,6 +25,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/buildinfo"
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/profile"
+	"github.com/corticoide/mockvision/backend/internal/selftest"
 )
 
 // Limits of a package (integrity step).
@@ -92,6 +93,10 @@ type Report struct {
 	KeyID    string            `json:"key_id,omitempty"`
 	Level    string            `json:"level,omitempty"`
 	Coverage map[string]string `json:"coverage,omitempty"`
+	// SelfTest is the replay of the package's fixtures, and Verified what
+	// it says of every route and event: verified, failed or declared.
+	SelfTest *selftest.Report  `json:"self_test,omitempty"`
+	Verified map[string]string `json:"verified,omitempty"`
 	Steps    []Step            `json:"steps"`
 	Problems []profile.Problem `json:"problems"`
 }
@@ -115,6 +120,9 @@ type Result struct {
 	// Needs is the parent to run again with, when the profile extends one
 	// the options did not bring.
 	Needs *Need `json:"needs,omitempty"`
+	// Fixtures are the recordings of the device the node replays against
+	// an ephemeral camera of the profile.
+	Fixtures []selftest.Fixture `json:"fixtures,omitempty"`
 }
 
 // Options are what the pipeline needs from the node: the keys it trusts
@@ -221,6 +229,10 @@ func (in *inspector) inspectPackage(data []byte) {
 		if name != "profile.yaml" && name != "manifest.yaml" && name != "manifest.sig" {
 			others[name] = b
 		}
+	}
+	if fixtures, probs := selftest.Read(others); len(fixtures) > 0 || len(probs) > 0 {
+		in.res.Fixtures = fixtures
+		in.res.Report.Problems = append(in.res.Report.Problems, probs...)
 	}
 	in.validateProfile(profile.Input{File: "profile.yaml", Data: prof, Files: others}, false)
 	if in.res.Profile != nil && man.ID != "" && in.res.Profile.ID != "" && in.res.Profile.ID != man.ID {
@@ -459,7 +471,14 @@ func (in *inspector) validateProfile(input profile.Input, loose bool) {
 		}
 		in.step(s, status, "")
 	}
-	in.step(profile.StepSelfTest, "skipped", "the package has no fixtures of a real device")
+	if len(in.res.Fixtures) > 0 {
+		if res.Doc != nil {
+			in.checkFixtures(res.Doc)
+		}
+		in.step(profile.StepSelfTest, "pending", fmt.Sprintf("%d fixtures to replay against a camera of the profile", len(in.res.Fixtures)))
+	} else {
+		in.step(profile.StepSelfTest, "skipped", "the package has no fixtures of a real device")
+	}
 	if in.res.Report.OK() {
 		in.res.Resolved = res.Resolved
 		in.res.Report.Level = string(domain.LevelDraft)
@@ -469,6 +488,24 @@ func (in *inspector) validateProfile(input profile.Input, loose bool) {
 		// Adjust the resolved document so it carries the final identity.
 		if in.res.Profile != nil {
 			in.res.Resolved = withIdentity(res.Resolved, in.res.Profile.ID, in.res.Profile.Version)
+		}
+	}
+}
+
+// checkFixtures checks that fixtures name what the profile has: an http-api
+// instance to send requests to, an event type to raise.
+func (in *inspector) checkFixtures(doc *profile.Document) {
+	for _, f := range in.res.Fixtures {
+		if f.Engine != "" {
+			name, _, _ := profile.EngineName(doc.Engines[f.Engine])
+			if name != "http-api" {
+				in.problem(profile.StepSelfTest, f.File, 0, "fixture %s: the profile has no http-api instance %s", f.ID, f.Engine)
+			}
+		}
+		if f.Trigger != nil {
+			if _, ok := doc.Events[f.Trigger.Type]; !ok {
+				in.problem(profile.StepSelfTest, f.File, 0, "fixture %s: the profile has no %s events", f.ID, f.Trigger.Type)
+			}
 		}
 	}
 }
