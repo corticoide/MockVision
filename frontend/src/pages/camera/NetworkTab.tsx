@@ -214,7 +214,7 @@ export function NetworkTab({ camera }: { camera: Camera }) {
           <div className="col-span-3">
             <Checkbox
               checked={d.force}
-              onChange={(e) => form.set({ force: e.target.checked })}
+              onCheckedChange={(checked) => form.set({ force: checked })}
               disabled={local}
               label={t("Start even if another device answers on this IP or MAC")}
             />

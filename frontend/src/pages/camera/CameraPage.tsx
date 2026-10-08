@@ -89,8 +89,8 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         items={sections.map((s) => ({ id: s.id, label: t(s.label), badge: (pending as string[]).includes(s.id) }))}
         value={current}
         onChange={go}
-      />
-      <TabPanel key={camera.id} id={current}>
+      >
+        <TabPanel key={camera.id} id={current}>
         {current === "general" && <GeneralTab camera={camera} />}
         {current === "network" && <NetworkTab camera={camera} />}
         {current === "protocols" && <ProtocolsTab camera={camera} />}
@@ -103,7 +103,8 @@ export function CameraPage({ id, tab }: { id: string; tab?: string }) {
         {current === "faults" && <FaultsTab camera={camera} />}
         {current === "events" && <EventsTab camera={camera} />}
         {current === "diagnostics" && <DiagnosticsTab camera={camera} />}
-      </TabPanel>
+        </TabPanel>
+      </Tabs>
     </>
   );
 }

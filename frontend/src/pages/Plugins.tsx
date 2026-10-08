@@ -151,10 +151,10 @@ function UnsignedCard() {
         <Checkbox
           checked={asked ?? settings.allow_unsigned_plugins ?? false}
           disabled={update.isPending}
-          onChange={(e) => {
-            setAsked(e.target.checked);
+          onCheckedChange={(checked) => {
+            setAsked(checked);
             update.mutate(
-              { allow_unsigned_plugins: e.target.checked },
+              { allow_unsigned_plugins: checked },
               {
                 onSuccess: (s) => toast(s.allow_unsigned_plugins ? t("Unsigned plugins can be enabled") : t("Unsigned plugins are disabled"), "ok"),
                 onError: (err) => toast(errorMessage(err), "error"),

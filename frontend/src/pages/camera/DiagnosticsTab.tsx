@@ -238,16 +238,16 @@ function RequestsCard({ id, win }: { id: string; win: StatsWindow }) {
         description={t("By route and client, a minute at a time; latencies are the camera's own.")}
         actions={
           <>
-            <a href={exportHref("csv")} download className="inline-flex">
-              <Button size="sm" variant="ghost">
+            <Button asChild size="sm" variant="ghost">
+              <a href={exportHref("csv")} download>
                 <Download /> CSV
-              </Button>
-            </a>
-            <a href={exportHref("json")} download className="inline-flex">
-              <Button size="sm" variant="ghost">
+              </a>
+            </Button>
+            <Button asChild size="sm" variant="ghost">
+              <a href={exportHref("json")} download>
                 <Download /> JSON
-              </Button>
-            </a>
+              </a>
+            </Button>
           </>
         }
       />

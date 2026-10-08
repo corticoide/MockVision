@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useRef } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import type { ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
@@ -15,52 +16,43 @@ interface DialogProps {
 }
 
 /**
- * Dialog uses the native <dialog> element: modal behavior, focus trapping
- * and Escape come from the browser, with no runtime style injection (the
- * panel runs under a strict CSP).
+ * A modal dialog on Radix's (shadcn/ui's Dialog): focus trapped, Escape and
+ * a click outside close it, the page behind does not scroll. The scroll lock
+ * adds a style element, which carries the page's nonce (lib/nonce).
  */
 export function Dialog({ open, onClose, title, description, children, footer, className }: DialogProps) {
-  const ref = useRef<HTMLDialogElement>(null);
   const t = useT();
-
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
-
   return (
-    <dialog
-      ref={ref}
-      onClose={onClose}
-      onCancel={(e) => {
-        e.preventDefault();
-        onClose();
-      }}
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
-      }}
-      className={cn(
-        "m-auto w-[min(640px,calc(100vw-32px))] rounded-sm border border-border bg-surface-1 p-0 text-text shadow-2xl",
-        className,
-      )}
-    >
-      {open && (
-        <div className="flex max-h-[85vh] flex-col">
+    <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/60" />
+        <DialogPrimitive.Content
+          data-slot="dialog-content"
+          className={cn(
+            "fixed top-1/2 left-1/2 z-50 flex max-h-[85vh] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col",
+            "rounded-sm border border-border bg-surface-1 text-text shadow-2xl outline-none",
+            className,
+          )}
+        >
           <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
             <div>
-              <h2 className="text-sm font-semibold">{title}</h2>
-              {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
+              <DialogPrimitive.Title className="text-sm font-semibold">{title}</DialogPrimitive.Title>
+              {description ? (
+                <DialogPrimitive.Description className="mt-0.5 text-xs text-muted">{description}</DialogPrimitive.Description>
+              ) : (
+                <DialogPrimitive.Description className="sr-only">{title}</DialogPrimitive.Description>
+              )}
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label={t("Close")}>
-              <X />
-            </Button>
+            <DialogPrimitive.Close asChild>
+              <Button variant="ghost" size="icon" aria-label={t("Close")}>
+                <X />
+              </Button>
+            </DialogPrimitive.Close>
           </div>
           <div className="overflow-y-auto px-4 py-4">{children}</div>
           {footer && <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{footer}</div>}
-        </div>
-      )}
-    </dialog>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }

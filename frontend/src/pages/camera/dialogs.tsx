@@ -79,7 +79,7 @@ export function CloneDialog({ camera, open, onClose }: { camera: Camera; open: b
           </Field>
         )}
         <div className="col-span-2">
-          <Checkbox label={t("Start it now")} checked={start} onChange={(e) => setStart(e.target.checked)} />
+          <Checkbox label={t("Start it now")} checked={start} onCheckedChange={(checked) => setStart(checked)} />
         </div>
         {clone.error && !Object.keys(errors).length && (
           <div className="col-span-2">

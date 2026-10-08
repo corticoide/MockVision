@@ -13,32 +13,22 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CameraState, JobStatus } from "@/api/client";
+import { BadgeBase, type BadgeTone } from "@/components/ui/badge";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-type Tone = "ok" | "warn" | "error" | "info" | "muted";
+type Tone = BadgeTone;
 
-const toneClass: Record<Tone, string> = {
-  ok: "text-ok border-ok/35 bg-ok/10",
-  warn: "text-warn border-warn/35 bg-warn/10",
-  error: "text-error border-error/35 bg-error/10",
-  info: "text-info border-info/35 bg-info/10",
-  muted: "text-muted border-border bg-surface-2",
-};
-
+/** A badge; with a title, a tooltip explains it on hover and focus. */
 export function Badge({ tone = "muted", icon, children, title }: { tone?: Tone; icon?: ReactNode; children: ReactNode; title?: string }) {
-  return (
-    <span
-      title={title}
-      className={cn(
-        "inline-flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[11px] font-medium whitespace-nowrap [&_svg]:size-3",
-        toneClass[tone],
-      )}
-    >
+  const badge = (
+    <BadgeBase tone={tone} tabIndex={title ? 0 : undefined}>
       {icon}
       {children}
-    </span>
+    </BadgeBase>
   );
+  return title ? <Tooltip content={title}>{badge}</Tooltip> : badge;
 }
 
 // States always carry an icon and a text, never color alone.

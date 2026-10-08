@@ -1,8 +1,10 @@
+import "@/lib/nonce";
 import "./index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiError } from "@/api/client";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { I18nProvider } from "@/lib/i18n";
 import { App } from "./App";
 
@@ -29,7 +31,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <I18nProvider>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>
       </QueryClientProvider>
     </I18nProvider>
   </StrictMode>,

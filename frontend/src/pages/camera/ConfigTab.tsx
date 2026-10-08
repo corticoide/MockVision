@@ -145,7 +145,7 @@ function ParamEditor({ param: p, value, onChange }: { param: Param; value: strin
   const label = t("Value of {key}", { key: p.key });
   switch (p.type) {
     case "bool":
-      return <Checkbox label={value ? t("On") : t("Off")} checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} aria-label={label} />;
+      return <Checkbox label={value ? t("On") : t("Off")} checked={Boolean(value)} onCheckedChange={(checked) => onChange(checked)} aria-label={label} />;
     case "enum":
       return (
         <Select value={String(value)} onChange={(e) => onChange(e.target.value)} className="h-7 w-48" aria-label={label}>

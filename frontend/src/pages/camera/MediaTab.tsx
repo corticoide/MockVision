@@ -6,7 +6,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { toast } from "@/components/toast";
 import { Card } from "@/components/ui/card";
 import { Field, Input, Select } from "@/components/ui/form";
-import { Tabs } from "@/components/ui/tabs";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { useDraft } from "@/lib/draft";
 import { useT } from "@/lib/i18n";
 import { codecLabel, streamLabel, streamPurpose, streamSummary } from "@/lib/media";
@@ -47,10 +47,11 @@ export function MediaTab({ camera }: { camera: Camera }) {
           items={camera.streams.map((s) => ({ id: s.name, label: `${streamLabel(s.name, t)} · ${codecLabel(s.codec)} ${s.resolution}` }))}
           value={stream.name}
           onChange={(id) => setSearch({ stream: id === "main" ? undefined : id })}
-        />
-        <div role="tabpanel" id={`panel-${stream.name}`} aria-labelledby={`tab-${stream.name}`} className="pt-4">
-          <StreamForm key={stream.name} camera={camera} stream={stream} spec={profile?.streams.find((s) => s.name === stream.name)} profile={profile} />
-        </div>
+        >
+          <TabPanel id={stream.name}>
+            <StreamForm key={stream.name} camera={camera} stream={stream} spec={profile?.streams.find((s) => s.name === stream.name)} profile={profile} />
+          </TabPanel>
+        </Tabs>
       </Card>
       <Card className="p-4">
         <SectionTitle>{t("Snapshot of the {stream}", { stream: streamLabel(stream.name, t).toLowerCase() })}</SectionTitle>

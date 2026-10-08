@@ -249,15 +249,15 @@ export function NewCameraDialog({ open, onClose }: { open: boolean; onClose: () 
                   key={t.id}
                   label={`${t.name} (${t.url})`}
                   checked={targetIds.includes(t.id)}
-                  onChange={(e) => setTargetIds((ids) => (e.target.checked ? [...ids, t.id] : ids.filter((x) => x !== t.id)))}
+                  onCheckedChange={(checked) => setTargetIds((ids) => (checked ? [...ids, t.id] : ids.filter((x) => x !== t.id)))}
                 />
               ))}
             </div>
           </Field>
 
           <div className="col-span-2 flex gap-6">
-            <Checkbox label={t("Start with the node (autostart)")} checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />
-            <Checkbox label={t("Start now")} checked={start} onChange={(e) => setStart(e.target.checked)} />
+            <Checkbox label={t("Start with the node (autostart)")} checked={autostart} onCheckedChange={(checked) => setAutostart(checked)} />
+            <Checkbox label={t("Start now")} checked={start} onCheckedChange={(checked) => setStart(checked)} />
           </div>
 
           {create.error && (

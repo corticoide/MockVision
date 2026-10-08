@@ -125,7 +125,7 @@ function StorageForm({ camera, storage }: { camera: Camera; storage: Storage }) 
             </Select>
           </Field>
           <div className="col-span-2 pb-2">
-            <Checkbox label={t("Overwrite the oldest recordings when full")} checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+            <Checkbox label={t("Overwrite the oldest recordings when full")} checked={overwrite} onCheckedChange={(checked) => setOverwrite(checked)} />
           </div>
         </>
       )}
@@ -327,13 +327,11 @@ function RecordingsCard({ camera }: { camera: Camera }) {
                   <Mono className="block truncate text-muted">{r.name}</Mono>
                 </TD>
                 <TD className="text-right">
-                  <a
-                    href={recordingURL(camera.id, r.id)}
-                    download
-                    className="inline-flex items-center gap-1 text-[13px] text-muted hover:text-text [&_svg]:size-3.5"
-                  >
-                    <Download /> {t("Download")}
-                  </a>
+                  <Button asChild size="sm" variant="ghost">
+                    <a href={recordingURL(camera.id, r.id)} download>
+                      <Download /> {t("Download")}
+                    </a>
+                  </Button>
                 </TD>
               </TR>
             ))}

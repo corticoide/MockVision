@@ -70,7 +70,7 @@ export function GeneralTab({ camera }: { camera: Camera }) {
               <Checkbox
                 label={t("Start with the node (autostart)")}
                 checked={autostart}
-                onChange={(e) => form.set({ autostart: e.target.checked })}
+                onCheckedChange={(checked) => form.set({ autostart: checked })}
               />
             </div>
             <Field
@@ -99,8 +99,8 @@ export function GeneralTab({ camera }: { camera: Camera }) {
                       </>
                     }
                     checked={targetIds.includes(target.id)}
-                    onChange={(e) =>
-                      form.set({ targetIds: (e.target.checked ? [...targetIds, target.id] : targetIds.filter((x) => x !== target.id)).sort() })
+                    onCheckedChange={(checked) =>
+                      form.set({ targetIds: (checked ? [...targetIds, target.id] : targetIds.filter((x) => x !== target.id)).sort() })
                     }
                   />
                 ))}

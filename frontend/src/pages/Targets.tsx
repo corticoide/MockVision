@@ -137,8 +137,8 @@ function TargetRow({ target, onEdit }: { target: Target; onEdit: () => void }) {
           label={target.enabled ? t("Yes") : t("No")}
           checked={target.enabled}
           disabled={update.isPending}
-          onChange={(e) =>
-            update.mutate({ id: target.id, body: { enabled: e.target.checked } }, { onError: (err) => toast(errorMessage(err), "error") })
+          onCheckedChange={(checked) =>
+            update.mutate({ id: target.id, body: { enabled: checked } }, { onError: (err) => toast(errorMessage(err), "error") })
           }
         />
       </TD>
@@ -384,7 +384,7 @@ function TargetDialog({ target, onClose }: { target?: Target; onClose: () => voi
             className="col-span-2"
             label={t("Accept a TLS certificate that does not verify, as a test server's self-signed one")}
             checked={insecure}
-            onChange={(e) => setInsecure(e.target.checked)}
+            onCheckedChange={(checked) => setInsecure(checked)}
           />
         )}
         <details className="col-span-2" open={Boolean(timeout || retries || backoff)}>

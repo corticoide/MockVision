@@ -378,7 +378,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
                   </p>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-3">
-                  <Checkbox label={t("Enabled")} checked={x.enabled} onChange={(ev) => update(i, { enabled: ev.target.checked })} />
+                  <Checkbox label={t("Enabled")} checked={x.enabled} onCheckedChange={(checked) => update(i, { enabled: checked })} />
                   {!report && (
                     <Button size="sm" variant="ghost" onClick={() => toggle(x.key)} aria-expanded={expanded}>
                       {expanded ? <ChevronDown /> : <ChevronRight />} {t("Event data")}
@@ -427,7 +427,7 @@ function RandomTriggers({ camera, profile }: { camera: Camera; profile: ProfileD
                       <Checkbox
                         label={t("Give each event a speed")}
                         checked={x.speed != null}
-                        onChange={(ev) => update(i, { speed: ev.target.checked ? { min: "20", max: "120", limit: "60", unit: "km/h" } : null })}
+                        onCheckedChange={(checked) => update(i, { speed: checked ? { min: "20", max: "120", limit: "60", unit: "km/h" } : null })}
                       />
                       {x.speed && (
                         <div className="flex flex-wrap items-center gap-1.5">

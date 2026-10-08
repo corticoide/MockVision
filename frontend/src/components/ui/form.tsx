@@ -1,3 +1,5 @@
+import { Check } from "lucide-react";
+import { Checkbox as CheckboxPrimitive, Label as LabelPrimitive } from "radix-ui";
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
@@ -21,12 +23,41 @@ export function Select({ className, children, ...props }: SelectHTMLAttributes<H
   );
 }
 
-export function Checkbox({ label, className, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: ReactNode }) {
+interface CheckboxProps {
+  label: ReactNode;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+  title?: string;
+  "aria-label"?: string;
+}
+
+/** A checkbox on Radix's (shadcn/ui's Checkbox), with its label. */
+export function Checkbox({ label, checked, onCheckedChange, disabled, className, title, "aria-label": ariaLabel }: CheckboxProps) {
   return (
-    <label className={cn("inline-flex cursor-pointer items-center gap-2 text-[13px]", className)}>
-      <input type="checkbox" className="size-3.5 accent-brand" {...props} />
+    <LabelPrimitive.Root
+      data-slot="checkbox-label"
+      title={title}
+      className={cn("inline-flex cursor-pointer items-center gap-2 text-[13px] has-[button:disabled]:cursor-default has-[button:disabled]:opacity-50", className)}
+    >
+      <CheckboxPrimitive.Root
+        data-slot="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        onCheckedChange={(checked) => onCheckedChange(checked === true)}
+        className={cn(
+          "grid size-3.5 shrink-0 place-content-center rounded-[3px] border border-border bg-surface-2 outline-none",
+          "focus-visible:ring-2 focus-visible:ring-info/60 data-[state=checked]:border-brand data-[state=checked]:bg-brand",
+        )}
+      >
+        <CheckboxPrimitive.Indicator className="text-text [&_svg]:size-3">
+          <Check strokeWidth={3} />
+        </CheckboxPrimitive.Indicator>
+      </CheckboxPrimitive.Root>
       {label}
-    </label>
+    </LabelPrimitive.Root>
   );
 }
 
@@ -50,10 +81,10 @@ export function Field({ label, hint, error, children, className, group }: FieldP
           {children}
         </div>
       ) : (
-        <label className="flex flex-col gap-1">
+        <LabelPrimitive.Root data-slot="label" className="flex flex-col gap-1">
           {caption}
           {children}
-        </label>
+        </LabelPrimitive.Root>
       )}
       {error ? <span className="text-xs text-error">{error}</span> : hint ? <span className="text-xs text-muted/80">{hint}</span> : null}
     </div>

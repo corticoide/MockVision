@@ -109,7 +109,7 @@ function LimitsCard() {
           <div className="col-span-2 flex flex-col gap-1">
             <Checkbox
               checked={form.node_bridge ?? false}
-              onChange={(e) => set("node_bridge", e.target.checked)}
+              onCheckedChange={(checked) => set("node_bridge", checked)}
               label={t("Reach the cameras from this node")}
             />
             <p className="text-xs text-muted">

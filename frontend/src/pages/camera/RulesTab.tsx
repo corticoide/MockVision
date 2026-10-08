@@ -184,7 +184,7 @@ function RulesEditor({ camera, profile }: { camera: Camera; profile: ProfileDeta
           )}
           <span className="text-xs text-muted">{full ? t("A camera has at most 16 rules.") : null}</span>
           <span className="ml-auto flex items-center gap-3">
-            <Checkbox label={t("Heat map")} checked={showHeat} disabled={!running} onChange={(e) => setShowHeat(e.target.checked)} />
+            <Checkbox label={t("Heat map")} checked={showHeat} disabled={!running} onCheckedChange={(checked) => setShowHeat(checked)} />
             <Button
               size="sm"
               variant="ghost"
@@ -258,7 +258,7 @@ function RulesEditor({ camera, profile }: { camera: Camera; profile: ProfileDeta
                     <Checkbox
                       label={<span className="sr-only">{t("Enabled")}</span>}
                       checked={r.enabled}
-                      onChange={(e) => update(i, { enabled: e.target.checked })}
+                      onCheckedChange={(checked) => update(i, { enabled: checked })}
                       title={t("Enabled")}
                     />
                     <Button size="icon" variant="ghost" title={t("Remove")} aria-label={t("Remove {name}", { name: r.name })} onClick={() => remove(i)}>
@@ -326,9 +326,9 @@ function RulesEditor({ camera, profile }: { camera: Camera; profile: ProfileDeta
                       key={type}
                       label={eventLabel(type, t)}
                       checked={current.events.includes(type)}
-                      onChange={(e) =>
+                      onCheckedChange={(checked) =>
                         update(selected, {
-                          events: e.target.checked ? choices.filter((x) => x === type || current.events.includes(x)) : current.events.filter((x) => x !== type),
+                          events: checked ? choices.filter((x) => x === type || current.events.includes(x)) : current.events.filter((x) => x !== type),
                         })
                       }
                     />
@@ -343,9 +343,9 @@ function RulesEditor({ camera, profile }: { camera: Camera; profile: ProfileDeta
                         key={c}
                         label={c}
                         checked={current.object_classes.includes(c)}
-                        onChange={(e) =>
+                        onCheckedChange={(checked) =>
                           update(selected, {
-                            object_classes: e.target.checked ? classes.filter((x) => x === c || current.object_classes.includes(x)) : current.object_classes.filter((x) => x !== c),
+                            object_classes: checked ? classes.filter((x) => x === c || current.object_classes.includes(x)) : current.object_classes.filter((x) => x !== c),
                           })
                         }
                       />

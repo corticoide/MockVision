@@ -1,18 +1,37 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
+// shadcn/ui's Card and its parts, in the panel's design (D47).
+
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-sm border border-border bg-surface-1", className)} {...props} />;
+  return <div data-slot="card" className={cn("rounded-sm border border-border bg-surface-1", className)} {...props} />;
 }
 
+export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
+  return <h2 data-slot="card-title" className={cn("text-sm font-semibold", className)} {...props} />;
+}
+
+export function CardDescription({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
+  return <p data-slot="card-description" className={cn("mt-0.5 text-xs text-muted", className)} {...props} />;
+}
+
+export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div data-slot="card-content" className={cn("p-4", className)} {...props} />;
+}
+
+/** The header of a card: its title, what it is for and its actions. */
 export function CardHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
+    <div data-slot="card-header" className="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
       <div className="min-w-0">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
+        <CardTitle>{title}</CardTitle>
+        {description && <CardDescription>{description}</CardDescription>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions && (
+        <div data-slot="card-action" className="flex shrink-0 items-center gap-2">
+          {actions}
+        </div>
+      )}
     </div>
   );
 }

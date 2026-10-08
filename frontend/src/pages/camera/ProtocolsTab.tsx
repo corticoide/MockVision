@@ -81,7 +81,7 @@ export function ProtocolsTab({ camera }: { camera: Camera }) {
                     <Checkbox
                       label={row.enabled ? t("Yes") : t("No")}
                       checked={row.enabled}
-                      onChange={(e) => set(i, { enabled: e.target.checked })}
+                      onCheckedChange={(checked) => set(i, { enabled: checked })}
                     />
                   </TD>
                   <TD>

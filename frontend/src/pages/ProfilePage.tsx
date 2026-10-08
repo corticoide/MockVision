@@ -43,11 +43,11 @@ export function ProfilePage({ id, version }: { id: string; version: string }) {
         }
         actions={
           <>
-            <a href={exportURL(id, version)} download className="inline-flex">
-              <Button>
+            <Button asChild>
+              <a href={exportURL(id, version)} download>
                 <Download /> {t("Export")}
-              </Button>
-            </a>
+              </a>
+            </Button>
             <Button onClick={() => setDuplicating(true)}>
               <Copy /> {t("Duplicate")}
             </Button>
