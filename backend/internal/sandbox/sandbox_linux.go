@@ -34,6 +34,9 @@ type Paths struct {
 	Write []string
 	// NoBind forbids binding TCP ports (Landlock ABI 4 or later).
 	NoBind bool
+	// NoConnect forbids TCP connections (Landlock ABI 4 or later): a
+	// plugin without net.connect.
+	NoConnect bool
 }
 
 // SystemReadExec are the directories a dynamically linked program such as
@@ -93,8 +96,13 @@ func Landlock(paths Paths) (bool, error) {
 	if abi < 4 {
 		// Older kernels reject the network field.
 		size = unsafe.Offsetof(attr.Access_net)
-	} else if paths.NoBind {
-		attr.Access_net = unix.LANDLOCK_ACCESS_NET_BIND_TCP
+	} else {
+		if paths.NoBind {
+			attr.Access_net |= unix.LANDLOCK_ACCESS_NET_BIND_TCP
+		}
+		if paths.NoConnect {
+			attr.Access_net |= unix.LANDLOCK_ACCESS_NET_CONNECT_TCP
+		}
 	}
 	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), size, 0)
 	if errno != 0 {

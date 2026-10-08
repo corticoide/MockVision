@@ -26,12 +26,13 @@ func ExecMain(args []string) int {
 	var read, write stringList
 	fs.Var(&read, "read", "path the program may read (repeatable)")
 	fs.Var(&write, "write", "path the program may write (repeatable)")
+	noConnect := fs.Bool("no-connect", false, "forbid TCP connections, where the kernel can")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: mockvision sandbox-exec [--read path] [--write path] -- program [args]")
+		fmt.Fprintln(os.Stderr, "usage: mockvision sandbox-exec [--read path] [--write path] [--no-connect] -- program [args]")
 		return 2
 	}
 	path, err := exec.LookPath(rest[0])
@@ -43,7 +44,7 @@ func ExecMain(args []string) int {
 		fmt.Fprintln(os.Stderr, "sandbox-exec:", err)
 		return 1
 	}
-	if err := Confine(path, read, write); err != nil {
+	if err := confine(path, read, write, *noConnect); err != nil {
 		fmt.Fprintln(os.Stderr, "sandbox-exec:", err)
 		return 1
 	}
@@ -55,6 +56,10 @@ func ExecMain(args []string) int {
 // Confine applies no_new_privs, the seccomp filter and Landlock for a
 // program at path that reads and writes the given paths.
 func Confine(path string, read, write []string) error {
+	return confine(path, read, write, false)
+}
+
+func confine(path string, read, write []string, noConnect bool) error {
 	if err := NoNewPrivs(); err != nil {
 		return err
 	}
@@ -65,6 +70,6 @@ func Confine(path string, read, write []string) error {
 	// What media libraries probe: CPU features, and the null device.
 	read = append(read, "/proc", "/sys/devices/system/cpu", "/dev/urandom")
 	write = append(write, "/dev/null")
-	_, err := Landlock(Paths{ReadExec: rx, Read: read, Write: write, NoBind: true})
+	_, err := Landlock(Paths{ReadExec: rx, Read: read, Write: write, NoBind: true, NoConnect: noConnect})
 	return err
 }

@@ -8,6 +8,7 @@ package sandbox
 type Paths struct {
 	Read, ReadExec, Write []string
 	NoBind                bool
+	NoConnect             bool
 }
 
 // SystemReadExec are the directories a dynamically linked program needs.

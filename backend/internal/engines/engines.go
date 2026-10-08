@@ -4,6 +4,8 @@
 package engines
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,6 +37,36 @@ func Builtin() *Catalog {
 		smtpmail.Name:  smtpmail.New,
 	}}
 }
+
+// With returns a catalog that also resolves extra engines, such as the
+// plugins the node installed. A built-in engine keeps its name.
+func (c *Catalog) With(extra map[string]engine.Factory) *Catalog {
+	out := &Catalog{factories: make(map[string]engine.Factory, len(c.factories)+len(extra))}
+	for n, f := range extra {
+		out.factories[n] = f
+	}
+	for n, f := range c.factories {
+		out.factories[n] = f
+	}
+	return out
+}
+
+// Described is an engine known by its descriptor alone: a plugin's, which
+// profiles validate against and only a camera runs.
+func Described(d engine.Descriptor) engine.Factory {
+	return func() engine.Engine { return describedEngine{d} }
+}
+
+type describedEngine struct{ d engine.Descriptor }
+
+func (e describedEngine) Describe() engine.Descriptor             { return e.d }
+func (describedEngine) Validate(json.RawMessage) []engine.Problem { return nil }
+func (e describedEngine) Start(context.Context, engine.StartInput) error {
+	return fmt.Errorf("engine %s is a plugin: only a camera runs it", e.d.Name)
+}
+func (describedEngine) Reload(context.Context, json.RawMessage) error { return nil }
+func (describedEngine) Health() engine.Health                         { return engine.Health{State: engine.HealthStopped} }
+func (describedEngine) Stop(context.Context) error                    { return nil }
 
 // Resolve returns a new instance of the engine named name whose version
 // satisfies rng.

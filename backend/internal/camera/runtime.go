@@ -50,7 +50,10 @@ type Options struct {
 	// Confine applies Landlock to the process once the configuration names
 	// its files. Only the camera subcommand sets it: it cannot be undone.
 	Confine bool
-	Log     *slog.Logger
+	// Exe is the MockVision binary, which confines the plugins the camera
+	// runs; the running one when empty.
+	Exe string
+	Log *slog.Logger
 }
 
 // DHCPOptions are what a DHCP camera leases its address with.
@@ -369,6 +372,14 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 	}
 	r.model = profile.NewModel(doc)
 	r.identity = cfg.Identity
+	// The plugins' engines resolve as the built-in ones do.
+	if len(cfg.Plugins) > 0 {
+		extra := map[string]engine.Factory{}
+		for _, pl := range cfg.Plugins {
+			extra[pl.Engine] = func() engine.Engine { return newPluginEngine(pl, r.exe(), r.log, r.failRunning) }
+		}
+		r.catalog = engines.Builtin().With(extra)
+	}
 	r.accounts.set(cfg.Users)
 	// Installed before any engine runs, so nothing reads the default
 	// resolver while it changes; later changes go through r.dns.
@@ -416,7 +427,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 		r.sink = sink
 	}
 	if r.opts.Confine {
-		if err := r.confine(cfg.Streams, cfg.Storage.SDDir); err != nil {
+		if err := r.confine(cfg.Streams, cfg.Storage.SDDir, cfg.Plugins); err != nil {
 			return ipc.Ready{}, err
 		}
 	}
@@ -457,7 +468,7 @@ func (r *Runtime) configure(ctx context.Context, cfg *ipc.Configure) (ipc.Ready,
 // anything from the LAN: its renditions and its SD card, read only, and
 // the system files name resolution and TLS need (audit B10). Outside local
 // mode it cannot bind a TCP port either; its sockets are open already.
-func (r *Runtime) confine(streams []ipc.Stream, sdDir string) error {
+func (r *Runtime) confine(streams []ipc.Stream, sdDir string, plugins []ipc.Plugin) error {
 	read := []string{"/etc", "/usr/share/ca-certificates", "/usr/local/share/ca-certificates", "/usr/share/zoneinfo", "/proc"}
 	if sdDir != "" {
 		read = append(read, sdDir)
@@ -474,7 +485,21 @@ func (r *Runtime) confine(streams []ipc.Stream, sdDir string) error {
 			}
 		}
 	}
-	applied, err := sandbox.Landlock(sandbox.Paths{Read: read, NoBind: !r.opts.Local})
+	// Plugins run confined further by the MockVision binary, which the
+	// camera may execute, as their programs, when it has plugins.
+	var readExec []string
+	if len(plugins) > 0 {
+		if exe := r.exe(); exe != "" {
+			readExec = append(readExec, exe)
+		}
+		for _, pl := range plugins {
+			readExec = append(readExec, pl.Dir)
+		}
+		readExec = append(readExec, sandbox.SystemReadExec...)
+		// A plugin's standard input.
+		read = append(read, os.DevNull)
+	}
+	applied, err := sandbox.Landlock(sandbox.Paths{Read: read, ReadExec: readExec, NoBind: !r.opts.Local})
 	if err != nil {
 		return err
 	}
@@ -617,6 +642,25 @@ func (r *Runtime) trigger(ctx context.Context, tr *ipc.Trigger) (engine.Event, e
 		return r.vca.fire(ctx, tr.TriggerID, domain.TriggerManual)
 	}
 	return r.vca.manual(ctx, tr)
+}
+
+// exe is the MockVision binary plugins run under.
+func (r *Runtime) exe() string {
+	if r.opts.Exe != "" {
+		return r.opts.Exe
+	}
+	exe, _ := os.Executable()
+	return exe
+}
+
+// failRunning ends a running camera that cannot go on, such as one whose
+// plugin keeps failing: the service marks it failed, and it stops.
+func (r *Runtime) failRunning(reason string) {
+	_ = r.conn.Notify(ipc.TypeFailed, ipc.Failed{Reason: reason})
+	select {
+	case r.stopReq <- 5 * time.Second:
+	default:
+	}
 }
 
 func (r *Runtime) heartbeat(cpu *cpuSampler) {

@@ -2,7 +2,9 @@
 //
 // A plugin is an executable inside a .mvpkg package. The camera process
 // launches it sandboxed, with its sockets already open, and talks to it over
-// gRPC on a Unix socket. The plugin serves Engine; the camera serves Host,
+// gRPC on inherited Unix sockets: the plugin serves Engine on descriptor 3,
+// the camera serves Host on descriptor 4, and the engine's sockets follow
+// from descriptor 5, as StartRequest.socket_fds names them. Host is
 // limited to the permissions the user approved (net.listen, net.connect,
 // accounts.read, state.read, state.write, events.emit, events.deliver,
 // media.read, sd).
@@ -60,6 +62,7 @@ service Host {
   rpc Log(LogRequest) returns (LogResponse);
   rpc RequestStat(RequestStatRequest) returns (RequestStatResponse);
   rpc Gap(GapRequest) returns (GapResponse);
+  rpc Client(ClientRequest) returns (ClientResponse);
 }
 
 message SocketSpec {
@@ -305,9 +308,13 @@ message MediaSnapshotResponse {
   bytes jpeg = 1;
 }
 
+// TemplateRenderRequest renders a template of the engine's profile section
+// with the safe function set; the host compiles and caches it.
 message TemplateRenderRequest {
-  string name = 1; // template path inside the profile package
-  bytes data_json = 2; // .Request, .Event and .Result; .Camera and .Now are filled by the host
+  string name = 1; // for errors, such as the route it answers
+  bytes data_json = 2; // .Request, .Event, .EventName and .Result; .Camera and .Now are filled by the host
+  string text = 3;
+  int32 max_bytes = 4; // 0: 1 MB
 }
 
 message TemplateRenderResponse {
@@ -382,6 +389,14 @@ message GapRequest {
 }
 
 message GapResponse {}
+
+message ClientRequest {
+  string protocol = 1;
+  string client_ip = 2;
+  bool connected = 3;
+}
+
+message ClientResponse {}
 
 message FaultStatusRequest {
   string instance = 1;

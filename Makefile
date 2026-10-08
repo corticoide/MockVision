@@ -56,6 +56,8 @@ e2e-compose:
 generate:
 	cd database && sqlc generate
 	cd frontend && $(NPM) run gen:api
+	protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		sdk/proto/mockvision/engine/v1/engine.proto
 
 docker:
 	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t mockvision:latest .

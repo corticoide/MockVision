@@ -143,6 +143,8 @@ type Configure struct {
 	Faults []Fault `json:"faults,omitempty"`
 	// Storage is where the camera keeps its recordings.
 	Storage Storage `json:"storage"`
+	// Plugins are the approved plugins whose engines the profile may use.
+	Plugins []Plugin `json:"plugins,omitempty"`
 	// SelfTest makes an ephemeral camera that replays a profile's fixtures:
 	// it receives what its events push over HTTP itself, before it is
 	// confined (D88).
@@ -412,4 +414,16 @@ type TargetTestResult struct {
 // itself; the reply is a selftest.Report.
 type SelfTest struct {
 	Fixtures json.RawMessage `json:"fixtures"`
+}
+
+// Plugin is the engine of an installed, approved plugin (D85, D86): its
+// unpacked package, read only, the program in it and what it may do.
+type Plugin struct {
+	Engine  string `json:"engine"`
+	Version string `json:"version"`
+	Dir     string `json:"dir"`
+	// Executable is the program's name under bin/linux-<arch>/.
+	Executable  string            `json:"executable"`
+	Permissions []string          `json:"permissions"`
+	Descriptor  engine.Descriptor `json:"descriptor"`
 }
