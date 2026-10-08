@@ -9,17 +9,21 @@ import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { useT } from "@/lib/i18n";
 import { formatBytes, formatTime, sinceText } from "@/lib/utils";
 import { TokensCard } from "./Tokens";
+import { TrustedKeysCard } from "./TrustedKeys";
 
 export function SettingsPage() {
   const t = useT();
   return (
     <>
-      <PageHeader title={t("Settings")} description={t("Limits of this node, the network the cameras join and the API tokens for automation.")} />
+      <PageHeader title={t("Settings")} description={t("Limits of this node, the network the cameras join, the API tokens for automation and the keys packages are signed with.")} />
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4">
         <LimitsCard />
         <NodeCard />
         <div className="col-span-2">
           <TokensCard />
+        </div>
+        <div className="col-span-2">
+          <TrustedKeysCard />
         </div>
       </div>
     </>

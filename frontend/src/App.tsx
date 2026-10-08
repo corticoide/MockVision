@@ -15,6 +15,7 @@ import { DashboardPage } from "@/pages/Dashboard";
 import { EventsPage } from "@/pages/Events";
 import { JobsPage } from "@/pages/Jobs";
 import { LoginPage } from "@/pages/Login";
+import { ProfilePage } from "@/pages/ProfilePage";
 import { ProfilesPage } from "@/pages/Profiles";
 import { SettingsPage } from "@/pages/Settings";
 import { TargetsPage } from "@/pages/Targets";
@@ -88,6 +89,11 @@ function Routes() {
         <CameraPage id={decodeURIComponent(camera[1])} tab={camera[2]} />
       </Suspense>
     );
+  }
+  const prof = /^\/profiles\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
+  if (prof) {
+    const [vendor, model, version] = prof.slice(1).map(decodeURIComponent);
+    return <ProfilePage key={path} id={`${vendor}/${model}`} version={version} />;
   }
   const Page = pages[path];
   if (!Page) return <Notice tone="warn">{t("Page not found: {path}", { path })}</Notice>;

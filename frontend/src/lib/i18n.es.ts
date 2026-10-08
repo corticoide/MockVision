@@ -140,8 +140,8 @@ export const es: Record<string, string> = {
   Verified: "Verificado",
 
   // Profiles page
-  "Camera models: what each one serves and how. A profile imported by hand starts as a draft.":
-    "Modelos de cámara: qué sirve cada uno y cómo. Un perfil importado a mano empieza como borrador.",
+  "Camera models: what each one serves and how. The official catalog comes with MockVision; a profile imported by hand starts as a draft.":
+    "Modelos de cámara: qué sirve cada uno y cómo. El catálogo oficial viene con MockVision; un perfil importado a mano empieza como borrador.",
   "Import profile": "Importar perfil",
   "Validating…": "Validando…",
   "Imported {id}": "Importado {id}",
@@ -684,8 +684,8 @@ export const es: Record<string, string> = {
 
   // API tokens
   "API tokens": "Tokens de API",
-  "Limits of this node, the network the cameras join and the API tokens for automation.":
-    "Límites de este nodo, la red a la que se unen las cámaras y los tokens de API para automatizar.",
+  "Limits of this node, the network the cameras join, the API tokens for automation and the keys packages are signed with.":
+    "Límites de este nodo, la red a la que se unen las cámaras, los tokens de API para automatizar y las claves con que se firman los paquetes.",
   "For CI and scripts: send the token as Authorization: Bearer. A read token can only query the node; tokens are managed from the panel only.":
     "Para CI y scripts: envía el token como Authorization: Bearer. Un token de lectura solo consulta el nodo; los tokens se administran únicamente desde el panel.",
   "New token": "Nuevo token",
@@ -993,4 +993,97 @@ export const es: Record<string, string> = {
   "The card is locked: it raises storage_failure and records nothing; its recordings can still be searched.":
     "La tarjeta está bloqueada: genera storage_failure y no graba nada; sus grabaciones se pueden seguir buscando.",
   "The card says it is full: it raises storage_full and records nothing.": "La tarjeta dice estar llena: genera storage_full y no graba nada.",
+
+  // Packages and catalog (feature 12)
+  "Acme packages": "Paquetes de Acme",
+  "Added": "Agregada",
+  "Apply and restart": "Aplicar y reiniciar",
+  "Apply": "Aplicar",
+  "Applying…": "Aplicando…",
+  "Cameras stay on their version until you move them, from their page.": "Las cámaras se quedan en su versión hasta que las cambies, desde su página.",
+  "Catalog": "Catálogo",
+  "Change the profile version of {name}": "Cambiar la versión del perfil de {name}",
+  "Change version": "Cambiar versión",
+  "Change": "Cambio",
+  "Compare": "Comparar",
+  "Comparing…": "Comparando…",
+  "Covers": "Cubre",
+  "Differs": "Difiere",
+  "Duplicate {id}@{version}": "Duplicar {id}@{version}",
+  "Duplicate": "Duplicar",
+  "Duplicating…": "Duplicando…",
+  "Every difference between the versions ({n})": "Todas las diferencias entre las versiones ({n})",
+  "Export": "Exportar",
+  "Extends": "Extiende",
+  "From {from} to {to}": "De {from} a {to}",
+  "Hide": "Ocultar",
+  "Import report": "Informe de importación",
+  "Invalid signature": "Firma inválida",
+  "Key ID": "ID de clave",
+  "Loading profile…": "Cargando el perfil…",
+  "Matches": "Coincide",
+  "Model": "Modelo",
+  "No signing keys": "Sin claves de firma",
+  "Not checked": "Sin verificar",
+  "Nothing proves who made the package or that it is unchanged.": "Nada prueba quién hizo el paquete ni que esté intacto.",
+  "Now {version}": "Ahora {version}",
+  "Official": "Oficial",
+  "Package signatures": "Firmas de paquetes",
+  "Package": "Paquete",
+  "Packages signed by {name} are trusted now": "Los paquetes firmados por {name} ahora son de confianza",
+  "Packages signed with these minisign keys install as signed; the official catalog keys come with MockVision. Unsigned profiles install with a warning.":
+    "Los paquetes firmados con estas claves minisign se instalan como firmados; las del catálogo oficial vienen con MockVision. Los perfiles sin firma se instalan con una advertencia.",
+  "Parameters": "Parámetros",
+  "Paste a minisign public key: the .pub file that mockvision pkg keygen or minisign -G writes, or its key line.":
+    "Pega una clave pública minisign: el archivo .pub que escriben mockvision pkg keygen o minisign -G, o su línea de clave.",
+  "Profile ID": "ID del perfil",
+  "Public key": "Clave pública",
+  "Recording": "Grabación",
+  "Recordings of the real device, replayed against a camera of this profile on a network that reaches nothing.":
+    "Grabaciones del equipo real, reproducidas contra una cámara de este perfil en una red que no llega a nada.",
+  "Self-test": "Autoprueba",
+  "Shipped with MockVision, read only: duplicate it to change it.": "Viene con MockVision y es de solo lectura: duplícalo para cambiarlo.",
+  "Signed by {name}": "Firmado por {name}",
+  "Stop trusting {name}? Packages imported before keep their status.": "¿Dejar de confiar en {name}? Los paquetes importados antes conservan su estado.",
+  "The camera is running: it restarts to take the new version.": "La cámara está funcionando: se reinicia para tomar la nueva versión.",
+  "The copy is a profile of your own, unsigned: export it, change it and import its next version.":
+    "La copia es un perfil propio, sin firma: expórtalo, cámbialo e importa su próxima versión.",
+  "The package has no recordings of a real device: its routes and events are declared, not verified.":
+    "El paquete no trae grabaciones de un equipo real: sus rutas y eventos están declarados, no verificados.",
+  "The two versions are the same.": "Las dos versiones son iguales.",
+  "This build carries no official catalog key. Add the public key of whoever signs your packages, such as your company's.":
+    "Esta compilación no trae clave del catálogo oficial. Agrega la clave pública de quien firme tus paquetes, como la de tu empresa.",
+  "This is the only version installed.": "Es la única versión instalada.",
+  "Trust a key": "Confiar en una clave",
+  "Trust a signing key": "Confiar en una clave de firma",
+  "Trust": "Confiar",
+  "Unsigned": "Sin firma",
+  "Values someone set stay when the new version accepts them; the rest follow its defaults.":
+    "Los valores que alguien cambió se conservan si la nueva versión los acepta; el resto toma sus valores por defecto.",
+  "Versions": "Versiones",
+  "What": "Qué",
+  "Working out what changes…": "Calculando qué cambia…",
+  "added": "agregado",
+  "back to default": "vuelve al valor por defecto",
+  "changed": "cambiado",
+  "error": "error",
+  "event": "evento",
+  "extends {parent}": "extiende {parent}",
+  "kept": "se conserva",
+  "key {id}": "clave {id}",
+  "level": "nivel",
+  "new default": "nuevo valor por defecto",
+  "removed": "quitado",
+  "route": "ruta",
+  "signature": "firma",
+  "vendor/model, in lower case": "fabricante/modelo, en minúsculas",
+  "warning": "advertencia",
+  "{name} (copy)": "{name} (copia)",
+  "{name} is no longer trusted": "{name} ya no es de confianza",
+  "{name} moved to {version}": "{name} pasó a {version}",
+  "{n} declared": "{n} declarados",
+  "{n} failed": "{n} con fallas",
+  "{n} verified": "{n} verificados",
+  "Only the version changes: its parameters, protocols, streams and analytics stay as they are.":
+    "Solo cambia la versión: sus parámetros, protocolos, streams y analítica quedan como están.",
 };

@@ -217,6 +217,113 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/profiles/{vendor}/{model}/versions/{version}/actions/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a profile version under another ID, to change one that is read only (D19)
+         * @description The copy is a new unsigned package, imported as any other; export it, edit it and import a new version.
+         */
+        post: operations["duplicateProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{vendor}/{model}/versions/{version}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Download a profile version as a .mvpkg (D22)
+         * @description The package as it was imported, signature included; a loose profile.yaml comes wrapped in an unsigned package.
+         */
+        get: operations["exportProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{vendor}/{model}/versions/{version}/diff/{to}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+                to: string;
+            };
+            cookie?: never;
+        };
+        /** What changes from one version of a profile to another (D05) */
+        get: operations["diffProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/trusted-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Keys whose package signatures the node trusts, official ones first (D83) */
+        get: operations["listTrustedKeys"];
+        put?: never;
+        /** Trust a minisign public key (panel session only) */
+        post: operations["addTrustedKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/trusted-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Stop trusting a key (panel session only); packages imported before keep their status */
+        delete: operations["deleteTrustedKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tokens": {
         parameters: {
             query?: never;
@@ -449,6 +556,28 @@ export interface paths {
         put?: never;
         /** @description Reboots a running camera as the real one does (D43): it leaves the network and comes back after its boot time, the profile's (30 s when it says none) unless seconds is given. Starting or stopping it meanwhile ends the wait. */
         post: operations["rebootCamera"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cameras/{id}/actions/upgrade-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a camera to another version of its profile (D05)
+         * @description Parameters keep the values someone set when the new version accepts them; the rest follow its defaults. Protocols, streams, rules and triggers follow what the version has; a running camera restarts. With dry_run it only answers the plan.
+         */
+        post: operations["upgradeCameraProfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1226,7 +1355,17 @@ export interface components {
             firmware: string[];
             /** @enum {string} */
             level: "draft" | "documented" | "captured" | "verified";
-            signature_status: string;
+            /** @enum {string} */
+            signature_status: "official" | "trusted" | "unsigned" | "invalid";
+            /** @description The trusted key that signed the package */
+            signer?: string;
+            /**
+             * @description catalog: shipped in the binary, read only
+             * @enum {string}
+             */
+            source?: "upload" | "catalog" | "duplicate";
+            /** @description The parent the profile was resolved with */
+            extends?: string;
             archived: boolean;
             camera_count: number;
             /** Format: date-time */
@@ -1234,6 +1373,54 @@ export interface components {
             coverage?: {
                 [key: string]: string;
             };
+        };
+        ProfileChange: {
+            /** @enum {string} */
+            section: "state" | "streams" | "engines" | "routes" | "events" | "identity" | "vca" | "storage";
+            key: string;
+            /** @enum {string} */
+            kind: "added" | "removed" | "changed";
+            /** @description What changed in it, as path: before → after */
+            details?: string[];
+        };
+        TrustedKey: {
+            /** @description Empty for an official key */
+            id?: string;
+            name: string;
+            key_id: string;
+            public_key: string;
+            /** @description An official catalog key of this build */
+            builtin: boolean;
+            /** Format: date-time */
+            added_at?: string;
+        };
+        UpgradeItem: {
+            key: string;
+            /** @enum {string} */
+            action: "kept" | "default" | "reset" | "added" | "dropped";
+            value?: unknown;
+            reason?: string;
+        };
+        UpgradePlan: {
+            profile_id: string;
+            from: string;
+            to: string;
+            changes: components["schemas"]["ProfileChange"][];
+            params: components["schemas"]["UpgradeItem"][];
+            protocols: components["schemas"]["UpgradeItem"][];
+            streams: components["schemas"]["UpgradeItem"][];
+            rules: components["schemas"]["UpgradeItem"][];
+            triggers: components["schemas"]["UpgradeItem"][];
+            restart: boolean;
+        };
+        SelfTestResult: {
+            id: string;
+            file?: string;
+            /** @description route:<instance>/<id>, request:<method> <path> or event:<type> */
+            covers: string;
+            /** @enum {string} */
+            status: "passed" | "failed" | "skipped";
+            detail?: string;
         };
         ProfileStream: {
             name: string;
@@ -1281,6 +1468,7 @@ export interface components {
             factory_users: components["schemas"]["CameraUser"][];
             factory_ip?: string;
             params: components["schemas"]["Param"][];
+            report?: components["schemas"]["ImportReport"];
         };
         ImportProblem: {
             step: string;
@@ -1297,14 +1485,29 @@ export interface components {
             version: string;
             sha256: string;
             signature: string;
+            signer?: string;
+            /** @description The minisign key ID of any signature */
+            key_id?: string;
             level?: string;
+            /** @description What the author declares */
             coverage?: {
                 [key: string]: string;
+            };
+            /** @description The replay of the package's fixtures against an ephemeral camera of the profile (D88) */
+            self_test?: {
+                results: components["schemas"]["SelfTestResult"][];
+                passed: number;
+                failed: number;
+                skipped: number;
+            };
+            /** @description Every route (route:<instance>/<id>) and event (event:<type>): verified, failed or declared */
+            verified?: {
+                [key: string]: "verified" | "failed" | "declared";
             };
             steps: {
                 name: string;
                 /** @enum {string} */
-                status: "passed" | "failed" | "skipped";
+                status: "passed" | "failed" | "skipped" | "pending";
                 note?: string;
             }[];
             problems: components["schemas"]["ImportProblem"][];
@@ -2314,6 +2517,173 @@ export interface operations {
             };
         };
     };
+    duplicateProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description vendor/model of the copy */
+                    profile_id: string;
+                    /** @description Defaults to 0.1.0 */
+                    version?: string;
+                    name?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The copy */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResult"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    exportProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    diffProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendor: string;
+                model: string;
+                version: string;
+                to: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The differences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        from: string;
+                        to: string;
+                        changes: components["schemas"]["ProfileChange"][];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    listTrustedKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["TrustedKey"][];
+                    };
+                };
+            };
+        };
+    };
+    addTrustedKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @description The .pub file or its base64 line */
+                    public_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Trusted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedKey"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    deleteTrustedKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
     listTokens: {
         parameters: {
             query?: never;
@@ -2787,6 +3157,40 @@ export interface operations {
                 };
             };
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    upgradeCameraProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: string;
+                    dry_run?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The plan, and the camera when applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        plan: components["schemas"]["UpgradePlan"];
+                        camera?: components["schemas"]["Camera"];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
     };

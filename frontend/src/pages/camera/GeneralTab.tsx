@@ -1,8 +1,10 @@
+import { ArrowUpDown } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { ApiError, type Camera, errorMessage } from "@/api/client";
 import { useNodeMetrics, useTargets, useUpdateCamera } from "@/api/queries";
 import { Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox, Field, Input } from "@/components/ui/form";
 import { useDraft } from "@/lib/draft";
@@ -10,7 +12,9 @@ import { useT } from "@/lib/i18n";
 import { streamLabel, streamSummary } from "@/lib/media";
 import { Link } from "@/lib/router";
 import { formatBytes, formatPercent, formatTime, sinceText } from "@/lib/utils";
+import { profileHref } from "@/pages/Profiles";
 import { EndpointList, Info, isRunning, SaveBar, SectionTitle, SnapshotPreview } from "./parts";
+import { UpgradeDialog, useOtherVersions } from "./UpgradeDialog";
 
 const splitTags = (s: string) =>
   s
@@ -130,6 +134,25 @@ export function GeneralTab({ camera }: { camera: Camera }) {
   );
 }
 
+function ProfileInfo({ camera }: { camera: Camera }) {
+  const t = useT();
+  const others = useOtherVersions(camera);
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <Link href={profileHref(camera.profile.id, camera.profile.version)} className="font-mono hover:underline">
+        {`${camera.profile.id}@${camera.profile.version}`}
+      </Link>
+      {others.length > 0 && (
+        <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+          <ArrowUpDown /> {t("Change version")}
+        </Button>
+      )}
+      <UpgradeDialog camera={camera} open={open} onClose={() => setOpen(false)} />
+    </span>
+  );
+}
+
 function StatusCard({ camera }: { camera: Camera }) {
   const t = useT();
   const { data: metrics } = useNodeMetrics();
@@ -140,7 +163,7 @@ function StatusCard({ camera }: { camera: Camera }) {
       <SectionTitle>{t("Status")}</SectionTitle>
       <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[13px]">
         <Info label={t("Serial")} value={<Mono>{camera.serial}</Mono>} />
-        <Info label={t("Profile")} value={<Mono>{`${camera.profile.id}@${camera.profile.version}`}</Mono>} />
+        <Info label={t("Profile")} value={<ProfileInfo camera={camera} />} />
         <Info label={t("Up for")} value={running ? sinceText(camera.status.started_at) : "—"} />
         {camera.streams.map((s) => (
           <Info key={s.name} label={streamLabel(s.name, t)} value={streamSummary(s)} />

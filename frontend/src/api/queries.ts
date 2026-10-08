@@ -46,6 +46,8 @@ export const keys = {
   cameraConfig: (id: string) => ["cameras", id, "config"] as const,
   profiles: ["profiles"] as const,
   profile: (id: string, version: string) => ["profiles", id, version] as const,
+  profileDiff: (id: string, from: string, to: string) => ["profiles", id, from, "diff", to] as const,
+  trustedKeys: ["trusted-keys"] as const,
   assets: ["assets"] as const,
   targets: ["targets"] as const,
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
@@ -408,6 +410,79 @@ export function useProfileAction() {
       );
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
+  });
+}
+
+export function useProfileDiff(id: string, from: string, to: string | null) {
+  return useQuery({
+    queryKey: keys.profileDiff(id, from, to ?? ""),
+    enabled: !!to,
+    staleTime: Infinity, // versions are immutable
+    queryFn: async () => {
+      const [vendor, model] = id.split("/");
+      return unwrap(
+        await api.GET("/profiles/{vendor}/{model}/versions/{version}/diff/{to}", {
+          params: { path: { vendor, model, version: from, to: to! } },
+        }),
+      );
+    },
+  });
+}
+
+export function useDuplicateProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; version: string; body: { profile_id: string; version?: string; name?: string } }) => {
+      const [vendor, model] = v.id.split("/");
+      return unwrap(
+        await api.POST("/profiles/{vendor}/{model}/versions/{version}/actions/duplicate", {
+          params: { path: { vendor, model, version: v.version } },
+          body: v.body,
+        }),
+      );
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.profiles }),
+  });
+}
+
+/** Where a profile version downloads as a .mvpkg. */
+export function exportURL(id: string, version: string) {
+  const [vendor, model] = id.split("/");
+  return `/api/v1/profiles/${encodeURIComponent(vendor)}/${encodeURIComponent(model)}/versions/${encodeURIComponent(version)}/export`;
+}
+
+export function useTrustedKeys() {
+  return useQuery({ queryKey: keys.trustedKeys, queryFn: async () => unwrap(await api.GET("/trusted-keys")).items });
+}
+
+export function useAddTrustedKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { name: string; public_key: string }) => unwrap(await api.POST("/trusted-keys", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.trustedKeys }),
+  });
+}
+
+export function useDeleteTrustedKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => unwrap(await api.DELETE("/trusted-keys/{id}", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.trustedKeys }),
+  });
+}
+
+/** Plans (dry_run) or applies the move of a camera to another version of its profile. */
+export function useUpgradeProfile(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { version: string; dry_run?: boolean }) =>
+      unwrap(await api.POST("/cameras/{id}/actions/upgrade-profile", { params: { path: { id } }, body })),
+    onSuccess: (_res, body) => {
+      if (body.dry_run) return;
+      qc.invalidateQueries({ queryKey: keys.camera(id) });
+      qc.invalidateQueries({ queryKey: keys.cameras });
+      qc.invalidateQueries({ queryKey: keys.profiles });
+    },
   });
 }
 
