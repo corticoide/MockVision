@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/oklog/ulid/v2"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
@@ -146,7 +147,7 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 	if res == nil {
 		run.Step("Validating", 0.05)
 		sctx, cancel := run.StepContext(ctx)
-		res, err = s.inspect(sctx, p.Filename, data)
+		res, err = s.inspectWithParent(sctx, p.Filename, data)
 		cancel()
 		if err != nil {
 			return importOutcome{Error: describeError(err)}, err
@@ -162,19 +163,29 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 	rep := res.Report
 	run.Logf("%s %s@%s: level %s, signature %s", rep.Kind, rep.ID, rep.Version, rep.Level, rep.Signature)
 	run.Step("Installing", 0.8)
-	out, err := s.installPackage(ctx, p.Actor, data, res)
+	out, err := s.installPackage(ctx, p.Actor, data, res, sourceUpload)
 	if err != nil {
 		return importOutcome{Report: &rep, Error: describeError(err)}, err
 	}
 	return importOutcome{Profile: &out.Profile, Report: &out.Report, Created: out.Created}, nil
 }
 
+// Where a package came from.
+const (
+	sourceUpload    = "upload"
+	sourceCatalog   = "catalog"
+	sourceDuplicate = "duplicate"
+)
+
 // installPackage installs a validated package as an immutable version
 // (RN-02); installing the same content again changes nothing.
-func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, res *pkg.Result) (*ImportResult, error) {
+func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, res *pkg.Result, source string) (*ImportResult, error) {
 	rep := res.Report
 	if !rep.OK() {
 		return nil, &ImportError{Report: rep}
+	}
+	if res.Needs != nil {
+		return nil, errors.New("the import still needs the profile's parent")
 	}
 	if rep.Kind != "profile" || res.Profile == nil {
 		return nil, domain.Invalid("file", "only profile packages can be installed in this version")
@@ -189,7 +200,7 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 		if err != nil {
 			return nil, err
 		}
-		return &ImportResult{Profile: profileView(prof, existing.SignatureStatus, 0), Report: rep}, nil
+		return &ImportResult{Profile: profileView(prof, existing, 0), Report: rep}, nil
 	} else if !notFound(err) {
 		return nil, err
 	}
@@ -215,14 +226,14 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 	err = s.store.Tx(ctx, func(q *db.Queries) error {
 		if err := q.InsertPackage(ctx, db.InsertPackageParams{
 			ID: pkgID, Kind: rep.Kind, PkgID: rep.ID, Version: rep.Version, Sha256: rep.SHA256, SignatureStatus: rep.Signature,
-			ManifestJson: string(manifest), ReportJson: string(report), Enabled: 1, InstalledAt: now,
+			Signer: rep.Signer, ManifestJson: string(manifest), ReportJson: string(report), Enabled: 1, InstalledAt: now, Source: source,
 		}); err != nil {
 			return err
 		}
 		return q.InsertProfile(ctx, db.InsertProfileParams{
 			ID: profID, PackageID: pkgID, ProfileID: rep.ID, Version: rep.Version, Name: res.Profile.Name, Vendor: res.Profile.Vendor,
 			Model: res.Profile.Model, FirmwareJson: string(firmware), ResolvedJson: string(res.Resolved), Level: rep.Level,
-			CoverageJson: string(coverage), CreatedAt: now,
+			CoverageJson: string(coverage), CreatedAt: now, ExtendsRef: res.Profile.Extends,
 		})
 	})
 	if err != nil {
@@ -236,21 +247,84 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 	if err != nil {
 		return nil, err
 	}
-	view := profileView(prof, rep.Signature, 0)
+	pk, err := s.store.R().GetPackage(ctx, pkgID)
+	if err != nil {
+		return nil, err
+	}
+	view := profileView(prof, pk, 0)
 	s.pub.Publish("profiles", "installed", view)
 	return &ImportResult{Profile: view, Report: rep, Created: true}, nil
 }
 
+// inspectWithParent runs the import pipeline; a profile that extends
+// another runs it again with the newest installed version of its parent
+// within the range it asks for (D17).
+func (s *Service) inspectWithParent(ctx context.Context, filename string, data []byte) (*pkg.Result, error) {
+	res, err := s.inspect(ctx, filename, data, nil)
+	if err != nil || res.Needs == nil {
+		return res, err
+	}
+	need := *res.Needs
+	parent, err := s.findParent(ctx, need.ID, need.Range)
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		res.Needs = nil
+		res.Report.Problems = append(res.Report.Problems, profile.Problem{Step: profile.StepInheritance, Severity: profile.SeverityError,
+			File: "profile.yaml", Message: fmt.Sprintf("extends %s@%s: no installed version of %s is in that range; import the parent first", need.ID, need.Range, need.ID)})
+		return res, nil
+	}
+	return s.inspect(ctx, filename, data, map[string]*profile.Parent{need.ID: parent})
+}
+
+// findParent returns the newest installed, unarchived version of a profile
+// within a range; nil when there is none.
+func (s *Service) findParent(ctx context.Context, id, rng string) (*profile.Parent, error) {
+	c, err := semver.NewConstraint(rng)
+	if err != nil {
+		return nil, domain.Invalid("extends", "%q is not a version range", rng)
+	}
+	rows, err := s.store.R().ListProfileVersions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var best *db.Profile
+	var bestV *semver.Version
+	for i, r := range rows {
+		v, err := semver.NewVersion(r.Version)
+		if err != nil || store.Bool(r.Archived) || !c.Check(v) {
+			continue
+		}
+		if bestV == nil || v.GreaterThan(bestV) {
+			best, bestV = &rows[i], v
+		}
+	}
+	if best == nil {
+		return nil, nil
+	}
+	return &profile.Parent{Ref: best.ProfileID + "@" + best.Version, Resolved: json.RawMessage(best.ResolvedJson)}, nil
+}
+
 // inspect runs the import pipeline in an unprivileged subprocess, so a
 // hostile package can at worst crash that process.
-func (s *Service) inspect(ctx context.Context, filename string, data []byte) (*pkg.Result, error) {
+func (s *Service) inspect(ctx context.Context, filename string, data []byte, parents map[string]*profile.Parent) (*pkg.Result, error) {
+	opts, err := s.inspectOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opts.Parents = parents
 	if s.opts.Exe == "" {
-		return pkg.Inspect(data, filename, s.catalog), nil
+		return pkg.Inspect(data, filename, s.catalog, opts), nil
+	}
+	input, err := pkg.WriteInspectInput(opts, data)
+	if err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.opts.Exe, "pkg", "inspect", "--name", filepath.Base(filename))
-	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -269,14 +343,14 @@ func (s *Service) inspect(ctx context.Context, filename string, data []byte) (*p
 	return &res, nil
 }
 
-func profileView(p db.Profile, signature string, cameras int64) ProfileView {
+func profileView(p db.Profile, pk db.Package, cameras int64) ProfileView {
 	var fw []string
 	_ = json.Unmarshal([]byte(p.FirmwareJson), &fw)
 	var cov map[string]string
 	_ = json.Unmarshal([]byte(p.CoverageJson), &cov)
 	return ProfileView{ID: p.ID, ProfileID: p.ProfileID, Version: p.Version, Name: p.Name, Vendor: p.Vendor, Model: p.Model,
-		Firmware: nonNil(fw), Level: p.Level, SignatureStatus: signature, Archived: store.Bool(p.Archived), CameraCount: int(cameras),
-		CreatedAt: store.Time(p.CreatedAt), Coverage: cov}
+		Firmware: nonNil(fw), Level: p.Level, SignatureStatus: pk.SignatureStatus, Signer: pk.Signer, Source: pk.Source,
+		Extends: p.ExtendsRef, Archived: store.Bool(p.Archived), CameraCount: int(cameras), CreatedAt: store.Time(p.CreatedAt), Coverage: cov}
 }
 
 // ListProfiles returns installed profile versions.
@@ -289,7 +363,8 @@ func (s *Service) ListProfiles(ctx context.Context) ([]ProfileView, error) {
 	for _, r := range rows {
 		out = append(out, profileView(db.Profile{ID: r.ID, PackageID: r.PackageID, ProfileID: r.ProfileID, Version: r.Version, Name: r.Name,
 			Vendor: r.Vendor, Model: r.Model, FirmwareJson: r.FirmwareJson, Level: r.Level, CoverageJson: r.CoverageJson,
-			Archived: r.Archived, CreatedAt: r.CreatedAt}, r.SignatureStatus, r.CameraCount))
+			Archived: r.Archived, CreatedAt: r.CreatedAt, ExtendsRef: r.ExtendsRef},
+			db.Package{SignatureStatus: r.SignatureStatus, Signer: r.Signer, Source: r.Source}, r.CameraCount))
 	}
 	return out, nil
 }
@@ -308,7 +383,7 @@ func (s *Service) GetProfile(ctx context.Context, profileID, version string) (*P
 	if err != nil {
 		return nil, err
 	}
-	d := &ProfileDetail{ProfileView: profileView(p, pk.SignatureStatus, 0), Streams: []ProfileStreamView{}, Engines: []ProfileEngineView{},
+	d := &ProfileDetail{ProfileView: profileView(p, pk, 0), Streams: []ProfileStreamView{}, Engines: []ProfileEngineView{},
 		Events: []string{}, EventSpecs: []ProfileEventView{}, VCA: ProfileVCAView{Rules: []string{}, ObjectClasses: []string{}},
 		FactoryUsers: []UserView{}, Params: []ParamView{}}
 	for _, name := range streamNames(doc) {

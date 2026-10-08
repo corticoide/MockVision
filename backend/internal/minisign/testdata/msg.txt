@@ -1,0 +1,4 @@
+format: 1
+kind: profile
+id: acme/cam
+version: 1.0.0

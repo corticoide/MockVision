@@ -23,6 +23,7 @@ import (
 	"github.com/corticoide/mockvision/backend/internal/netctl/privdrop"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/frontend"
+	"github.com/corticoide/mockvision/profiles"
 )
 
 func env(key, def string) string {
@@ -122,6 +123,7 @@ func serve(args []string, log *slog.Logger) int {
 	hub := api.NewHub()
 	svc, err := app.New(app.Options{
 		DataDir: *dataDir, FFmpeg: *ffmpeg, Exe: exe, ParentInterface: *parent, Listen: *listen, Runtime: rt, Log: log,
+		Catalog: profiles.Catalog,
 	}, st, hub)
 	if err != nil {
 		log.Error("service", "error", err)

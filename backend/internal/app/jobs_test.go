@@ -124,7 +124,7 @@ func TestImportResumesAfterValidation(t *testing.T) {
 	if err := j.DecodeParams(&p); err != nil {
 		t.Fatal(err)
 	}
-	res, err := svc.inspect(ctx, p.Filename, data)
+	res, err := svc.inspect(ctx, p.Filename, data, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

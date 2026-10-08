@@ -81,15 +81,19 @@ type Step struct {
 
 // Report is what the panel shows after an import.
 type Report struct {
-	Kind      string            `json:"kind"`
-	ID        string            `json:"id"`
-	Version   string            `json:"version"`
-	SHA256    string            `json:"sha256"`
-	Signature string            `json:"signature"`
-	Level     string            `json:"level,omitempty"`
-	Coverage  map[string]string `json:"coverage,omitempty"`
-	Steps     []Step            `json:"steps"`
-	Problems  []profile.Problem `json:"problems"`
+	Kind      string `json:"kind"`
+	ID        string `json:"id"`
+	Version   string `json:"version"`
+	SHA256    string `json:"sha256"`
+	Signature string `json:"signature"`
+	// Signer names the trusted key that signed the package; KeyID is the
+	// minisign key ID of any signature, trusted or not.
+	Signer   string            `json:"signer,omitempty"`
+	KeyID    string            `json:"key_id,omitempty"`
+	Level    string            `json:"level,omitempty"`
+	Coverage map[string]string `json:"coverage,omitempty"`
+	Steps    []Step            `json:"steps"`
+	Problems []profile.Problem `json:"problems"`
 }
 
 // OK reports whether the package can be installed.
@@ -108,11 +112,30 @@ type Result struct {
 	Manifest Manifest        `json:"manifest"`
 	Profile  *profile.Meta   `json:"profile,omitempty"`
 	Resolved json.RawMessage `json:"resolved,omitempty"`
+	// Needs is the parent to run again with, when the profile extends one
+	// the options did not bring.
+	Needs *Need `json:"needs,omitempty"`
+}
+
+// Options are what the pipeline needs from the node: the keys it trusts
+// and, for a profile that extends another, the installed parent.
+type Options struct {
+	Keys    []TrustedKey               `json:"keys,omitempty"`
+	Parents map[string]*profile.Parent `json:"parents,omitempty"`
+}
+
+// Need is a parent the pipeline asks for: a profile ID and a version
+// range. The node answers with the newest installed version in it and the
+// pipeline runs again.
+type Need struct {
+	ID    string `json:"id"`
+	Range string `json:"range"`
 }
 
 type inspector struct {
 	res     *Result
 	engines profile.EngineCatalog
+	opts    Options
 }
 
 func (in *inspector) problem(step, file string, line int, format string, args ...any) {
@@ -132,9 +155,10 @@ func (in *inspector) step(name, status, note string) {
 }
 
 // Inspect runs the import pipeline on a package or a loose profile.yaml.
-func Inspect(data []byte, filename string, engines profile.EngineCatalog) *Result {
+func Inspect(data []byte, filename string, engines profile.EngineCatalog, opts Options) *Result {
 	sum := sha256.Sum256(data)
-	in := &inspector{res: &Result{Report: Report{SHA256: hex.EncodeToString(sum[:]), Signature: SignatureUnsigned, Problems: []profile.Problem{}}}, engines: engines}
+	in := &inspector{res: &Result{Report: Report{SHA256: hex.EncodeToString(sum[:]), Signature: SignatureUnsigned, Problems: []profile.Problem{}}},
+		engines: engines, opts: opts}
 	if isZip(data) {
 		in.inspectPackage(data)
 	} else {
@@ -177,11 +201,8 @@ func (in *inspector) inspectPackage(data []byte) {
 	in.res.Report.Kind = man.Kind
 	in.res.Report.ID = man.ID
 	in.res.Report.Version = man.Version
-	if _, signed := files["manifest.sig"]; signed {
-		in.step(profile.StepSignature, "skipped", "signature verification is not available yet; treated as unsigned")
-		in.warn(profile.StepSignature, "manifest.sig", "signatures are not verified in this version")
-	} else {
-		in.step(profile.StepSignature, "passed", "unsigned")
+	if !in.signature(files) {
+		return
 	}
 	if !in.compatibility(man) {
 		return
@@ -275,22 +296,15 @@ func (in *inspector) manifest(files map[string][]byte) (*Manifest, bool) {
 		in.problem(profile.StepIntegrity, "manifest.yaml", 0, "package has no manifest.yaml")
 		return nil, false
 	}
-	v, pos, err := profile.ParseYAML(raw, profile.DefaultLimits)
+	m, pos, err := parseManifest(raw)
 	if err != nil {
 		var ye *profile.YAMLError
-		line := 0
-		if errors.As(err, &ye) {
-			line = ye.Line
+		switch {
+		case errors.As(err, &ye):
+			in.problem(profile.StepYAML, "manifest.yaml", ye.Line, "%v", err)
+		default:
+			in.problem(profile.StepSchema, "manifest.yaml", 0, "invalid manifest: %v", err)
 		}
-		in.problem(profile.StepYAML, "manifest.yaml", line, "%v", err)
-		return nil, false
-	}
-	b, _ := json.Marshal(v)
-	var m Manifest
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
-		in.problem(profile.StepSchema, "manifest.yaml", 0, "invalid manifest: %v", err)
 		return nil, false
 	}
 	bad := false
@@ -332,7 +346,32 @@ func (in *inspector) manifest(files map[string][]byte) (*Manifest, bool) {
 			bad = true
 		}
 	}
-	return &m, !bad
+	return m, !bad
+}
+
+// parseManifest reads manifest.yaml with the bounded YAML reader.
+func parseManifest(raw []byte) (*Manifest, profile.Positions, error) {
+	v, pos, err := profile.ParseYAML(raw, profile.DefaultLimits)
+	if err != nil {
+		return nil, nil, err
+	}
+	b, _ := json.Marshal(v)
+	var m Manifest
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
+		return nil, nil, err
+	}
+	return &m, pos, nil
+}
+
+// readManifest reads a manifest outside the pipeline, to sign it.
+func readManifest(raw []byte) (*Manifest, error) {
+	m, _, err := parseManifest(raw)
+	if err != nil {
+		return nil, fmt.Errorf("manifest.yaml: %w", err)
+	}
+	return m, nil
 }
 
 func (in *inspector) compatibility(m *Manifest) bool {
@@ -371,6 +410,18 @@ func (in *inspector) compatibility(m *Manifest) bool {
 }
 
 func (in *inspector) validateProfile(input profile.Input, loose bool) {
+	if ref := profile.Extends(input.Data); ref != "" {
+		id, rng, err := profile.ExtendsRef(ref)
+		if err == nil {
+			parent, ok := in.opts.Parents[id]
+			if !ok {
+				in.res.Needs = &Need{ID: id, Range: rng}
+				in.step(profile.StepInheritance, "pending", "needs "+ref)
+				return
+			}
+			input.Parent = parent
+		}
+	}
 	res := profile.Validate(input, in.engines)
 	in.res.Report.Problems = append(in.res.Report.Problems, res.Problems...)
 	if res.Doc != nil {

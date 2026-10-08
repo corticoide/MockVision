@@ -212,6 +212,7 @@ type Package struct {
 	ReportJson      string
 	Enabled         int64
 	InstalledAt     int64
+	Source          string
 }
 
 type Profile struct {
@@ -228,6 +229,7 @@ type Profile struct {
 	CoverageJson string
 	Archived     int64
 	CreatedAt    int64
+	ExtendsRef   string
 }
 
 type Recording struct {
@@ -303,6 +305,14 @@ type Trigger struct {
 	Type       string
 	ParamsJson string
 	Enabled    int64
+}
+
+type TrustedKey struct {
+	ID        string
+	Name      string
+	KeyID     string
+	PublicKey string
+	AddedAt   int64
 }
 
 type User struct {

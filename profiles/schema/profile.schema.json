@@ -35,8 +35,13 @@
           "items": { "type": "string", "minLength": 1, "maxLength": 64 }
         },
         "extends": {
-          "description": "Installed parent profile, for example milesight/base@^1.",
+          "description": "Installed parent profile, vendor/model@range such as milesight/base@^1 (D17). The importer pins it to the version it resolved.",
           "type": "string"
+        },
+        "lineage": {
+          "description": "Set by the importer: the ancestors the profile was resolved with, nearest first. Anything written here is replaced.",
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },
@@ -186,6 +191,11 @@
           "items": { "enum": ["nfs", "smb"] }
         }
       }
+    },
+    "remove": {
+      "description": "What a profile that extends another drops from it: JSON pointers whose list segments are item ids, such as /engines/http/routes/param-set.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^/.+" }
     },
     "coverage": {
       "description": "What the author declares covered; the importer checks it.",

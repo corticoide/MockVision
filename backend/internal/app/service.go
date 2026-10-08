@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -39,6 +40,9 @@ type Options struct {
 	Listen  string
 	Runtime netctl.Runtime
 	Log     *slog.Logger
+	// Catalog holds the official catalog the node installs when it starts
+	// (the profiles directory); nil installs none.
+	Catalog fs.FS
 }
 
 // Publisher pushes live updates to the panel (WebSocket topics). Forget
@@ -200,6 +204,7 @@ func (s *Service) RuntimeKind() string { return s.rt.Kind() }
 // camera.
 func (s *Service) Run(ctx context.Context) error {
 	s.announceSetup(ctx)
+	s.installCatalog(ctx)
 	if err := s.bootCameras(ctx); err != nil {
 		return err
 	}

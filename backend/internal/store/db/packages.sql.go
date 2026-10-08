@@ -9,8 +9,20 @@ import (
 	"context"
 )
 
+const deleteTrustedKey = `-- name: DeleteTrustedKey :execrows
+DELETE FROM trusted_keys WHERE id = ?1
+`
+
+func (q *Queries) DeleteTrustedKey(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTrustedKey, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getPackage = `-- name: GetPackage :one
-SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at FROM packages WHERE id = ?1
+SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at, source FROM packages WHERE id = ?1
 `
 
 func (q *Queries) GetPackage(ctx context.Context, id string) (Package, error) {
@@ -28,12 +40,13 @@ func (q *Queries) GetPackage(ctx context.Context, id string) (Package, error) {
 		&i.ReportJson,
 		&i.Enabled,
 		&i.InstalledAt,
+		&i.Source,
 	)
 	return i, err
 }
 
 const getPackageByKey = `-- name: GetPackageByKey :one
-SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at FROM packages WHERE kind = ?1 AND pkg_id = ?2 AND version = ?3
+SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at, source FROM packages WHERE kind = ?1 AND pkg_id = ?2 AND version = ?3
 `
 
 type GetPackageByKeyParams struct {
@@ -57,12 +70,13 @@ func (q *Queries) GetPackageByKey(ctx context.Context, arg GetPackageByKeyParams
 		&i.ReportJson,
 		&i.Enabled,
 		&i.InstalledAt,
+		&i.Source,
 	)
 	return i, err
 }
 
 const getProfile = `-- name: GetProfile :one
-SELECT id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at FROM profiles WHERE id = ?1
+SELECT id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at, extends_ref FROM profiles WHERE id = ?1
 `
 
 func (q *Queries) GetProfile(ctx context.Context, id string) (Profile, error) {
@@ -82,12 +96,13 @@ func (q *Queries) GetProfile(ctx context.Context, id string) (Profile, error) {
 		&i.CoverageJson,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.ExtendsRef,
 	)
 	return i, err
 }
 
 const getProfileByRef = `-- name: GetProfileByRef :one
-SELECT id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at FROM profiles WHERE profile_id = ?1 AND version = ?2
+SELECT id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at, extends_ref FROM profiles WHERE profile_id = ?1 AND version = ?2
 `
 
 type GetProfileByRefParams struct {
@@ -112,13 +127,31 @@ func (q *Queries) GetProfileByRef(ctx context.Context, arg GetProfileByRefParams
 		&i.CoverageJson,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.ExtendsRef,
+	)
+	return i, err
+}
+
+const getTrustedKey = `-- name: GetTrustedKey :one
+SELECT id, name, key_id, public_key, added_at FROM trusted_keys WHERE id = ?1
+`
+
+func (q *Queries) GetTrustedKey(ctx context.Context, id string) (TrustedKey, error) {
+	row := q.db.QueryRowContext(ctx, getTrustedKey, id)
+	var i TrustedKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyID,
+		&i.PublicKey,
+		&i.AddedAt,
 	)
 	return i, err
 }
 
 const insertPackage = `-- name: InsertPackage :exec
-INSERT INTO packages (id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+INSERT INTO packages (id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at, source)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 `
 
 type InsertPackageParams struct {
@@ -133,6 +166,7 @@ type InsertPackageParams struct {
 	ReportJson      string
 	Enabled         int64
 	InstalledAt     int64
+	Source          string
 }
 
 func (q *Queries) InsertPackage(ctx context.Context, arg InsertPackageParams) error {
@@ -148,13 +182,14 @@ func (q *Queries) InsertPackage(ctx context.Context, arg InsertPackageParams) er
 		arg.ReportJson,
 		arg.Enabled,
 		arg.InstalledAt,
+		arg.Source,
 	)
 	return err
 }
 
 const insertProfile = `-- name: InsertProfile :exec
-INSERT INTO profiles (id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)
+INSERT INTO profiles (id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at, extends_ref)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13)
 `
 
 type InsertProfileParams struct {
@@ -170,6 +205,7 @@ type InsertProfileParams struct {
 	Level        string
 	CoverageJson string
 	CreatedAt    int64
+	ExtendsRef   string
 }
 
 func (q *Queries) InsertProfile(ctx context.Context, arg InsertProfileParams) error {
@@ -186,12 +222,36 @@ func (q *Queries) InsertProfile(ctx context.Context, arg InsertProfileParams) er
 		arg.Level,
 		arg.CoverageJson,
 		arg.CreatedAt,
+		arg.ExtendsRef,
+	)
+	return err
+}
+
+const insertTrustedKey = `-- name: InsertTrustedKey :exec
+INSERT INTO trusted_keys (id, name, key_id, public_key, added_at) VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertTrustedKeyParams struct {
+	ID        string
+	Name      string
+	KeyID     string
+	PublicKey string
+	AddedAt   int64
+}
+
+func (q *Queries) InsertTrustedKey(ctx context.Context, arg InsertTrustedKeyParams) error {
+	_, err := q.db.ExecContext(ctx, insertTrustedKey,
+		arg.ID,
+		arg.Name,
+		arg.KeyID,
+		arg.PublicKey,
+		arg.AddedAt,
 	)
 	return err
 }
 
 const listPackages = `-- name: ListPackages :many
-SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at FROM packages ORDER BY installed_at DESC
+SELECT id, kind, pkg_id, version, sha256, signature_status, signer, manifest_json, report_json, enabled, installed_at, source FROM packages ORDER BY installed_at DESC
 `
 
 func (q *Queries) ListPackages(ctx context.Context) ([]Package, error) {
@@ -215,6 +275,49 @@ func (q *Queries) ListPackages(ctx context.Context) ([]Package, error) {
 			&i.ReportJson,
 			&i.Enabled,
 			&i.InstalledAt,
+			&i.Source,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProfileVersions = `-- name: ListProfileVersions :many
+SELECT id, package_id, profile_id, version, name, vendor, model, firmware_json, resolved_json, level, coverage_json, archived, created_at, extends_ref FROM profiles WHERE profile_id = ?1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListProfileVersions(ctx context.Context, profileID string) ([]Profile, error) {
+	rows, err := q.db.QueryContext(ctx, listProfileVersions, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Profile{}
+	for rows.Next() {
+		var i Profile
+		if err := rows.Scan(
+			&i.ID,
+			&i.PackageID,
+			&i.ProfileID,
+			&i.Version,
+			&i.Name,
+			&i.Vendor,
+			&i.Model,
+			&i.FirmwareJson,
+			&i.ResolvedJson,
+			&i.Level,
+			&i.CoverageJson,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.ExtendsRef,
 		); err != nil {
 			return nil, err
 		}
@@ -232,7 +335,7 @@ func (q *Queries) ListPackages(ctx context.Context) ([]Package, error) {
 const listProfiles = `-- name: ListProfiles :many
 SELECT profiles.id, profiles.package_id, profiles.profile_id, profiles.version, profiles.name, profiles.vendor,
        profiles.model, profiles.firmware_json, profiles.level, profiles.coverage_json, profiles.archived,
-       profiles.created_at, packages.signature_status,
+       profiles.created_at, profiles.extends_ref, packages.signature_status, packages.signer, packages.source,
        (SELECT count(*) FROM cameras WHERE cameras.profile_id = profiles.profile_id AND cameras.profile_version = profiles.version) AS camera_count
 FROM profiles
 JOIN packages ON packages.id = profiles.package_id
@@ -252,7 +355,10 @@ type ListProfilesRow struct {
 	CoverageJson    string
 	Archived        int64
 	CreatedAt       int64
+	ExtendsRef      string
 	SignatureStatus string
+	Signer          string
+	Source          string
 	CameraCount     int64
 }
 
@@ -278,8 +384,44 @@ func (q *Queries) ListProfiles(ctx context.Context) ([]ListProfilesRow, error) {
 			&i.CoverageJson,
 			&i.Archived,
 			&i.CreatedAt,
+			&i.ExtendsRef,
 			&i.SignatureStatus,
+			&i.Signer,
+			&i.Source,
 			&i.CameraCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrustedKeys = `-- name: ListTrustedKeys :many
+SELECT id, name, key_id, public_key, added_at FROM trusted_keys ORDER BY added_at
+`
+
+func (q *Queries) ListTrustedKeys(ctx context.Context) ([]TrustedKey, error) {
+	rows, err := q.db.QueryContext(ctx, listTrustedKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TrustedKey{}
+	for rows.Next() {
+		var i TrustedKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.KeyID,
+			&i.PublicKey,
+			&i.AddedAt,
 		); err != nil {
 			return nil, err
 		}

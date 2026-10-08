@@ -1,0 +1,24 @@
+# The official catalog (D81): every profile listed here is packaged and
+# built into the binary, and the node installs it, or a newer version of
+# it, when it starts. Catalog profiles are read only: to change one,
+# duplicate it (D19).
+#
+# A release signs each package with the catalog key:
+#   mockvision pkg catalog --dir profiles -k catalog.key
+# writes catalog/<vendor>-<model>-<version>.minisig next to this file; the
+# binary built with that key's public half (-ldflags "-X
+# .../pkg.officialKeys=RWQ...") then installs them as official. A
+# development build carries no signatures and installs them unsigned.
+#
+# Parents come before the profiles that extend them.
+
+packages:
+  - profile: milesight-base.yaml
+    license: Apache-2.0
+    provenance: { source: documented }
+  - profile: milesight-demo.yaml
+    license: Apache-2.0
+    provenance: { source: draft }
+  - profile: dahua-ipc-hdbw1230e-s4.yaml
+    license: Apache-2.0
+    provenance: { source: documented }

@@ -171,19 +171,26 @@ type ParamView struct {
 
 // ProfileView is an installed profile version.
 type ProfileView struct {
-	ID              string            `json:"id"`
-	ProfileID       string            `json:"profile_id"`
-	Version         string            `json:"version"`
-	Name            string            `json:"name"`
-	Vendor          string            `json:"vendor"`
-	Model           string            `json:"model"`
-	Firmware        []string          `json:"firmware"`
-	Level           string            `json:"level"`
-	SignatureStatus string            `json:"signature_status"`
-	Archived        bool              `json:"archived"`
-	CameraCount     int               `json:"camera_count"`
-	CreatedAt       time.Time         `json:"created_at"`
-	Coverage        map[string]string `json:"coverage,omitempty"`
+	ID              string   `json:"id"`
+	ProfileID       string   `json:"profile_id"`
+	Version         string   `json:"version"`
+	Name            string   `json:"name"`
+	Vendor          string   `json:"vendor"`
+	Model           string   `json:"model"`
+	Firmware        []string `json:"firmware"`
+	Level           string   `json:"level"`
+	SignatureStatus string   `json:"signature_status"`
+	// Signer names the trusted key that signed the package.
+	Signer string `json:"signer,omitempty"`
+	// Source is where the package came from: upload, catalog (shipped in
+	// the binary, read only) or duplicate.
+	Source string `json:"source"`
+	// Extends is the parent the profile was resolved with, pinned.
+	Extends     string            `json:"extends,omitempty"`
+	Archived    bool              `json:"archived"`
+	CameraCount int               `json:"camera_count"`
+	CreatedAt   time.Time         `json:"created_at"`
+	Coverage    map[string]string `json:"coverage,omitempty"`
 }
 
 // ProfileStreamView describes what a profile stream supports.

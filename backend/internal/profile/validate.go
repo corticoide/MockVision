@@ -70,6 +70,8 @@ type Input struct {
 	// Files holds the other files of the package (templates/...); nil for a
 	// loose profile.yaml.
 	Files map[string][]byte
+	// Parent is the installed profile the document extends, if it does.
+	Parent *Parent
 }
 
 // Result is the outcome of Validate.
@@ -151,10 +153,28 @@ func Validate(in Input, engines EngineCatalog) *Result {
 		return res
 	}
 
+	// A profile that extends another is validated merged with it: its own
+	// template files are inlined first, the parent's are already.
+	_, removes := root["remove"]
+	meta, _ := root["profile"].(map[string]any)
+	inherits := removes || meta["extends"] != nil
+	if !inherits && meta != nil {
+		delete(meta, "lineage") // only the importer writes it
+	}
+	if inherits {
+		v.inlineTemplates(root)
+		merged, ok := v.inherit(root)
+		if !ok {
+			return res
+		}
+		root, generic = merged, merged
+	}
 	if !v.schema(generic) {
 		return res
 	}
-	v.inlineTemplates(root)
+	if !inherits {
+		v.inlineTemplates(root)
+	}
 
 	doc, err := decodeDocument(root)
 	if err != nil {
@@ -408,10 +428,6 @@ func ValidCanonicalKey(key string) bool {
 }
 
 func (v *validator) lint(doc *Document, delivers map[string]bool) {
-	if doc.Profile.Extends != "" {
-		v.errorf(StepInheritance, "/profile/extends", "extends is not supported yet: publish the profile resolved")
-	}
-
 	// Identity.
 	if err := domain.ValidateMask(doc.Identity.Serial); err != nil {
 		v.errorf(StepLint, "/identity/serial", "serial %v", err)

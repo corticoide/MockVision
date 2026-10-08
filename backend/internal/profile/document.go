@@ -40,6 +40,9 @@ type Meta struct {
 	Model    string   `json:"model"`
 	Firmware []string `json:"firmware,omitempty"`
 	Extends  string   `json:"extends,omitempty"`
+	// Lineage is what the importer resolved the profile with, nearest
+	// parent first.
+	Lineage []string `json:"lineage,omitempty"`
 }
 
 // Identity holds the serial pattern and factory values of the device.
