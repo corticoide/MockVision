@@ -1103,6 +1103,94 @@ api GET "/cameras/$CID/logs" | json '"\n".join(l["msg"] for l in d["items"])' | 
 api GET /metrics | grep -q "^mockvision_camera_up{camera_id=\"$CID\",name=\"Gate 1\",state=\"running\"} 1$" || fail "Prometheus metrics"
 ok "the unknown request is a gap, the CSV export, the camera's log, metrics every 10 s and Prometheus' text format"
 
+step "scraper: register, probe read-only, capture and compile a draft profile (D44, D73, D75, RN-17, RN-18)"
+GATE_IP=$(api GET "/cameras/$CID" | json 'd["network"]["ip"]')
+# The scraper runs on the node, so it reaches a macvlan camera through the
+# node bridge (D26); a real camera on the LAN is reached directly.
+ip addr add 10.77.0.1/24 dev "$LAN"
+api PATCH /settings -H 'Content-Type: application/json' -d '{"node_bridge":true}' >/dev/null
+ping -c 2 -W 2 "$GATE_IP" >/dev/null || fail "the node cannot reach the camera through the bridge"
+# Registered without authorizing, a probe is refused (RN-17).
+DEV=$(api POST /devices -H 'Content-Type: application/json' -d "{
+	\"name\": \"Gate (captured)\", \"host\": \"$GATE_IP\", \"ports\": [80, 554],
+	\"username\": \"admin\", \"password\": \"e2e-new-pw\"}")
+DEV_ID=$(echo "$DEV" | json 'd["id"]')
+[ "$(echo "$DEV" | json 'd["has_password"]')" = True ] || fail "the device kept no password"
+code=$(api POST "/devices/$DEV_ID/actions/probe" -o "$WORK/probe-denied.json" -w '%{http_code}')
+[ "$code" = 409 ] && grep -q 'confirm you own' "$WORK/probe-denied.json" ||
+	fail "an unauthorized probe was not refused: $code $(cat "$WORK/probe-denied.json")"
+ok "a probe is refused until the device is authorized (RN-17)"
+# Authorized, the read-only probe identifies the Milesight HTTP service. The
+# update replaces the device, so every field it keeps is sent again.
+api PATCH "/devices/$DEV_ID" -H 'Content-Type: application/json' -d "{
+	\"name\": \"Gate (captured)\", \"host\": \"$GATE_IP\", \"ports\": [80, 554],
+	\"username\": \"admin\", \"authorized\": true}" >/dev/null
+[ "$(api GET "/devices/$DEV_ID" | json 'd["authorized"]')" = True ] || fail "the device was not authorized"
+DET=$(api POST "/devices/$DEV_ID/actions/probe")
+echo "$DET" | json 'd["detected"]["reachable"]' | grep -qx True || fail "the probe did not reach the device: $DET"
+[ "$(echo "$DET" | json 'd["detected"]["vendor"]')" = Milesight ] ||
+	fail "the probe did not identify Milesight: $(echo "$DET" | json 'd["detected"]')"
+echo "$DET" | json '",".join(str(x["port"])+":"+x["proto"]+":"+x.get("auth","") for x in d["detected"]["services"])' | grep -q '80:http:digest' ||
+	fail "the HTTP service with digest was not found: $(echo "$DET" | json 'd["detected"]["services"]')"
+api GET "/devices/$DEV_ID" | json 'd.get("password","")' | grep -q . && fail "the API exposed a password (RN-18)"
+ok "authorized, the read-only probe finds Milesight on 80 (digest); the password never comes back (RN-18)"
+# Only a read-only program is offered for this device.
+api GET "/programs?device=$DEV_ID" | json '",".join(p["program_id"] for p in d["items"])' | grep -q 'milesight/demo-capture' ||
+	fail "the demo capture program is not offered: $(api GET "/programs?device=$DEV_ID")"
+ok "the catalog offers milesight/demo-capture for a Milesight device"
+# Capture it. A line crossing is pushed to the device's receiver URL while
+# the capture listens; in the field a camera's alarm HTTP push targets it.
+CAP=$(api POST "/devices/$DEV_ID/captures" -H 'Content-Type: application/json' -d '{"program":"milesight/demo-capture"}')
+CAP_ID=$(echo "$CAP" | json 'd["id"]')
+RECV="http://127.0.0.1:$PORT$(api GET "/devices/$DEV_ID" | json 'd["receiver_url"]')"
+for _ in $(seq 1 16); do
+	curl -sS -o /dev/null -X POST -H 'Content-Type: application/json' -H 'Authorization: Digest secret-not-recorded' \
+		-d '{"eventType":"LineCrossing","serialNumber":"6C00DEADBEEF","ipAddress":"10.77.0.12","time":"2026-10-09T10:00:00Z"}' "$RECV" || true
+	[ "$(api GET "/captures/$CAP_ID" | json 'd["status"]')" != running ] && break
+	sleep 0.5
+done
+for _ in $(seq 1 40); do
+	[ "$(api GET "/captures/$CAP_ID" | json 'd["status"]')" != running ] && break
+	sleep 0.25
+done
+api GET "/captures/$CAP_ID" -o "$WORK/capture.json" >/dev/null
+[ "$(json 'd["status"]' <"$WORK/capture.json")" = done ] || fail "the capture did not finish: $(cat "$WORK/capture.json")"
+python3 - "$WORK/capture.json" <<'PY' || fail "the recorded fixtures are wrong: $(cat "$WORK/capture.json")"
+import json, sys
+d = json.load(open(sys.argv[1]))
+f = {x["step_id"]: x for x in d["result"]["fixtures"]}
+assert f["device-info"]["status"] == 200 and "Milesight" in f["device-info"]["body"], f["device-info"]
+assert f["snapshot"]["binary"] and f["snapshot"]["bytes"] > 0, f["snapshot"]
+assert "m=video" in f["rtsp-main"]["body"], f["rtsp-main"]
+ev = f["line-crossing-event"]
+assert ev["kind"] == "event" and ev["status"] == 200 and "LineCrossing" in ev["body"], ev
+assert "Authorization" not in (ev.get("headers") or {}), ev["headers"]
+print("   ok: %d read-only steps recorded (%d ok); the pushed event is kept without its secret header" % (d["result"]["steps"], d["result"]["ok"]))
+PY
+# Compile the capture into a draft profile, redacting the device's identity.
+CMP=$(api POST "/captures/$CAP_ID/actions/compile" -H 'Content-Type: application/json' \
+	-d '{"profile_id":"acme/scraped-cam","vendor":"Milesight","model":"Scraped X"}')
+[ "$(echo "$CMP" | json '(d["profile"] or {}).get("profile_id","")')" = acme/scraped-cam ] ||
+	fail "the compile produced no draft: $CMP"
+[ "$(echo "$CMP" | json 'd["profile"]["version"]')" = 0.1.0 ] || fail "draft version: $(echo "$CMP" | json 'd["profile"]')"
+[ "$(echo "$CMP" | json 'd["profile"]["source"]')" = capture ] || fail "draft source: $(echo "$CMP" | json 'd["profile"]["source"]')"
+[ -n "$(api GET "/captures/$CAP_ID" | json 'd.get("draft_profile_id","")')" ] || fail "the capture is not linked to its draft"
+ok "compiled into acme/scraped-cam@0.1.0 (source capture), linked to the capture"
+# A camera can be created from the compiled draft: the round trip closes (D75).
+NEW_CID=$(api POST /cameras -H 'Content-Type: application/json' -d "{
+	\"name\": \"From scraped draft\", \"profile_id\": \"acme/scraped-cam\", \"profile_version\": \"0.1.0\",
+	\"network\": {\"ip\": \"10.77.0.30\", \"netmask\": \"255.255.255.0\"}}" | json 'd["id"]')
+[ -n "$NEW_CID" ] || fail "no camera was created from the draft"
+api DELETE "/cameras/$NEW_CID" -o /dev/null
+api DELETE "/devices/$DEV_ID" -o /dev/null
+[ "$(api GET /devices | json 'len(d["items"])')" = 0 ] || fail "the device was not deleted"
+ok "a camera is created from the scraped draft, then the draft camera and device are removed"
+# Restore the node's network: the bridge is only for the scraper's reach.
+api PATCH /settings -H 'Content-Type: application/json' -d '{"node_bridge":false}' >/dev/null
+ip link show mv-bridge >/dev/null 2>&1 && fail "the node bridge is still there"
+ip addr del 10.77.0.1/24 dev "$LAN"
+ok "the node bridge is turned off again"
+
 step "stopping removes the namespace and its interface"
 api POST "/cameras/$CID/actions/stop" >/dev/null
 wait_state "$CID" stopped 20

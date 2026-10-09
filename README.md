@@ -482,6 +482,43 @@ a local draft.
   defaults), then applies it and restarts the camera if it runs.
   **Export** downloads a version as the package it was imported as.
 
+### Scraper
+
+The scraper learns a real camera and writes a **draft profile** from what it
+sees — read only, and only against equipment you own or are allowed to
+capture. It never writes to the device.
+
+- **Register a device** in **Scraper** with its address, the ports to try
+  and, if it needs them, a username and password. Credentials are stored
+  encrypted and never leave the node: the API only ever says whether a
+  password is set, and a compiled profile carries none.
+- **Authorize it first.** Nothing probes or captures a device until you
+  confirm you own it or may capture it; an unauthorized probe is refused.
+- **Discover** sweeps a private subnet (a `/22` at most) and listens for
+  SSDP and WS-Discovery announcements, so cameras that advertise themselves
+  turn up without an address. Only private, loopback and link-local ranges
+  are allowed.
+- **Probe** opens each port read only — an HTTP `GET`/`HEAD`/`OPTIONS`, an
+  RTSP `OPTIONS`/`DESCRIBE`, a TLS peek — and reports the services it found,
+  the vendor it guessed and the authentication each needs. Every request is
+  rate-limited to protect the device.
+- **Capture** runs a **program**: a versioned, read-only recipe (shipped in
+  the catalog or installed as a `kind: program` package) whose every step is
+  a safe read. `milesight/demo-capture` reads the device information, a
+  parameter, a snapshot and the RTSP stream's description, then waits for the
+  camera to push an event. Each step is recorded as a fixture, the same shape
+  a package's recordings use.
+- **The event receiver.** Each device has a stable receiver URL; point the
+  camera's alarm HTTP push at it and the capture records the event it sends.
+  Secret headers (authorization, cookies) are dropped before anything is
+  stored.
+- **Compile** turns a finished capture into a draft profile: it derives the
+  engines, routes and a recording from the fixtures, reads the codec from the
+  SDP, and **sanitizes** the device's identity — serial, MAC and IP become
+  placeholders — so the draft carries nothing private. The draft installs
+  like any captured package, and a camera can be created from it: the round
+  trip from a real camera back to a MockVision one.
+
 ### Plugins
 
 A plugin package brings an engine MockVision does not have: a program,

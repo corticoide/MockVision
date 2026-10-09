@@ -326,3 +326,49 @@ On an x86_64 VM with a 6.18 kernel, a 640×360 stream at 15 fps:
 - The image is based on Ubuntu 24.04 and weighs about 780 MB, most of it
   FFmpeg's dependencies. A trimmed FFmpeg with only what MockVision uses
   would make it much smaller.
+
+### Scraper
+
+- **Read only, and only what is authorized (RN-17, RN-18).** The scraper
+  sends the safe read methods alone — HTTP `GET`/`HEAD`/`OPTIONS`, RTSP
+  `OPTIONS`/`DESCRIBE`, a TLS peek, a TCP connect — and a program that names
+  any other method is rejected at parse time. A device is probed or captured
+  only after the user marks it authorized; credentials are sealed with the
+  node's key and a compiled profile is sanitized, so a serial, MAC or IP
+  never leaves as itself.
+- **The read-only half of the scraper only (D44).** This v1 registers,
+  discovers, probes, captures and compiles a draft. Writing a setting back to
+  a real device to confirm a route, and the credential brute force, are later
+  work; nothing here changes a device.
+- **Vendor identification is a guess** from the HTTP `Server` header and a
+  device-info body, enough to offer the right program. It is not an
+  inventory; a device with no banner reads as unknown and still captures with
+  a generic program.
+- **Discovery is a TCP sweep plus multicast.** It connects to the chosen
+  ports across the subnet and sends one SSDP and one WS-Discovery query; it
+  does not do full ONVIF `GetDeviceInformation`, mDNS/DNS-SD service
+  resolution, or SNMP. The sweep is bounded (a `/22` at most, 1024 hosts) and
+  rate-limited, and only private, loopback and link-local ranges are allowed.
+- **Programs are versioned YAML, shipped in the catalog (D73).**
+  `milesight/demo-capture` is the one built in; more install as
+  `kind: program` packages through the same signed pipeline. A step reads one
+  route, a stream's `DESCRIBE`, or waits for a pushed event; there is no
+  branching or scripting.
+- **The event receiver is a plain HTTP sink.** A device gets a stable,
+  unguessable receiver URL (public and CSRF-exempt, since a camera, not a
+  browser, reaches it); the capture job registers an in-memory receiver under
+  that token while it runs and records the first event pushed to it. Secret
+  headers (authorization, cookie, forwarding) are dropped before the fixture
+  is stored. Only `http_push` events are captured this way — a camera that
+  raises events only over MQTT or `attach` has none to record here.
+- **Ports are mapped when a camera is local.** A program names a device's
+  real ports (80, 554); a simulated camera on the same host listens on
+  ephemeral ports, so a device may carry a port map (logical → actual). A
+  real camera on the LAN needs none, and the node reaches it through the node
+  bridge (D26), the same path the e2e uses.
+- **Compile derives a draft, not a verified profile.** It builds the engines,
+  routes and one recording from the fixtures and reads the codec from the
+  SDP; resolution and the finer stream parameters are left at the profile's
+  defaults for the user to confirm. The draft installs as a *captured*
+  package (its provenance is the capture) and a camera can be created from
+  it, but it reaches *verified* only once signed.

@@ -509,6 +509,43 @@ como borrador local.
   cámara si está funcionando. **Exportar** descarga una versión como el
   paquete con que se importó.
 
+### Scraper
+
+El scraper aprende una cámara real y escribe un **perfil borrador** a partir
+de lo que ve: solo lectura, y únicamente contra equipos que sean tuyos o que
+tengas permiso de capturar. Nunca le escribe al dispositivo.
+
+- **Registrás un equipo** en **Scraper** con su dirección, los puertos a
+  probar y, si los necesita, un usuario y una contraseña. Las credenciales se
+  guardan cifradas y no salen del nodo: la API solo dice si hay una
+  contraseña puesta, y un perfil compilado no lleva ninguna.
+- **Autorizalo primero.** Nada sondea ni captura un equipo hasta que confirmás
+  que es tuyo o que podés capturarlo; un sondeo sin autorizar se rechaza.
+- **Descubrir** barre una subred privada (un `/22` como máximo) y escucha los
+  anuncios SSDP y WS-Discovery, así las cámaras que se anuncian aparecen sin
+  dirección. Solo se permiten rangos privados, de loopback y link-local.
+- **Sondear** abre cada puerto en solo lectura —un `GET`/`HEAD`/`OPTIONS` de
+  HTTP, un `OPTIONS`/`DESCRIBE` de RTSP, una mirada a TLS— e informa los
+  servicios que encontró, el fabricante que adivinó y la autenticación que
+  pide cada uno. Cada pedido tiene límite de tasa para proteger al equipo.
+- **Capturar** corre un **programa**: una receta versionada y de solo lectura
+  (viene en el catálogo o se instala como un paquete `kind: program`) en la
+  que cada paso es una lectura segura. `milesight/demo-capture` lee la
+  información del equipo, un parámetro, una captura y la descripción del
+  stream RTSP, y después espera a que la cámara empuje un evento. Cada paso se
+  graba como un fixture, con la misma forma que las grabaciones de un paquete.
+- **El receptor de eventos.** Cada equipo tiene una URL de receptor estable;
+  apuntás ahí el envío HTTP de la alarma de la cámara y la captura graba el
+  evento que manda. Los encabezados secretos (autorización, cookies) se
+  descartan antes de guardar nada.
+- **Compilar** convierte una captura terminada en un perfil borrador: deriva
+  los motores, las rutas y una grabación a partir de los fixtures, lee el
+  códec del SDP y **sanea** la identidad del equipo —el serial, la MAC y la IP
+  pasan a ser marcadores— para que el borrador no lleve nada privado. El
+  borrador se instala como cualquier paquete capturado, y se puede crear una
+  cámara a partir de él: la vuelta completa, de una cámara real de regreso a
+  una de MockVision.
+
 ### Plugins
 
 Un paquete de plugin trae un motor que MockVision no tiene: un programa,
