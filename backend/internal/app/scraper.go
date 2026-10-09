@@ -140,6 +140,16 @@ func (s *Service) installProgram(ctx context.Context, actor Actor, res *pkg.Resu
 	return &ImportResult{Program: &v, Report: rep, Created: true}, nil
 }
 
+// hasEventStep says whether a program waits for a pushed event.
+func hasEventStep(prog *scraper.Program) bool {
+	for _, st := range prog.Steps {
+		if st.Kind == "event" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) programByPackage(ctx context.Context, packageID string) (*ProgramView, error) {
 	rows, err := s.store.R().ListPrograms(ctx)
 	if err != nil {
@@ -249,7 +259,16 @@ func (s *Service) runCapture(ctx context.Context, run *worker.Run) (any, error) 
 	}
 	run.Step("Capturing", 0.1)
 	prober := scraper.NewProber(t, float64(s.scrapeRate()))
-	res := scraper.RunProgram(ctx, prober, prog)
+	// A program with event steps listens on the device's receiver while
+	// it runs, so what the device pushes is recorded (feature 19).
+	var events scraper.Events
+	if hasEventStep(prog) && d.ReceiverToken != "" {
+		rec := s.listen(d.ReceiverToken)
+		defer s.unlisten(d.ReceiverToken)
+		events = &captureEvents{rec: rec}
+		run.Logf("listening for pushed events at /api/v1/scraper/receive/%s", d.ReceiverToken)
+	}
+	res := scraper.RunProgram(ctx, prober, prog, events)
 	var det scraper.Detected
 	_ = json.Unmarshal([]byte(d.DetectedJson), &det)
 	res.Vendor = det.Vendor
@@ -293,4 +312,102 @@ func (s *Service) ListCaptures(ctx context.Context, deviceID string) ([]CaptureV
 
 func cut(s, sep string) (string, string, bool) {
 	return strings.Cut(s, sep)
+}
+
+// --- Event receiver (feature 19) ---
+
+// MaxPushBody bounds a recorded push payload. ReceiveLimit bounds what
+// the receiver reads from the request.
+const (
+	MaxPushBody  = 1 << 20
+	ReceiveLimit = 2 << 20
+)
+
+// pushReceiver collects what a device pushes while a capture listens.
+type pushReceiver struct {
+	ch chan scraper.Fixture
+}
+
+// captureEvents is the Events waiter a capture uses: it blocks on the
+// device's receiver for a pushed event of the asked type.
+type captureEvents struct {
+	rec *pushReceiver
+}
+
+func (e *captureEvents) Wait(ctx context.Context, step scraper.Step) (scraper.Fixture, bool) {
+	deadline := time.After(time.Duration(step.TimeoutS) * time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return scraper.Fixture{}, false
+		case <-deadline:
+			return scraper.Fixture{}, false
+		case f := <-e.rec.ch:
+			if step.Type != "" && f.Query["type"] != "" && f.Query["type"] != step.Type {
+				continue
+			}
+			f.StepID = step.ID
+			f.Kind = "event"
+			f.Stream = step.Type
+			f.Vary = step.Vary
+			return f, true
+		}
+	}
+}
+
+// listen registers a receiver for a device's token while a capture runs.
+func (s *Service) listen(token string) *pushReceiver {
+	r := &pushReceiver{ch: make(chan scraper.Fixture, 16)}
+	s.mu.Lock()
+	s.receivers[token] = r
+	s.mu.Unlock()
+	return r
+}
+
+func (s *Service) unlisten(token string) {
+	s.mu.Lock()
+	delete(s.receivers, token)
+	s.mu.Unlock()
+}
+
+// droppedPushHeaders never enter a fixture: they carry credentials or
+// routing that a profile must not keep (RN-18).
+var droppedPushHeaders = map[string]bool{"authorization": true, "cookie": true, "x-forwarded-for": true, "host": true}
+
+// ReceivePush records what a device pushed to its receiver URL and hands
+// it to a capture listening for it. It answers 200, as a camera's target
+// does. A payload never carries into the record a secret header (RN-18).
+func (s *Service) ReceivePush(ctx context.Context, token, method, path string, query map[string]string, header map[string][]string, body []byte) bool {
+	d, err := s.store.R().GetDeviceByToken(ctx, token)
+	if err != nil || token == "" {
+		return false
+	}
+	s.mu.Lock()
+	r := s.receivers[token]
+	s.mu.Unlock()
+	if r == nil {
+		return true // acknowledged, but no capture is listening
+	}
+	if len(body) > MaxPushBody {
+		body = body[:MaxPushBody]
+	}
+	headers := map[string]string{}
+	for k, v := range header {
+		if droppedPushHeaders[strings.ToLower(k)] || len(v) == 0 {
+			continue
+		}
+		headers[k] = v[0]
+	}
+	ct := ""
+	if h, ok := header["Content-Type"]; ok && len(h) > 0 {
+		ct = h[0]
+	}
+	f := scraper.Fixture{Kind: "event", Method: method, Path: path, Query: query, Status: 200, ContentType: ct,
+		Headers: headers, Body: string(body), Bytes: len(body), At: time.Now().UTC()}
+	select {
+	case r.ch <- f:
+	default:
+	}
+	_ = d
+	return true
 }

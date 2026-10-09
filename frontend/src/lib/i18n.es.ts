@@ -1235,4 +1235,5 @@ export const es: Record<string, string> = {
   "Draft profile": "Perfil borrador",
   "Compile to a draft profile (coming next)": "Compilar a un perfil borrador (próximamente)",
   "Compile": "Compilar",
+  "Event receiver URL (point the camera's alarm here):": "URL del receptor de eventos (apuntá acá la alarma de la cámara):",
 };

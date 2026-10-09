@@ -19,10 +19,19 @@ type CaptureResult struct {
 	OK       int       `json:"ok"`
 }
 
+// Events waits for a payload a device pushes during a capture (feature 19).
+type Events interface {
+	// Wait blocks until the device pushes an event the step asks for, or
+	// the step's timeout passes. It returns the recorded fixture and
+	// whether one arrived.
+	Wait(ctx context.Context, step Step) (Fixture, bool)
+}
+
 // RunProgram runs each read-only step of a program against the device and
 // records what it answered. A step that fails is recorded with its error
-// and the capture goes on.
-func RunProgram(ctx context.Context, p *Prober, prog *Program) CaptureResult {
+// and the capture goes on. Event steps wait for what the device pushes,
+// through events (nil skips them).
+func RunProgram(ctx context.Context, p *Prober, prog *Program, events Events) CaptureResult {
 	res := CaptureResult{Program: prog.ID, Steps: len(prog.Steps)}
 	for _, step := range prog.Steps {
 		if ctx.Err() != nil {
@@ -47,6 +56,17 @@ func RunProgram(ctx context.Context, p *Prober, prog *Program) CaptureResult {
 				f.Body = base64.StdEncoding.EncodeToString(resp.Body)
 			} else {
 				f.Body = string(resp.Body)
+			}
+		case "event":
+			f.Kind = "event"
+			if events == nil {
+				f.Error = "no event receiver"
+				break
+			}
+			if got, ok := events.Wait(ctx, step); ok {
+				f = got
+			} else {
+				f.Error = "no event arrived before the timeout"
 			}
 		case "rtsp":
 			f.Method = step.Method

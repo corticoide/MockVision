@@ -41,6 +41,10 @@ type Step struct {
 	Auth   bool              `yaml:"auth" json:"auth,omitempty"`
 	Binary bool              `yaml:"binary" json:"binary,omitempty"`
 	Stream string            `yaml:"stream" json:"stream,omitempty"`
+	// Type and TimeoutS apply to an event step: the event the device
+	// should push and how long to wait for it.
+	Type     string `yaml:"type" json:"type,omitempty"`
+	TimeoutS int    `yaml:"timeout" json:"timeout,omitempty"`
 	// Vary names the fixture fields that change on every answer, compared
 	// by type when the profile is replayed (serial, mac, ip, timestamp).
 	Vary []string `yaml:"vary" json:"vary,omitempty"`
@@ -101,6 +105,10 @@ func ParseProgram(data []byte) (*Program, error) {
 			}
 			if s.Port == 0 {
 				s.Port = 554
+			}
+		case "event":
+			if s.TimeoutS <= 0 {
+				s.TimeoutS = 30
 			}
 		default:
 			return nil, fmt.Errorf("step %s: unknown kind %q", s.ID, s.Kind)

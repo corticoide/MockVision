@@ -173,3 +173,66 @@ func waitCapture(t *testing.T, svc *Service, id string) *CaptureView {
 	t.Fatal("capture did not finish")
 	return nil
 }
+
+func TestCaptureRecordsPushedEvent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	cam := createCamera(t, svc, "Gate", true)
+	httpHost, httpPort := hostPortOf(t, httpBase(t, cam))
+	rtspPort := rtspPortOf(t, cam)
+	yes := true
+	d, err := svc.CreateDevice(ctx, testActor, DeviceInput{Name: "Sim", Host: httpHost, Username: "admin", Password: strptr("ms1234"),
+		PortMap: map[int]int{80: httpPort, 554: rtspPort}, Authorized: yes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := svc.store.R().GetDevice(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := full.ReceiverToken
+	if token == "" || d.ReceiverURL != "/api/v1/scraper/receive/"+token {
+		t.Fatalf("receiver url=%q token=%q", d.ReceiverURL, token)
+	}
+
+	c, err := svc.StartCapture(ctx, testActor, d.ID, "milesight/demo-capture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Once the capture is listening, deliver a pushed event, with a secret
+	// header that must not be recorded (RN-18).
+	for i := 0; i < 100; i++ {
+		svc.mu.Lock()
+		_, ok := svc.receivers[token]
+		svc.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	body := []byte(`{"eventType":"LineCrossing","serialNumber":"6C0012ABCDEF","time":"2026-10-09T10:00:00Z"}`)
+	hdr := map[string][]string{"Content-Type": {"application/json"}, "Authorization": {"Digest secret"}}
+	if ok := svc.ReceivePush(ctx, token, "POST", "/alarm", map[string]string{}, hdr, body); !ok {
+		t.Fatal("push not accepted")
+	}
+
+	c = waitCapture(t, svc, c.ID)
+	if c.Result == nil {
+		t.Fatalf("no result: %+v", c)
+	}
+	var ev *struct{ found bool }
+	for _, f := range c.Result.Fixtures {
+		if f.StepID == "line-crossing-event" {
+			if f.Kind != "event" || f.Status != 200 || !strings.Contains(f.Body, "LineCrossing") {
+				t.Fatalf("event fixture=%+v", f)
+			}
+			if _, bad := f.Headers["Authorization"]; bad {
+				t.Fatalf("a secret header was recorded: %+v", f.Headers)
+			}
+			ev = &struct{ found bool }{true}
+		}
+	}
+	if ev == nil {
+		t.Fatalf("the pushed event was not recorded: %+v", c.Result.Fixtures)
+	}
+}

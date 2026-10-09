@@ -583,6 +583,19 @@ func (s *Server) handleProbeDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+// handleReceivePush records what a device pushes to its receiver URL. It is
+// reached by a camera, not a browser, so it needs no session.
+func (s *Server) handleReceivePush(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, app.ReceiveLimit))
+	query := map[string]string{}
+	for k := range r.URL.Query() {
+		query[k] = r.URL.Query().Get(k)
+	}
+	s.svc.ReceivePush(r.Context(), r.PathValue("token"), r.Method, r.URL.Path, query, r.Header, body)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
+}
+
 func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
 	vendor := r.URL.Query().Get("vendor")
 	if id := r.URL.Query().Get("device"); id != "" {

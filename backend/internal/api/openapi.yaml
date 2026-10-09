@@ -1789,7 +1789,7 @@ components:
         details: { type: array, items: { type: string }, description: "What changed in it, as path: before → after" }
     Device:
       type: object
-      required: [id, name, host, ports, has_password, kind, authorized, created_at, updated_at]
+      required: [id, name, host, ports, has_password, kind, authorized, receiver_url, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1798,6 +1798,7 @@ components:
         username: { type: string }
         has_password: { type: boolean }
         port_map: { type: object, additionalProperties: { type: integer }, description: "Logical program port to the device's actual port" }
+        receiver_url: { type: string, description: "Where to point the camera's alarm/push target so a capture records its events" }
         kind: { type: string, enum: [real, simulated], description: "simulated when the host is one of this node's cameras (D75)" }
         authorized: { type: boolean }
         detected: { $ref: "#/components/schemas/Detected" }

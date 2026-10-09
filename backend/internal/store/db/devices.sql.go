@@ -83,7 +83,7 @@ func (q *Queries) GetCapture(ctx context.Context, id string) (Capture, error) {
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json FROM devices WHERE id = ?1
+SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json, receiver_token FROM devices WHERE id = ?1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
@@ -102,6 +102,32 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PortMapJson,
+		&i.ReceiverToken,
+	)
+	return i, err
+}
+
+const getDeviceByToken = `-- name: GetDeviceByToken :one
+SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json, receiver_token FROM devices WHERE receiver_token = ?1
+`
+
+func (q *Queries) GetDeviceByToken(ctx context.Context, receiverToken string) (Device, error) {
+	row := q.db.QueryRowContext(ctx, getDeviceByToken, receiverToken)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Host,
+		&i.PortsJson,
+		&i.Username,
+		&i.SecretEnc,
+		&i.Kind,
+		&i.Authorized,
+		&i.DetectedJson,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PortMapJson,
+		&i.ReceiverToken,
 	)
 	return i, err
 }
@@ -162,23 +188,24 @@ func (q *Queries) InsertCapture(ctx context.Context, arg InsertCaptureParams) er
 }
 
 const insertDevice = `-- name: InsertDevice :exec
-INSERT INTO devices (id, name, host, ports_json, port_map_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+INSERT INTO devices (id, name, host, ports_json, port_map_json, username, secret_enc, kind, authorized, detected_json, receiver_token, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
 `
 
 type InsertDeviceParams struct {
-	ID           string
-	Name         string
-	Host         string
-	PortsJson    string
-	PortMapJson  string
-	Username     string
-	SecretEnc    []byte
-	Kind         string
-	Authorized   int64
-	DetectedJson string
-	CreatedAt    int64
-	UpdatedAt    int64
+	ID            string
+	Name          string
+	Host          string
+	PortsJson     string
+	PortMapJson   string
+	Username      string
+	SecretEnc     []byte
+	Kind          string
+	Authorized    int64
+	DetectedJson  string
+	ReceiverToken string
+	CreatedAt     int64
+	UpdatedAt     int64
 }
 
 func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) error {
@@ -193,6 +220,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) erro
 		arg.Kind,
 		arg.Authorized,
 		arg.DetectedJson,
+		arg.ReceiverToken,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -309,7 +337,7 @@ func (q *Queries) ListCapturesByDevice(ctx context.Context, arg ListCapturesByDe
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json FROM devices ORDER BY created_at DESC
+SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json, receiver_token FROM devices ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
@@ -334,6 +362,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PortMapJson,
+			&i.ReceiverToken,
 		); err != nil {
 			return nil, err
 		}

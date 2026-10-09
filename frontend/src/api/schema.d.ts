@@ -1703,6 +1703,8 @@ export interface components {
             port_map?: {
                 [key: string]: number;
             };
+            /** @description Where to point the camera's alarm/push target so a capture records its events */
+            receiver_url: string;
             /**
              * @description simulated when the host is one of this node's cameras (D75)
              * @enum {string}

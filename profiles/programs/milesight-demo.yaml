@@ -38,3 +38,8 @@ steps:
     path: /main
     auth: true
     stream: main
+  - id: line-crossing-event
+    kind: event
+    type: line_crossing
+    timeout: 6
+    vary: [serial, mac, ip, timestamp, uuid]

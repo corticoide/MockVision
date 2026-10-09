@@ -28,6 +28,7 @@ type DeviceView struct {
 	Username    string            `json:"username,omitempty"`
 	HasPassword bool              `json:"has_password"`
 	PortMap     map[int]int       `json:"port_map,omitempty"`
+	ReceiverURL string            `json:"receiver_url"`
 	Kind        string            `json:"kind"`
 	Authorized  bool              `json:"authorized"`
 	Detected    *scraper.Detected `json:"detected,omitempty"`
@@ -57,7 +58,8 @@ func deviceView(d db.Device) DeviceView {
 	var pm map[int]int
 	_ = json.Unmarshal([]byte(d.PortMapJson), &pm)
 	v := DeviceView{ID: d.ID, Name: d.Name, Host: d.Host, Ports: ports, PortMap: pm, Username: d.Username, HasPassword: len(d.SecretEnc) > 0,
-		Kind: d.Kind, Authorized: store.Bool(d.Authorized), CreatedAt: store.Time(d.CreatedAt), UpdatedAt: store.Time(d.UpdatedAt)}
+		ReceiverURL: "/api/v1/scraper/receive/" + d.ReceiverToken,
+		Kind:        d.Kind, Authorized: store.Bool(d.Authorized), CreatedAt: store.Time(d.CreatedAt), UpdatedAt: store.Time(d.UpdatedAt)}
 	if d.DetectedJson != "" && d.DetectedJson != "{}" {
 		var det scraper.Detected
 		if json.Unmarshal([]byte(d.DetectedJson), &det) == nil && det.Reachable {
@@ -117,7 +119,7 @@ func (s *Service) CreateDevice(ctx context.Context, actor Actor, in DeviceInput)
 	err := s.store.W().InsertDevice(ctx, db.InsertDeviceParams{
 		ID: id, Name: strings.TrimSpace(in.Name), Host: host, PortsJson: string(portsJSON), PortMapJson: string(portMap),
 		Username: strings.TrimSpace(in.Username), SecretEnc: secret, Kind: s.deviceKind(ctx, host), Authorized: store.Int(in.Authorized),
-		DetectedJson: "{}", CreatedAt: now, UpdatedAt: now,
+		DetectedJson: "{}", ReceiverToken: ulid.Make().String(), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return nil, err

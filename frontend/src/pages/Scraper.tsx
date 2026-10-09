@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { ApiError, type DeviceInput, type Found, errorMessage } from "@/api/client";
 import { useCaptures, useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice, usePrograms, useStartCapture } from "@/api/queries";
 import { Badge, Mono } from "@/components/badges";
+import { CopyButton } from "@/components/CopyButton";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice, PageHeader } from "@/components/ui/card";
@@ -319,7 +320,7 @@ function DiscoverDialog({ onClose, onRegister }: { onClose: () => void; onRegist
   );
 }
 
-function DeviceCaptures({ device }: { device: { id: string; authorized: boolean; detected?: { vendor?: string } | null } }) {
+function DeviceCaptures({ device }: { device: { id: string; authorized: boolean; receiver_url: string } }) {
   const t = useT();
   const { data: programs } = usePrograms(device.id);
   const { data: captures } = useCaptures(device.id, true);
@@ -355,6 +356,11 @@ function DeviceCaptures({ device }: { device: { id: string; authorized: boolean;
         >
           <ScanSearch /> {t("Capture")}
         </Button>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-muted">
+        <span>{t("Event receiver URL (point the camera's alarm here):")}</span>
+        <Mono className="select-all">{device.receiver_url}</Mono>
+        <CopyButton text={device.receiver_url} />
       </div>
       {!captures?.length ? (
         <p className="text-[13px] text-muted">{t("No captures yet.")}</p>

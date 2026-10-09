@@ -1,9 +1,12 @@
 -- name: InsertDevice :exec
-INSERT INTO devices (id, name, host, ports_json, port_map_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at)
-VALUES (@id, @name, @host, @ports_json, @port_map_json, @username, @secret_enc, @kind, @authorized, @detected_json, @created_at, @updated_at);
+INSERT INTO devices (id, name, host, ports_json, port_map_json, username, secret_enc, kind, authorized, detected_json, receiver_token, created_at, updated_at)
+VALUES (@id, @name, @host, @ports_json, @port_map_json, @username, @secret_enc, @kind, @authorized, @detected_json, @receiver_token, @created_at, @updated_at);
 
 -- name: GetDevice :one
 SELECT * FROM devices WHERE id = @id;
+
+-- name: GetDeviceByToken :one
+SELECT * FROM devices WHERE receiver_token = @receiver_token;
 
 -- name: ListDevices :many
 SELECT * FROM devices ORDER BY created_at DESC;

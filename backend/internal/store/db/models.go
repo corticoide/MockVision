@@ -195,18 +195,19 @@ type Delivery struct {
 }
 
 type Device struct {
-	ID           string
-	Name         string
-	Host         string
-	PortsJson    string
-	Username     string
-	SecretEnc    []byte
-	Kind         string
-	Authorized   int64
-	DetectedJson string
-	CreatedAt    int64
-	UpdatedAt    int64
-	PortMapJson  string
+	ID            string
+	Name          string
+	Host          string
+	PortsJson     string
+	Username      string
+	SecretEnc     []byte
+	Kind          string
+	Authorized    int64
+	DetectedJson  string
+	CreatedAt     int64
+	UpdatedAt     int64
+	PortMapJson   string
+	ReceiverToken string
 }
 
 type Event struct {

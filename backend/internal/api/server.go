@@ -260,6 +260,9 @@ func (s *Server) Handler() http.Handler {
 	panel("POST /api/v1/devices/{id}/captures", s.handleStartCapture)
 	auth("GET /api/v1/devices/{id}/captures", s.handleListCaptures)
 	auth("GET /api/v1/captures/{id}", s.handleGetCapture)
+	for _, m := range []string{"POST", "PUT", "GET"} {
+		pub(m+" /api/v1/scraper/receive/{token}", s.handleReceivePush)
+	}
 	auth("GET /api/v1/devices/{id}", s.handleGetDevice)
 	panel("PATCH /api/v1/devices/{id}", s.handleUpdateDevice)
 	panel("DELETE /api/v1/devices/{id}", s.handleDeleteDevice)
@@ -405,6 +408,12 @@ func (s *Server) unauthenticated(w http.ResponseWriter, r *http.Request) {
 // one on its own, and those requests ignore the cookie.
 func (s *Server) csrf(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The scraper's event receiver is reached by a camera, not a
+		// browser: it carries no cookie and needs no CSRF guard.
+		if strings.HasPrefix(r.URL.Path, "/api/v1/scraper/receive/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if _, bearer := bearerToken(r); bearer || safeMethod(r.Method) {
 			next.ServeHTTP(w, r)
 			return

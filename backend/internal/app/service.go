@@ -76,13 +76,14 @@ type Service struct {
 	hashes  *hashLimiter
 	jobs    *worker.Runner
 
-	mu       sync.Mutex
-	sessions map[string]*session
-	retries  map[string]*retryState
-	encodes  map[string]*refMutex
-	opLocks  map[string]*sync.Mutex
-	exits    map[string]netctl.Exit
-	regens   map[string]*regenState
+	mu        sync.Mutex
+	sessions  map[string]*session
+	receivers map[string]*pushReceiver
+	retries   map[string]*retryState
+	encodes   map[string]*refMutex
+	opLocks   map[string]*sync.Mutex
+	exits     map[string]netctl.Exit
+	regens    map[string]*regenState
 	// netnsNames reserves namespace names, name to camera ID.
 	netnsNames map[string]string
 	// claims are the addresses running DHCP cameras hold, to camera ID.
@@ -185,6 +186,7 @@ func New(opts Options, st *store.Store, pub Publisher) (*Service, error) {
 		login:        newLoginGuard(),
 		hashes:       newHashLimiter(),
 		sessions:     map[string]*session{},
+		receivers:    map[string]*pushReceiver{},
 		retries:      map[string]*retryState{},
 		encodes:      map[string]*refMutex{},
 		opLocks:      map[string]*sync.Mutex{},
