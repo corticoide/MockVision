@@ -20,6 +20,7 @@ export type CameraLog = Schemas["CameraLog"];
 export type Device = Schemas["Device"];
 export type DeviceInput = Schemas["DeviceInput"];
 export type Detected = Schemas["Detected"];
+export type Found = Schemas["Found"];
 export type UpgradePlan = Schemas["UpgradePlan"];
 export type UpgradeItem = Schemas["UpgradeItem"];
 export type SelfTestResult = Schemas["SelfTestResult"];

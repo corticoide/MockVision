@@ -581,6 +581,13 @@ export function useDeleteDevice() {
   });
 }
 
+/** Looks for cameras on the LAN read-only (RN-17). */
+export function useDiscover() {
+  return useMutation({
+    mutationFn: async (body: { cidr?: string; multicast?: boolean }) => unwrap(await api.POST("/scraper/actions/discover", { body })).items,
+  });
+}
+
 /** Looks at a device read-only and records what it found (RN-17). */
 export function useProbeDevice() {
   const qc = useQueryClient();

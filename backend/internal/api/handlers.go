@@ -583,6 +583,20 @@ func (s *Server) handleProbeDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	var in app.DiscoverInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	found, err := s.svc.Discover(r.Context(), actor(r), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": found})
+}
+
 func (s *Server) handleListTrustedKeys(w http.ResponseWriter, r *http.Request) {
 	list, err := s.svc.ListTrustedKeys(r.Context())
 	if err != nil {

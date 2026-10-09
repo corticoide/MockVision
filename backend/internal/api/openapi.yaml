@@ -346,6 +346,37 @@ paths:
         "201": { description: Registered, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /scraper/actions/discover:
+    post:
+      tags: [scraper]
+      operationId: discover
+      summary: Look for cameras on the LAN, read-only (panel session only)
+      description: |
+        A connect sweep of a private subnet and best-effort multicast
+        queries (SSDP, WS-Discovery). Bounded to private, loopback or
+        link-local ranges of /22 or smaller, and paced, so it stays on the
+        LAN (RN-17).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cidr: { type: string, description: "Subnet to sweep, e.g. 192.168.1.0/24; private ranges only" }
+                multicast: { type: boolean }
+      responses:
+        "200":
+          description: Devices found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Found" } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /devices/{id}:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1718,6 +1749,28 @@ components:
         username: { type: string }
         password: { type: string, description: "Write-only; omit to keep, empty string to clear" }
         authorized: { type: boolean, description: You own the device or are allowed to capture it (RN-17) }
+    Found:
+      type: object
+      required: [host, via, open_ports, services]
+      properties:
+        host: { type: string }
+        via: { type: string, enum: [sweep, ssdp, ws-discovery, mdns] }
+        open_ports: { type: array, items: { type: integer } }
+        services:
+          type: array
+          items: { $ref: "#/components/schemas/Service" }
+        vendor: { type: string }
+        server: { type: string }
+        url: { type: string }
+    Service:
+      type: object
+      required: [port, proto]
+      properties:
+        port: { type: integer }
+        proto: { type: string }
+        server: { type: string }
+        auth: { type: string }
+        note: { type: string }
     Detected:
       type: object
       required: [at, open_ports, services, reachable]
@@ -1730,15 +1783,7 @@ components:
         firmware: { type: string }
         services:
           type: array
-          items:
-            type: object
-            required: [port, proto]
-            properties:
-              port: { type: integer }
-              proto: { type: string, enum: [http, https, rtsp, onvif, snmp, unknown] }
-              server: { type: string }
-              auth: { type: string, enum: [basic, digest, none, ""] }
-              note: { type: string }
+          items: { $ref: "#/components/schemas/Service" }
     Plugin:
       type: object
       required: [id, package_id, package, engine, version, role, permissions, sockets, emits, signature_status, sha256, enabled, installed_at]

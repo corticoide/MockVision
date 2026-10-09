@@ -1,7 +1,7 @@
-import { Radar, ScanSearch, Trash2 } from "lucide-react";
+import { Radar, ScanSearch, Trash2, Wifi } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { ApiError, type DeviceInput, errorMessage } from "@/api/client";
-import { useCreateDevice, useDeleteDevice, useDevices, useProbeDevice } from "@/api/queries";
+import { ApiError, type DeviceInput, type Found, errorMessage } from "@/api/client";
+import { useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice } from "@/api/queries";
 import { Badge, Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,8 @@ import { useT } from "@/lib/i18n";
 export function ScraperPage() {
   const t = useT();
   const { data: devices, isLoading, error } = useDevices();
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<Partial<DeviceInput> | false>(false);
+  const [discovering, setDiscovering] = useState(false);
   const probe = useProbeDevice();
   const remove = useDeleteDevice();
   return (
@@ -26,9 +27,14 @@ export function ScraperPage() {
           "Observe a camera you own or are authorized to capture and compile what it answers into a draft profile. Every probe is read-only and rate-limited.",
         )}
         actions={
-          <Button variant="primary" onClick={() => setAdding(true)}>
-            <Radar /> {t("Register a device")}
-          </Button>
+          <>
+            <Button onClick={() => setDiscovering(true)}>
+              <Wifi /> {t("Discover")}
+            </Button>
+            <Button variant="primary" onClick={() => setAdding({})}>
+              <Radar /> {t("Register a device")}
+            </Button>
+          </>
         }
       />
       {error && <Notice tone="error">{errorMessage(error)}</Notice>}
@@ -139,16 +145,17 @@ export function ScraperPage() {
           </Table>
         )}
       </Card>
-      {adding && <RegisterDialog onClose={() => setAdding(false)} />}
+      {adding && <RegisterDialog initial={adding} onClose={() => setAdding(false)} />}
+      {discovering && <DiscoverDialog onClose={() => setDiscovering(false)} onRegister={(d) => { setDiscovering(false); setAdding(d); }} />}
     </>
   );
 }
 
-function RegisterDialog({ onClose }: { onClose: () => void }) {
+function RegisterDialog({ initial, onClose }: { initial: Partial<DeviceInput>; onClose: () => void }) {
   const t = useT();
   const create = useCreateDevice();
-  const [form, setForm] = useState<DeviceInput>({ name: "", host: "", ports: [], username: "", password: "", authorized: false });
-  const [ports, setPorts] = useState("");
+  const [form, setForm] = useState<DeviceInput>({ name: initial.name ?? "", host: initial.host ?? "", ports: [], username: "", password: "", authorized: false });
+  const [ports, setPorts] = useState((initial.ports ?? []).join(", "));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const set = <K extends keyof DeviceInput>(k: K, v: DeviceInput[K]) => setForm({ ...form, [k]: v });
   const submit = (e: FormEvent) => {
@@ -215,6 +222,88 @@ function RegisterDialog({ onClose }: { onClose: () => void }) {
           label={t("I own this device or am authorized to capture it (required before any probe).")}
         />
       </form>
+    </Dialog>
+  );
+}
+
+function DiscoverDialog({ onClose, onRegister }: { onClose: () => void; onRegister: (d: Partial<DeviceInput>) => void }) {
+  const t = useT();
+  const discover = useDiscover();
+  const [cidr, setCidr] = useState("");
+  const [multicast, setMulticast] = useState(true);
+  const [found, setFound] = useState<Found[] | null>(null);
+  const [error, setError] = useState("");
+  const run = (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setFound(null);
+    discover.mutate(
+      { cidr: cidr.trim() || undefined, multicast },
+      {
+        onSuccess: (items) => setFound(items),
+        onError: (err) => setError(errorMessage(err)),
+      },
+    );
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={t("Discover cameras")}
+      description={t("A read-only connect sweep of a private subnet and best-effort multicast queries. It never leaves the LAN (RN-17).")}
+      footer={<Button onClick={onClose}>{t("Close")}</Button>}
+    >
+      <form onSubmit={run} className="flex items-end gap-2">
+        <Field label={t("Subnet")} hint={t("Private ranges only, /22 or smaller")} className="flex-1">
+          <Input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="192.168.1.0/24" className="font-mono" />
+        </Field>
+        <Checkbox checked={multicast} onCheckedChange={setMulticast} label={t("Multicast")} className="mb-2" />
+        <Button type="submit" variant="primary" disabled={discover.isPending} className="mb-2">
+          {discover.isPending ? t("Scanning…") : t("Scan")}
+        </Button>
+      </form>
+      {error && (
+        <Notice tone="error">
+          <span className="mt-2 block">{error}</span>
+        </Notice>
+      )}
+      {found && (
+        <div className="mt-3">
+          {found.length === 0 ? (
+            <Empty title={t("Nothing answered")}>{t("No camera answered on the subnet or by multicast.")}</Empty>
+          ) : (
+            <Table>
+              <THead>
+                <tr>
+                  <TH>{t("Address")}</TH>
+                  <TH>{t("Found by")}</TH>
+                  <TH>{t("Ports")}</TH>
+                  <TH className="text-right" />
+                </tr>
+              </THead>
+              <TBody>
+                {found.map((f) => (
+                  <TR key={f.host}>
+                    <TD>
+                      <Mono>{f.host}</Mono>
+                      {f.vendor && <div className="text-xs text-muted">{f.vendor}</div>}
+                    </TD>
+                    <TD className="text-xs text-muted">{f.via}</TD>
+                    <TD>
+                      <Mono className="text-xs">{(f.open_ports ?? []).join(", ") || "—"}</Mono>
+                    </TD>
+                    <TD className="text-right">
+                      <Button size="sm" onClick={() => onRegister({ name: f.vendor ? `${f.vendor} ${f.host}` : f.host, host: f.host, ports: f.open_ports })}>
+                        {t("Register")}
+                      </Button>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          )}
+        </div>
+      )}
     </Dialog>
   );
 }

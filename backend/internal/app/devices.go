@@ -246,3 +246,40 @@ func intsOrEmpty(v []int) []int {
 	}
 	return v
 }
+
+// discoverTimeout bounds a discovery sweep.
+const discoverTimeout = 2 * time.Minute
+
+// sweepRate is how fast a subnet sweep goes: higher than a single
+// device's probe rate, since it touches each host once, but still paced so
+// it does not flood the LAN (RN-17).
+const sweepRate = 50
+
+// DiscoverInput asks for a discovery: a subnet to sweep and whether to
+// send multicast queries.
+type DiscoverInput struct {
+	CIDR      string `json:"cidr"`
+	Multicast bool   `json:"multicast"`
+}
+
+// Discover looks for cameras on the LAN, read-only: a connect sweep of a
+// private subnet and best-effort multicast queries (D44, RN-17). It is
+// bounded to private ranges and paced.
+func (s *Service) Discover(ctx context.Context, actor Actor, in DiscoverInput) ([]scraper.Found, error) {
+	if in.CIDR == "" && !in.Multicast {
+		return nil, domain.Invalid("cidr", "give a subnet to sweep or ask for multicast discovery")
+	}
+	if in.CIDR != "" {
+		if _, err := scraper.ValidateCIDR(in.CIDR); err != nil {
+			return nil, domain.Invalid("cidr", "%v", err)
+		}
+	}
+	dctx, cancel := context.WithTimeout(ctx, discoverTimeout)
+	defer cancel()
+	found, err := scraper.Discover(dctx, scraper.DiscoverOptions{CIDR: in.CIDR, Multicast: in.Multicast, Rate: sweepRate})
+	if err != nil {
+		return nil, err
+	}
+	s.audit(ctx, actor, "scraper.discover", "scraper", "", map[string]any{"cidr": in.CIDR, "multicast": in.Multicast, "found": len(found)})
+	return found, nil
+}

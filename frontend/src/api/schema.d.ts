@@ -352,6 +352,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/scraper/actions/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Look for cameras on the LAN, read-only (panel session only)
+         * @description A connect sweep of a private subnet and best-effort multicast
+         *     queries (SSDP, WS-Discovery). Bounded to private, loopback or
+         *     link-local ranges of /22 or smaller, and paced, so it stays on the
+         *     LAN (RN-17).
+         */
+        post: operations["discover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/devices/{id}": {
         parameters: {
             query?: never;
@@ -1641,6 +1664,23 @@ export interface components {
             /** @description You own the device or are allowed to capture it (RN-17) */
             authorized: boolean;
         };
+        Found: {
+            host: string;
+            /** @enum {string} */
+            via: "sweep" | "ssdp" | "ws-discovery" | "mdns";
+            open_ports: number[];
+            services: components["schemas"]["Service"][];
+            vendor?: string;
+            server?: string;
+            url?: string;
+        };
+        Service: {
+            port: number;
+            proto: string;
+            server?: string;
+            auth?: string;
+            note?: string;
+        };
         Detected: {
             /** Format: date-time */
             at: string;
@@ -1649,15 +1689,7 @@ export interface components {
             vendor?: string;
             model?: string;
             firmware?: string;
-            services: {
-                port: number;
-                /** @enum {string} */
-                proto: "http" | "https" | "rtsp" | "onvif" | "snmp" | "unknown";
-                server?: string;
-                /** @enum {string} */
-                auth?: "basic" | "digest" | "none" | "";
-                note?: string;
-            }[];
+            services: components["schemas"]["Service"][];
         };
         Plugin: {
             id: string;
@@ -3084,6 +3116,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Device"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    discover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Subnet to sweep, e.g. 192.168.1.0/24; private ranges only */
+                    cidr?: string;
+                    multicast?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Devices found */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Found"][];
+                    };
                 };
             };
             403: components["responses"]["Problem"];

@@ -255,6 +255,7 @@ func (s *Server) Handler() http.Handler {
 	// or start a capture.
 	auth("GET /api/v1/devices", s.handleListDevices)
 	panel("POST /api/v1/devices", s.handleCreateDevice)
+	panel("POST /api/v1/scraper/actions/discover", s.handleDiscover)
 	auth("GET /api/v1/devices/{id}", s.handleGetDevice)
 	panel("PATCH /api/v1/devices/{id}", s.handleUpdateDevice)
 	panel("DELETE /api/v1/devices/{id}", s.handleDeleteDevice)
