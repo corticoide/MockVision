@@ -346,6 +346,69 @@ paths:
         "201": { description: Registered, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
         "403": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /programs:
+    get:
+      tags: [scraper]
+      operationId: listPrograms
+      summary: Capture programs, built into the binary or installed as packages
+      parameters:
+        - { name: vendor, in: query, schema: { type: string } }
+        - { name: device, in: query, description: Narrow to what suits this device's detected vendor, schema: { type: string } }
+      responses:
+        "200":
+          description: Programs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Program" } }
+  /devices/{id}/captures:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [scraper]
+      operationId: listCaptures
+      responses:
+        "200":
+          description: Captures of the device, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Capture" } }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [scraper]
+      operationId: startCapture
+      summary: Run a capture program against the device, read-only, as a job (panel session only)
+      description: Refused until the device is authorized (RN-17).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [program]
+              properties:
+                program: { type: string, description: "program id or id@version" }
+      responses:
+        "201": { description: Capture started, content: { application/json: { schema: { $ref: "#/components/schemas/Capture" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /captures/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [scraper]
+      operationId: getCapture
+      responses:
+        "200": { description: Capture with its recordings, content: { application/json: { schema: { $ref: "#/components/schemas/Capture" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
   /scraper/actions/discover:
     post:
       tags: [scraper]
@@ -1734,6 +1797,7 @@ components:
         ports: { type: array, items: { type: integer } }
         username: { type: string }
         has_password: { type: boolean }
+        port_map: { type: object, additionalProperties: { type: integer }, description: "Logical program port to the device's actual port" }
         kind: { type: string, enum: [real, simulated], description: "simulated when the host is one of this node's cameras (D75)" }
         authorized: { type: boolean }
         detected: { $ref: "#/components/schemas/Detected" }
@@ -1748,7 +1812,62 @@ components:
         ports: { type: array, items: { type: integer } }
         username: { type: string }
         password: { type: string, description: "Write-only; omit to keep, empty string to clear" }
+        port_map: { type: object, additionalProperties: { type: integer } }
         authorized: { type: boolean, description: You own the device or are allowed to capture it (RN-17) }
+    Program:
+      type: object
+      required: [program_id, version, name, vendors, steps, source]
+      properties:
+        program_id: { type: string }
+        version: { type: string }
+        name: { type: string }
+        vendors: { type: array, items: { type: string } }
+        steps: { type: integer }
+        source: { type: string, enum: [builtin, installed] }
+        signature: { type: string }
+    Capture:
+      type: object
+      required: [id, device_id, program, status, created_at]
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        job_id: { type: string }
+        program: { type: string }
+        status: { type: string, enum: [running, done, failed] }
+        draft_profile_id: { type: string }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        result:
+          type: object
+          required: [program, fixtures, steps, ok]
+          properties:
+            program: { type: string }
+            vendor: { type: string }
+            steps: { type: integer }
+            ok: { type: integer }
+            fixtures:
+              type: array
+              items: { $ref: "#/components/schemas/Fixture" }
+    Fixture:
+      type: object
+      required: [step_id, kind, status, bytes, at]
+      properties:
+        step_id: { type: string }
+        kind: { type: string, enum: [http, rtsp, event] }
+        method: { type: string }
+        port: { type: integer }
+        path: { type: string }
+        query: { type: object, additionalProperties: { type: string } }
+        status: { type: integer }
+        content_type: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+        body: { type: string }
+        binary: { type: boolean }
+        bytes: { type: integer }
+        stream: { type: string }
+        vary: { type: array, items: { type: string } }
+        at: { type: string, format: date-time }
+        error: { type: string }
     Found:
       type: object
       required: [host, via, open_ports, services]
@@ -2036,6 +2155,7 @@ components:
       properties:
         profile: { $ref: "#/components/schemas/Profile" }
         plugin: { $ref: "#/components/schemas/Plugin" }
+        program: { $ref: "#/components/schemas/Program" }
         report: { $ref: "#/components/schemas/ImportReport" }
         created: { type: boolean }
         job_id: { type: string, description: The import job, with the steps in its history }

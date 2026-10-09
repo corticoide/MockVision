@@ -1,13 +1,13 @@
-import { Radar, ScanSearch, Trash2, Wifi } from "lucide-react";
+import { ChevronDown, ChevronRight, FileDown, Radar, ScanSearch, Trash2, Wifi } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { ApiError, type DeviceInput, type Found, errorMessage } from "@/api/client";
-import { useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice } from "@/api/queries";
+import { useCaptures, useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice, usePrograms, useStartCapture } from "@/api/queries";
 import { Badge, Mono } from "@/components/badges";
 import { toast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, Empty, Notice, PageHeader } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
-import { Checkbox, Field, Input } from "@/components/ui/form";
+import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useT } from "@/lib/i18n";
 
@@ -19,6 +19,7 @@ export function ScraperPage() {
   const [discovering, setDiscovering] = useState(false);
   const probe = useProbeDevice();
   const remove = useDeleteDevice();
+  const [open, setOpen] = useState<string | null>(null);
   return (
     <>
       <PageHeader
@@ -62,7 +63,7 @@ export function ScraperPage() {
               </tr>
             </THead>
             <TBody>
-              {devices.map((d) => (
+              {devices.flatMap((d) => [
                 <TR key={d.id}>
                   <TD>
                     <span className="flex items-center gap-2">
@@ -106,6 +107,9 @@ export function ScraperPage() {
                   </TD>
                   <TD className="text-right">
                     <span className="flex justify-end gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => setOpen(open === d.id ? null : d.id)}>
+                        {open === d.id ? <ChevronDown /> : <ChevronRight />} {t("Captures")}
+                      </Button>
                       <Button
                         size="sm"
                         disabled={!d.authorized || probe.isPending}
@@ -139,8 +143,15 @@ export function ScraperPage() {
                       </Button>
                     </span>
                   </TD>
-                </TR>
-              ))}
+                </TR>,
+                open === d.id ? (
+                  <tr key={`${d.id}-cap`}>
+                    <td colSpan={5} className="bg-surface-2/40 px-4 py-3">
+                      <DeviceCaptures device={d} />
+                    </td>
+                  </tr>
+                ) : null,
+              ])}
             </TBody>
           </Table>
         )}
@@ -305,5 +316,94 @@ function DiscoverDialog({ onClose, onRegister }: { onClose: () => void; onRegist
         </div>
       )}
     </Dialog>
+  );
+}
+
+function DeviceCaptures({ device }: { device: { id: string; authorized: boolean; detected?: { vendor?: string } | null } }) {
+  const t = useT();
+  const { data: programs } = usePrograms(device.id);
+  const { data: captures } = useCaptures(device.id, true);
+  const start = useStartCapture();
+  const [program, setProgram] = useState("");
+  const chosen = program || programs?.[0]?.program_id || "";
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-end gap-2">
+        <Field label={t("Capture program")} className="w-72">
+          <Select value={chosen} onChange={(e) => setProgram(e.target.value)} disabled={!programs?.length}>
+            {programs?.map((p) => (
+              <option key={`${p.program_id}@${p.version}`} value={p.program_id}>
+                {p.name} · {p.program_id}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!device.authorized || !chosen || start.isPending}
+          className="mb-0.5"
+          onClick={() =>
+            start.mutate(
+              { id: device.id, program: chosen },
+              {
+                onSuccess: () => toast(t("Capture started; it runs read-only in the background."), "ok"),
+                onError: (err) => toast(errorMessage(err), "error"),
+              },
+            )
+          }
+        >
+          <ScanSearch /> {t("Capture")}
+        </Button>
+      </div>
+      {!captures?.length ? (
+        <p className="text-[13px] text-muted">{t("No captures yet.")}</p>
+      ) : (
+        <Table>
+          <THead>
+            <tr>
+              <TH>{t("Program")}</TH>
+              <TH>{t("Status")}</TH>
+              <TH>{t("Recorded")}</TH>
+              <TH />
+            </tr>
+          </THead>
+          <TBody>
+            {captures.map((c) => (
+              <TR key={c.id}>
+                <TD>
+                  <Mono>{c.program}</Mono>
+                </TD>
+                <TD>
+                  <Badge tone={c.status === "done" ? "ok" : c.status === "failed" ? "error" : "info"}>{t(c.status)}</Badge>
+                </TD>
+                <TD className="text-muted">
+                  {c.result ? t("{ok} of {n} steps", { ok: c.result.ok, n: c.result.steps }) : "—"}
+                </TD>
+                <TD className="text-right">
+                  {c.status === "done" && !c.draft_profile_id && <CompileButton capture={c} />}
+                  {c.draft_profile_id && (
+                    <Badge tone="ok" icon={<FileDown />}>
+                      {t("Draft profile")}
+                    </Badge>
+                  )}
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+function CompileButton({ capture }: { capture: { id: string } }) {
+  const t = useT();
+  // Feature 20 wires compilation; the button appears once a capture is done.
+  void capture;
+  return (
+    <Button size="sm" variant="ghost" disabled title={t("Compile to a draft profile (coming next)")}>
+      <FileDown /> {t("Compile")}
+    </Button>
   );
 }

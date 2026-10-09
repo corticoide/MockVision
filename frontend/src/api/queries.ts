@@ -588,6 +588,32 @@ export function useDiscover() {
   });
 }
 
+export function usePrograms(deviceId?: string) {
+  return useQuery({
+    queryKey: ["programs", deviceId ?? ""],
+    queryFn: async () => unwrap(await api.GET("/programs", { params: { query: deviceId ? { device: deviceId } : {} } })).items,
+  });
+}
+
+export function useCaptures(deviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["devices", deviceId, "captures"],
+    queryFn: async () => unwrap(await api.GET("/devices/{id}/captures", { params: { path: { id: deviceId } } })).items,
+    enabled,
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status === "running") ? 1500 : false),
+  });
+}
+
+/** Runs a capture program against a device, read-only, as a job (RN-17). */
+export function useStartCapture() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, program }: { id: string; program: string }) =>
+      unwrap(await api.POST("/devices/{id}/captures", { params: { path: { id } }, body: { program } })),
+    onSuccess: (_d, { id }) => qc.invalidateQueries({ queryKey: ["devices", id, "captures"] }),
+  });
+}
+
 /** Looks at a device read-only and records what it found (RN-17). */
 export function useProbeDevice() {
   const qc = useQueryClient();

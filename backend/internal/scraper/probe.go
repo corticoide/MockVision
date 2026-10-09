@@ -161,6 +161,7 @@ func (p *Prober) HTTP(ctx context.Context, method string, port int, path string,
 	if err := p.lim.wait(ctx); err != nil {
 		return nil, "", err
 	}
+	port = p.t.port(port)
 	scheme := "http"
 	if port == 443 || port == 8443 {
 		scheme = "https"
@@ -257,6 +258,7 @@ func (p *Prober) rtspExchange(ctx context.Context, method string, port int, path
 	if method != "OPTIONS" && method != "DESCRIBE" {
 		return 0, nil, "", false
 	}
+	port = p.t.port(port)
 	if err := p.lim.wait(ctx); err != nil {
 		return 0, nil, "", false
 	}

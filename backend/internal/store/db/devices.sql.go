@@ -83,7 +83,7 @@ func (q *Queries) GetCapture(ctx context.Context, id string) (Capture, error) {
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at FROM devices WHERE id = ?1
+SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json FROM devices WHERE id = ?1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
@@ -101,6 +101,32 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
 		&i.DetectedJson,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PortMapJson,
+	)
+	return i, err
+}
+
+const getProgramByRef = `-- name: GetProgramByRef :one
+SELECT id, package_id, program_id, version, name, compatible_json, steps_json, installed_at FROM programs WHERE program_id = ?1 AND version = ?2
+`
+
+type GetProgramByRefParams struct {
+	ProgramID string
+	Version   string
+}
+
+func (q *Queries) GetProgramByRef(ctx context.Context, arg GetProgramByRefParams) (Program, error) {
+	row := q.db.QueryRowContext(ctx, getProgramByRef, arg.ProgramID, arg.Version)
+	var i Program
+	err := row.Scan(
+		&i.ID,
+		&i.PackageID,
+		&i.ProgramID,
+		&i.Version,
+		&i.Name,
+		&i.CompatibleJson,
+		&i.StepsJson,
+		&i.InstalledAt,
 	)
 	return i, err
 }
@@ -136,8 +162,8 @@ func (q *Queries) InsertCapture(ctx context.Context, arg InsertCaptureParams) er
 }
 
 const insertDevice = `-- name: InsertDevice :exec
-INSERT INTO devices (id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+INSERT INTO devices (id, name, host, ports_json, port_map_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 `
 
 type InsertDeviceParams struct {
@@ -145,6 +171,7 @@ type InsertDeviceParams struct {
 	Name         string
 	Host         string
 	PortsJson    string
+	PortMapJson  string
 	Username     string
 	SecretEnc    []byte
 	Kind         string
@@ -160,6 +187,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) erro
 		arg.Name,
 		arg.Host,
 		arg.PortsJson,
+		arg.PortMapJson,
 		arg.Username,
 		arg.SecretEnc,
 		arg.Kind,
@@ -167,6 +195,36 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) erro
 		arg.DetectedJson,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+	)
+	return err
+}
+
+const insertProgram = `-- name: InsertProgram :exec
+INSERT INTO programs (id, package_id, program_id, version, name, compatible_json, steps_json, installed_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+`
+
+type InsertProgramParams struct {
+	ID             string
+	PackageID      string
+	ProgramID      string
+	Version        string
+	Name           string
+	CompatibleJson string
+	StepsJson      string
+	InstalledAt    int64
+}
+
+func (q *Queries) InsertProgram(ctx context.Context, arg InsertProgramParams) error {
+	_, err := q.db.ExecContext(ctx, insertProgram,
+		arg.ID,
+		arg.PackageID,
+		arg.ProgramID,
+		arg.Version,
+		arg.Name,
+		arg.CompatibleJson,
+		arg.StepsJson,
+		arg.InstalledAt,
 	)
 	return err
 }
@@ -251,7 +309,7 @@ func (q *Queries) ListCapturesByDevice(ctx context.Context, arg ListCapturesByDe
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at FROM devices ORDER BY created_at DESC
+SELECT id, name, host, ports_json, username, secret_enc, kind, authorized, detected_json, created_at, updated_at, port_map_json FROM devices ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
@@ -275,6 +333,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 			&i.DetectedJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PortMapJson,
 		); err != nil {
 			return nil, err
 		}
@@ -287,6 +346,73 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const listPrograms = `-- name: ListPrograms :many
+SELECT programs.id, programs.package_id, programs.program_id, programs.version, programs.name, programs.compatible_json, programs.steps_json, programs.installed_at, packages.signature_status, packages.signer FROM programs
+JOIN packages ON packages.id = programs.package_id
+ORDER BY programs.program_id
+`
+
+type ListProgramsRow struct {
+	ID              string
+	PackageID       string
+	ProgramID       string
+	Version         string
+	Name            string
+	CompatibleJson  string
+	StepsJson       string
+	InstalledAt     int64
+	SignatureStatus string
+	Signer          string
+}
+
+func (q *Queries) ListPrograms(ctx context.Context) ([]ListProgramsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPrograms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProgramsRow{}
+	for rows.Next() {
+		var i ListProgramsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PackageID,
+			&i.ProgramID,
+			&i.Version,
+			&i.Name,
+			&i.CompatibleJson,
+			&i.StepsJson,
+			&i.InstalledAt,
+			&i.SignatureStatus,
+			&i.Signer,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setCaptureJob = `-- name: SetCaptureJob :exec
+UPDATE captures SET job_id = ?1 WHERE id = ?2
+`
+
+type SetCaptureJobParams struct {
+	JobID string
+	ID    string
+}
+
+func (q *Queries) SetCaptureJob(ctx context.Context, arg SetCaptureJobParams) error {
+	_, err := q.db.ExecContext(ctx, setCaptureJob, arg.JobID, arg.ID)
+	return err
 }
 
 const setDeviceDetected = `-- name: SetDeviceDetected :exec
@@ -311,20 +437,21 @@ func (q *Queries) SetDeviceDetected(ctx context.Context, arg SetDeviceDetectedPa
 }
 
 const updateDevice = `-- name: UpdateDevice :exec
-UPDATE devices SET name = ?1, host = ?2, ports_json = ?3, username = ?4, secret_enc = ?5,
-  kind = ?6, authorized = ?7, updated_at = ?8 WHERE id = ?9
+UPDATE devices SET name = ?1, host = ?2, ports_json = ?3, port_map_json = ?4, username = ?5,
+  secret_enc = ?6, kind = ?7, authorized = ?8, updated_at = ?9 WHERE id = ?10
 `
 
 type UpdateDeviceParams struct {
-	Name       string
-	Host       string
-	PortsJson  string
-	Username   string
-	SecretEnc  []byte
-	Kind       string
-	Authorized int64
-	UpdatedAt  int64
-	ID         string
+	Name        string
+	Host        string
+	PortsJson   string
+	PortMapJson string
+	Username    string
+	SecretEnc   []byte
+	Kind        string
+	Authorized  int64
+	UpdatedAt   int64
+	ID          string
 }
 
 func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) error {
@@ -332,6 +459,7 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) erro
 		arg.Name,
 		arg.Host,
 		arg.PortsJson,
+		arg.PortMapJson,
 		arg.Username,
 		arg.SecretEnc,
 		arg.Kind,

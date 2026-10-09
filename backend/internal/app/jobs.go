@@ -60,6 +60,7 @@ func (s *Service) newRunner() *worker.Runner {
 	r.Register(JobRendition, worker.Kind{Handler: s.runRendition})
 	r.Register(JobImport, worker.Kind{Handler: s.runImport, Cleanup: s.removeImportFiles})
 	r.Register(JobPrepareRenditions, worker.Kind{Handler: s.runPrepareRenditions})
+	r.Register(JobCapture, worker.Kind{Handler: s.runCapture})
 	return r
 }
 

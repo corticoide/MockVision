@@ -281,6 +281,7 @@ type ImportResult struct {
 	// the plugin a plugin package did.
 	Profile *ProfileView `json:"profile,omitempty"`
 	Plugin  *PluginView  `json:"plugin,omitempty"`
+	Program *ProgramView `json:"program,omitempty"`
 	Report  pkg.Report   `json:"report"`
 	Created bool         `json:"created"`
 	// JobID is the import job, whose history keeps the steps.

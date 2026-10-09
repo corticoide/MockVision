@@ -1,0 +1,24 @@
+# Generic capture program: a vendor-neutral, read-only first look at a
+# camera. It reads the HTTP banner and RTSP options; it sends nothing that
+# changes the device.
+program:
+  id: generic/probe
+  version: 1.0.0
+  name: Generic probe
+  compatible: { vendors: [] }   # empty means any
+steps:
+  - id: http-root
+    kind: http
+    method: GET
+    port: 80
+    path: /
+  - id: http-options
+    kind: http
+    method: OPTIONS
+    port: 80
+    path: /
+  - id: rtsp-options
+    kind: rtsp
+    method: OPTIONS
+    port: 554
+    path: /

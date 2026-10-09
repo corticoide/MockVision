@@ -27,6 +27,7 @@ type DeviceView struct {
 	Ports       []int             `json:"ports"`
 	Username    string            `json:"username,omitempty"`
 	HasPassword bool              `json:"has_password"`
+	PortMap     map[int]int       `json:"port_map,omitempty"`
 	Kind        string            `json:"kind"`
 	Authorized  bool              `json:"authorized"`
 	Detected    *scraper.Detected `json:"detected,omitempty"`
@@ -38,12 +39,13 @@ type DeviceView struct {
 // any probe runs: it is the user confirming they own the device or may
 // capture it (RN-17).
 type DeviceInput struct {
-	Name       string  `json:"name"`
-	Host       string  `json:"host"`
-	Ports      []int   `json:"ports"`
-	Username   string  `json:"username"`
-	Password   *string `json:"password"`
-	Authorized bool    `json:"authorized"`
+	Name       string      `json:"name"`
+	Host       string      `json:"host"`
+	Ports      []int       `json:"ports"`
+	Username   string      `json:"username"`
+	Password   *string     `json:"password"`
+	PortMap    map[int]int `json:"port_map,omitempty"`
+	Authorized bool        `json:"authorized"`
 }
 
 func deviceView(d db.Device) DeviceView {
@@ -52,7 +54,9 @@ func deviceView(d db.Device) DeviceView {
 	if ports == nil {
 		ports = []int{}
 	}
-	v := DeviceView{ID: d.ID, Name: d.Name, Host: d.Host, Ports: ports, Username: d.Username, HasPassword: len(d.SecretEnc) > 0,
+	var pm map[int]int
+	_ = json.Unmarshal([]byte(d.PortMapJson), &pm)
+	v := DeviceView{ID: d.ID, Name: d.Name, Host: d.Host, Ports: ports, PortMap: pm, Username: d.Username, HasPassword: len(d.SecretEnc) > 0,
 		Kind: d.Kind, Authorized: store.Bool(d.Authorized), CreatedAt: store.Time(d.CreatedAt), UpdatedAt: store.Time(d.UpdatedAt)}
 	if d.DetectedJson != "" && d.DetectedJson != "{}" {
 		var det scraper.Detected
@@ -108,10 +112,12 @@ func (s *Service) CreateDevice(ctx context.Context, actor Actor, in DeviceInput)
 		secret = s.box.Seal([]byte(*in.Password), "devices:"+id)
 	}
 	portsJSON, _ := json.Marshal(intsOrEmpty(ports))
+	portMap, _ := json.Marshal(mapOrEmpty(in.PortMap))
 	now := time.Now().UnixMilli()
 	err := s.store.W().InsertDevice(ctx, db.InsertDeviceParams{
-		ID: id, Name: strings.TrimSpace(in.Name), Host: host, PortsJson: string(portsJSON), Username: strings.TrimSpace(in.Username),
-		SecretEnc: secret, Kind: s.deviceKind(ctx, host), Authorized: store.Int(in.Authorized), DetectedJson: "{}", CreatedAt: now, UpdatedAt: now,
+		ID: id, Name: strings.TrimSpace(in.Name), Host: host, PortsJson: string(portsJSON), PortMapJson: string(portMap),
+		Username: strings.TrimSpace(in.Username), SecretEnc: secret, Kind: s.deviceKind(ctx, host), Authorized: store.Int(in.Authorized),
+		DetectedJson: "{}", CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return nil, err
@@ -164,9 +170,11 @@ func (s *Service) UpdateDevice(ctx context.Context, actor Actor, id string, in D
 		}
 	}
 	portsJSON, _ := json.Marshal(intsOrEmpty(ports))
+	portMap, _ := json.Marshal(mapOrEmpty(in.PortMap))
 	err = s.store.W().UpdateDevice(ctx, db.UpdateDeviceParams{
-		ID: id, Name: strings.TrimSpace(in.Name), Host: host, PortsJson: string(portsJSON), Username: strings.TrimSpace(in.Username),
-		SecretEnc: secret, Kind: s.deviceKind(ctx, host), Authorized: store.Int(in.Authorized), UpdatedAt: time.Now().UnixMilli(),
+		ID: id, Name: strings.TrimSpace(in.Name), Host: host, PortsJson: string(portsJSON), PortMapJson: string(portMap),
+		Username: strings.TrimSpace(in.Username), SecretEnc: secret, Kind: s.deviceKind(ctx, host), Authorized: store.Int(in.Authorized),
+		UpdatedAt: time.Now().UnixMilli(),
 	})
 	if err != nil {
 		return nil, err
@@ -192,7 +200,9 @@ func (s *Service) DeleteDevice(ctx context.Context, actor Actor, id string) erro
 func (s *Service) target(d db.Device) (scraper.Target, error) {
 	var ports []int
 	_ = json.Unmarshal([]byte(d.PortsJson), &ports)
-	t := scraper.Target{Host: d.Host, Ports: ports, Username: d.Username}
+	var pm map[int]int
+	_ = json.Unmarshal([]byte(d.PortMapJson), &pm)
+	t := scraper.Target{Host: d.Host, Ports: ports, PortMap: pm, Username: d.Username}
 	if len(d.SecretEnc) > 0 {
 		pw, err := s.box.Open(d.SecretEnc, "devices:"+d.ID)
 		if err != nil {
@@ -282,4 +292,12 @@ func (s *Service) Discover(ctx context.Context, actor Actor, in DiscoverInput) (
 	}
 	s.audit(ctx, actor, "scraper.discover", "scraper", "", map[string]any{"cidr": in.CIDR, "multicast": in.Multicast, "found": len(found)})
 	return found, nil
+}
+
+// mapOrEmpty returns a non-nil map so it serializes as {} not null.
+func mapOrEmpty(m map[int]int) map[int]int {
+	if m == nil {
+		return map[int]int{}
+	}
+	return m
 }

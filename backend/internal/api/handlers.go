@@ -583,6 +583,55 @@ func (s *Server) handleProbeDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
+	vendor := r.URL.Query().Get("vendor")
+	if id := r.URL.Query().Get("device"); id != "" {
+		if d, err := s.svc.GetDevice(r.Context(), id); err == nil && d.Detected != nil {
+			vendor = d.Detected.Vendor
+		}
+	}
+	list, err := s.svc.ListPrograms(r.Context(), vendor)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleStartCapture(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Program string `json:"program"`
+	}
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	c, err := s.svc.StartCapture(r.Context(), actor(r), r.PathValue("id"), in.Program)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+func (s *Server) handleListCaptures(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListCaptures(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleGetCapture(w http.ResponseWriter, r *http.Request) {
+	c, err := s.svc.GetCapture(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 	var in app.DiscoverInput
 	if err := decode(r, &in); err != nil {

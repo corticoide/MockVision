@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
 )
@@ -82,3 +83,93 @@ func hostPortOf(t *testing.T, raw string) (string, int) {
 }
 
 func strptr(s string) *string { return &s }
+
+func TestCaptureRoundTrip(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	cam := createCamera(t, svc, "Gate", true)
+	httpHost, httpPort := hostPortOf(t, httpBase(t, cam))
+	rtspPort := rtspPortOf(t, cam)
+
+	yes := true
+	d, err := svc.CreateDevice(ctx, testActor, DeviceInput{
+		Name: "Sim", Host: httpHost, Username: "admin", Password: strptr("ms1234"),
+		PortMap: map[int]int{80: httpPort, 554: rtspPort}, Authorized: yes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A camera's own address would be simulated; 127.0.0.1 is not, so this
+	// device reads "real" but the capture still round-trips.
+	if _, err := svc.ProbeDevice(ctx, testActor, d.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The demo capture program suits a Milesight device.
+	progs, err := svc.ListPrograms(ctx, "Milesight")
+	if err != nil || !hasProgram(progs, "milesight/demo-capture") {
+		t.Fatalf("programs=%+v err=%v", progs, err)
+	}
+
+	c, err := svc.StartCapture(ctx, testActor, d.ID, "milesight/demo-capture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = waitCapture(t, svc, c.ID)
+	if c.Status != "done" || c.Result == nil {
+		t.Fatalf("capture=%+v", c)
+	}
+	by := map[string]int{}
+	for i, f := range c.Result.Fixtures {
+		by[f.StepID] = i
+	}
+	info := c.Result.Fixtures[by["device-info"]]
+	if info.Status != 200 || info.ContentType == "" || !strings.Contains(info.Body, "Milesight") {
+		t.Fatalf("device-info=%+v", info)
+	}
+	snap := c.Result.Fixtures[by["snapshot"]]
+	if snap.Status != 200 || !snap.Binary || snap.Bytes == 0 {
+		t.Fatalf("snapshot=%+v", snap)
+	}
+	rtsp := c.Result.Fixtures[by["rtsp-main"]]
+	if rtsp.Status != 200 || !strings.Contains(rtsp.Body, "m=video") {
+		t.Fatalf("rtsp=%+v", rtsp)
+	}
+}
+
+func rtspPortOf(t *testing.T, cam *CameraView) int {
+	t.Helper()
+	for _, e := range cam.Endpoints {
+		if e.Protocol == "rtsp" {
+			_, p := hostPortOf(t, e.URL)
+			return p
+		}
+	}
+	t.Fatal("no rtsp endpoint")
+	return 0
+}
+
+func hasProgram(list []ProgramView, id string) bool {
+	for _, p := range list {
+		if p.ProgramID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func waitCapture(t *testing.T, svc *Service, id string) *CaptureView {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		c, err := svc.GetCapture(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Status != "running" {
+			return c
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("capture did not finish")
+	return nil
+}

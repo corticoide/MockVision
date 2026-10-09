@@ -130,6 +130,8 @@ type Result struct {
 	Fixtures []selftest.Fixture `json:"fixtures,omitempty"`
 	// Plugin is a plugin package's engine, program and permissions.
 	Plugin *PluginInfo `json:"plugin,omitempty"`
+	// Program is a capture program package's recipe.
+	Program *ProgramInfo `json:"program,omitempty"`
 }
 
 // Options are what the pipeline needs from the node: the keys it trusts
@@ -231,6 +233,9 @@ func (in *inspector) inspectPackage(data []byte) {
 	case "profile":
 	case "plugin":
 		in.inspectPlugin(man, files)
+		return
+	case "program":
+		in.inspectProgram(man, files)
 		return
 	default:
 		in.problem(profile.StepCompatibility, "manifest.yaml", 0, "%s packages are not supported yet", man.Kind)

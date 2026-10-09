@@ -206,6 +206,7 @@ type Device struct {
 	DetectedJson string
 	CreatedAt    int64
 	UpdatedAt    int64
+	PortMapJson  string
 }
 
 type Event struct {
@@ -314,6 +315,17 @@ type Profile struct {
 	Archived     int64
 	CreatedAt    int64
 	ExtendsRef   string
+}
+
+type Program struct {
+	ID             string
+	PackageID      string
+	ProgramID      string
+	Version        string
+	Name           string
+	CompatibleJson string
+	StepsJson      string
+	InstalledAt    int64
 }
 
 type Recording struct {

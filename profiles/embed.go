@@ -15,3 +15,9 @@ var Schema []byte
 //
 //go:embed *.yaml catalog
 var Catalog embed.FS
+
+// Programs holds the capture programs shipped with each release: read-only
+// recipes the scraper runs against a device (D73).
+//
+//go:embed programs
+var Programs embed.FS

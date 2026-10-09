@@ -1,0 +1,40 @@
+# Capture program for a Milesight-style camera that answers the demo's HTTP
+# API and RTSP streams. Every step is a read-only request (RN-17); the
+# parameter-writing route of the device is never sent. Used as the
+# round-trip test of the scraper: capturing a simulated demo camera and
+# compiling it back into a profile (D75).
+program:
+  id: milesight/demo-capture
+  version: 1.0.0
+  name: Milesight demo capture
+  compatible: { vendors: [Milesight] }
+steps:
+  - id: device-info
+    kind: http
+    method: GET
+    port: 80
+    path: /cgi-bin/operator/operator.cgi
+    query: { action: get.system.information }
+    auth: true
+    vary: [serial, mac, ip, timestamp]
+  - id: param-brightness
+    kind: http
+    method: GET
+    port: 80
+    path: /cgi-bin/operator/param.cgi
+    query: { action: get, name: Image.Brightness }
+    auth: true
+  - id: snapshot
+    kind: http
+    method: GET
+    port: 80
+    path: /snapshot.cgi
+    auth: true
+    binary: true
+  - id: rtsp-main
+    kind: rtsp
+    method: DESCRIBE
+    port: 554
+    path: /main
+    auth: true
+    stream: main

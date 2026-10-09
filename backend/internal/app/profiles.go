@@ -50,6 +50,7 @@ type importCheckpoint struct {
 type importOutcome struct {
 	Profile *ProfileView `json:"profile,omitempty"`
 	Plugin  *PluginView  `json:"plugin,omitempty"`
+	Program *ProgramView `json:"program,omitempty"`
 	Report  *pkg.Report  `json:"report,omitempty"`
 	Created bool         `json:"created"`
 	Error   *jobError    `json:"error,omitempty"`
@@ -115,10 +116,10 @@ func ImportOutcome(j worker.Job) (*ImportResult, error) {
 	_ = json.Unmarshal(j.Result, &out)
 	switch j.Status {
 	case worker.Completed:
-		if (out.Profile == nil && out.Plugin == nil) || out.Report == nil {
-			return nil, errors.New("the import finished without a profile or a plugin")
+		if (out.Profile == nil && out.Plugin == nil && out.Program == nil) || out.Report == nil {
+			return nil, errors.New("the import finished without a profile, a plugin or a program")
 		}
-		return &ImportResult{Profile: out.Profile, Plugin: out.Plugin, Report: *out.Report, Created: out.Created}, nil
+		return &ImportResult{Profile: out.Profile, Plugin: out.Plugin, Program: out.Program, Report: *out.Report, Created: out.Created}, nil
 	case worker.Failed:
 		if out.Error != nil && out.Error.Kind == "rejected" && out.Report != nil {
 			return nil, &ImportError{Report: *out.Report}
@@ -196,7 +197,7 @@ func (s *Service) runImport(ctx context.Context, run *worker.Run) (any, error) {
 		}
 		return importOutcome{Report: &rep, Error: describeError(err)}, err
 	}
-	return importOutcome{Profile: out.Profile, Plugin: out.Plugin, Report: &out.Report, Created: out.Created}, nil
+	return importOutcome{Profile: out.Profile, Plugin: out.Plugin, Program: out.Program, Report: &out.Report, Created: out.Created}, nil
 }
 
 // Where a package came from.
@@ -218,6 +219,9 @@ func (s *Service) installPackage(ctx context.Context, actor Actor, data []byte, 
 	}
 	if rep.Kind == "plugin" {
 		return s.installPlugin(ctx, actor, data, res, source)
+	}
+	if rep.Kind == "program" {
+		return s.installProgram(ctx, actor, res, source)
 	}
 	if rep.Kind != "profile" || res.Profile == nil {
 		return nil, domain.Invalid("file", "only profile and plugin packages can be installed")

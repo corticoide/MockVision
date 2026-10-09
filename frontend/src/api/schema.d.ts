@@ -352,6 +352,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capture programs, built into the binary or installed as packages */
+        get: operations["listPrograms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/devices/{id}/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["listCaptures"];
+        put?: never;
+        /**
+         * Run a capture program against the device, read-only, as a job (panel session only)
+         * @description Refused until the device is authorized (RN-17).
+         */
+        post: operations["startCapture"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/captures/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["getCapture"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/scraper/actions/discover": {
         parameters: {
             query?: never;
@@ -1642,6 +1699,10 @@ export interface components {
             ports: number[];
             username?: string;
             has_password: boolean;
+            /** @description Logical program port to the device's actual port */
+            port_map?: {
+                [key: string]: number;
+            };
             /**
              * @description simulated when the host is one of this node's cameras (D75)
              * @enum {string}
@@ -1661,8 +1722,65 @@ export interface components {
             username?: string;
             /** @description Write-only; omit to keep, empty string to clear */
             password?: string;
+            port_map?: {
+                [key: string]: number;
+            };
             /** @description You own the device or are allowed to capture it (RN-17) */
             authorized: boolean;
+        };
+        Program: {
+            program_id: string;
+            version: string;
+            name: string;
+            vendors: string[];
+            steps: number;
+            /** @enum {string} */
+            source: "builtin" | "installed";
+            signature?: string;
+        };
+        Capture: {
+            id: string;
+            device_id: string;
+            job_id?: string;
+            program: string;
+            /** @enum {string} */
+            status: "running" | "done" | "failed";
+            draft_profile_id?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            finished_at?: string;
+            result?: {
+                program: string;
+                vendor?: string;
+                steps: number;
+                ok: number;
+                fixtures: components["schemas"]["Fixture"][];
+            };
+        };
+        Fixture: {
+            step_id: string;
+            /** @enum {string} */
+            kind: "http" | "rtsp" | "event";
+            method?: string;
+            port?: number;
+            path?: string;
+            query?: {
+                [key: string]: string;
+            };
+            status: number;
+            content_type?: string;
+            headers?: {
+                [key: string]: string;
+            };
+            body?: string;
+            binary?: boolean;
+            bytes: number;
+            stream?: string;
+            vary?: string[];
+            /** Format: date-time */
+            at: string;
+            error?: string;
         };
         Found: {
             host: string;
@@ -1924,6 +2042,7 @@ export interface components {
         ImportResult: {
             profile?: components["schemas"]["Profile"];
             plugin?: components["schemas"]["Plugin"];
+            program?: components["schemas"]["Program"];
             report: components["schemas"]["ImportReport"];
             created: boolean;
             /** @description The import job */
@@ -3120,6 +3239,112 @@ export interface operations {
             };
             403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    listPrograms: {
+        parameters: {
+            query?: {
+                vendor?: string;
+                /** @description Narrow to what suits this device's detected vendor */
+                device?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Programs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Program"][];
+                    };
+                };
+            };
+        };
+    };
+    listCaptures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Captures of the device, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Capture"][];
+                    };
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    startCapture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description program id or id@version */
+                    program: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Capture started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Capture"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getCapture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capture with its recordings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Capture"];
+                };
+            };
+            404: components["responses"]["Problem"];
         };
     };
     discover: {

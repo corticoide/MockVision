@@ -22,6 +22,17 @@ type Target struct {
 	Ports    []int
 	Username string
 	Password string
+	// PortMap remaps a program's logical port to the device's actual one,
+	// for a camera whose HTTP or RTSP is not on the usual port.
+	PortMap map[int]int
+}
+
+// port maps a program's logical port to the device's actual one.
+func (t Target) port(p int) int {
+	if m, ok := t.PortMap[p]; ok {
+		return m
+	}
+	return p
 }
 
 func (t Target) ports() []int {
