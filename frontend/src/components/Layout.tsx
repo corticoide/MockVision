@@ -1,4 +1,4 @@
-import { Activity, Boxes, Camera, CircleHelp, Cpu, Image, LayoutDashboard, ListChecks, Loader2, LogOut, MemoryStick, Plug, ScrollText, Send, Settings, Wifi, WifiOff } from "lucide-react";
+import { Activity, Boxes, Camera, CircleHelp, Cpu, Image, LayoutDashboard, ListChecks, Loader2, LogOut, MemoryStick, Plug, Radar, ScrollText, Send, Settings, Wifi, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLiveStatus } from "@/api/live";
 import { useJobs, useLogout, useNode, useNodeMetrics } from "@/api/queries";
@@ -15,6 +15,7 @@ const nav = [
   { href: "/events", label: "Events", icon: <Activity /> },
   { href: "/profiles", label: "Profiles", icon: <Boxes /> },
   { href: "/plugins", label: "Plugins", icon: <Plug /> },
+  { href: "/scraper", label: "Scraper", icon: <Radar /> },
   { href: "/assets", label: "Assets", icon: <Image /> },
   { href: "/targets", label: "Targets", icon: <Send /> },
   { href: "/jobs", label: "Jobs", icon: <ListChecks /> },

@@ -21,6 +21,7 @@ import {
   type ManualEvent,
   type RuleInput,
   type Settings,
+  type DeviceInput,
   type StorageInput,
   type TriggerInput,
   type TargetInput,
@@ -50,6 +51,7 @@ export const keys = {
   trustedKeys: ["trusted-keys"] as const,
   plugins: ["plugins"] as const,
   diagnostics: (id: string) => ["cameras", id, "diagnostics"] as const,
+  devices: ["devices"] as const,
   assets: ["assets"] as const,
   targets: ["targets"] as const,
   events: (cameraId?: string) => ["events", cameraId ?? "all"] as const,
@@ -545,6 +547,46 @@ export function useCameraLogs(id: string, limit: number) {
     queryKey: [...keys.diagnostics(id), "logs", limit],
     queryFn: async () => unwrap(await api.GET("/cameras/{id}/logs", { params: { path: { id }, query: { limit } } })).items,
     refetchInterval: 10_000,
+  });
+}
+
+// --- Scraper: devices ---
+
+export function useDevices() {
+  return useQuery({ queryKey: keys.devices, queryFn: async () => unwrap(await api.GET("/devices")).items });
+}
+
+export function useCreateDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: DeviceInput) => unwrap(await api.POST("/devices", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.devices }),
+  });
+}
+
+export function useUpdateDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: DeviceInput }) =>
+      unwrap(await api.PATCH("/devices/{id}", { params: { path: { id } }, body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.devices }),
+  });
+}
+
+export function useDeleteDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => unwrap(await api.DELETE("/devices/{id}", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.devices }),
+  });
+}
+
+/** Looks at a device read-only and records what it found (RN-17). */
+export function useProbeDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => unwrap(await api.POST("/devices/{id}/actions/probe", { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.devices }),
   });
 }
 

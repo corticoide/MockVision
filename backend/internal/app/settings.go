@@ -8,6 +8,7 @@ import (
 
 	"github.com/corticoide/mockvision/backend/internal/domain"
 	"github.com/corticoide/mockvision/backend/internal/netctl"
+	"github.com/corticoide/mockvision/backend/internal/scraper"
 	"github.com/corticoide/mockvision/backend/internal/store"
 	"github.com/corticoide/mockvision/backend/internal/store/db"
 )
@@ -31,6 +32,9 @@ type Settings struct {
 	// AllowUnsignedPlugins lets an admin enable plugins no trusted key
 	// signed (D84); turning it off disables them.
 	AllowUnsignedPlugins bool `json:"allow_unsigned_plugins"`
+	// ScrapeRatePerSecond bounds how many read-only requests a second the
+	// scraper sends a device, to protect it (D72).
+	ScrapeRatePerSecond int `json:"scrape_rate_per_second"`
 }
 
 // SettingsPatch changes some settings.
@@ -44,6 +48,7 @@ type SettingsPatch struct {
 	JobStepTimeoutSecs   *int     `json:"job_step_timeout_seconds,omitempty"`
 	NodeBridge           *bool    `json:"node_bridge,omitempty"`
 	AllowUnsignedPlugins *bool    `json:"allow_unsigned_plugins,omitempty"`
+	ScrapeRatePerSecond  *int     `json:"scrape_rate_per_second,omitempty"`
 }
 
 const settingsKey = "node"
@@ -51,7 +56,7 @@ const settingsKey = "node"
 func defaultSettings() Settings {
 	l := domain.DefaultAdmissionLimits()
 	return Settings{MaxCameras: l.MaxCameras, MaxRAMPercent: l.MaxRAMPercent, MaxCPUPercent: l.MaxCPUPercent, EventsRetentionDays: 7,
-		MaxJobs: 2, JobStepTimeoutSeconds: 600}
+		MaxJobs: 2, JobStepTimeoutSeconds: 600, ScrapeRatePerSecond: scraper.DefaultRate}
 }
 
 // Settings returns the current settings.
@@ -119,6 +124,12 @@ func (s *Service) UpdateSettings(ctx context.Context, actor Actor, p SettingsPat
 	}
 	if p.AllowUnsignedPlugins != nil {
 		set.AllowUnsignedPlugins = *p.AllowUnsignedPlugins
+	}
+	if p.ScrapeRatePerSecond != nil {
+		if *p.ScrapeRatePerSecond < 1 || *p.ScrapeRatePerSecond > 50 {
+			v.Add("scrape_rate_per_second", "must be between 1 and 50")
+		}
+		set.ScrapeRatePerSecond = *p.ScrapeRatePerSecond
 	}
 	// A new default network card or a bridge must not put cameras where
 	// the kernel or an access point cannot take them.

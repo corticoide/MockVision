@@ -159,6 +159,18 @@ type CameraUser struct {
 	Role        string
 }
 
+type Capture struct {
+	ID             string
+	DeviceID       string
+	JobID          string
+	ProgramRef     string
+	Status         string
+	ArtifactsJson  string
+	DraftProfileID sql.NullString
+	CreatedAt      int64
+	FinishedAt     sql.NullInt64
+}
+
 type ConnectionStat struct {
 	CameraID      string
 	Minute        int64
@@ -180,6 +192,20 @@ type Delivery struct {
 	HttpStatus sql.NullInt64
 	LatencyMs  sql.NullInt64
 	Error      string
+}
+
+type Device struct {
+	ID           string
+	Name         string
+	Host         string
+	PortsJson    string
+	Username     string
+	SecretEnc    []byte
+	Kind         string
+	Authorized   int64
+	DetectedJson string
+	CreatedAt    int64
+	UpdatedAt    int64
 }
 
 type Event struct {

@@ -329,6 +329,71 @@ export interface paths {
         patch: operations["updatePlugin"];
         trace?: never;
     };
+    "/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Devices registered to capture */
+        get: operations["listDevices"];
+        put?: never;
+        /**
+         * Register a device to capture (panel session only)
+         * @description Set `authorized` to confirm you own the device or are allowed to
+         *     capture it; no probe runs until it is set (RN-17). Credentials are
+         *     stored encrypted and never returned (RN-18).
+         */
+        post: operations["createDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["getDevice"];
+        put?: never;
+        post?: never;
+        /** Remove a device and its captures (panel session only) */
+        delete: operations["deleteDevice"];
+        options?: never;
+        head?: never;
+        /** Edit a device (panel session only) */
+        patch: operations["updateDevice"];
+        trace?: never;
+    };
+    "/devices/{id}/actions/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Look at a device read-only and record what it found (panel session only)
+         * @description Refused until the device is authorized (RN-17); paced by the node's scrape rate (D72).
+         */
+        post: operations["probeDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/trusted-keys": {
         parameters: {
             query?: never;
@@ -1384,6 +1449,8 @@ export interface components {
             node_bridge?: boolean;
             /** @description Let an admin enable plugins no trusted key signed (D84); turning it off disables them */
             allow_unsigned_plugins?: boolean;
+            /** @description Read-only requests a second the scraper sends a device (D72) */
+            scrape_rate_per_second?: number;
         };
         SettingsPatch: {
             max_cameras?: number;
@@ -1395,6 +1462,7 @@ export interface components {
             job_step_timeout_seconds?: number;
             node_bridge?: boolean;
             allow_unsigned_plugins?: boolean;
+            scrape_rate_per_second?: number;
         };
         NodeMetrics: {
             /** Format: date-time */
@@ -1542,6 +1610,54 @@ export interface components {
             kind: "added" | "removed" | "changed";
             /** @description What changed in it, as path: before → after */
             details?: string[];
+        };
+        Device: {
+            id: string;
+            name: string;
+            /** @description IP address or host name */
+            host: string;
+            ports: number[];
+            username?: string;
+            has_password: boolean;
+            /**
+             * @description simulated when the host is one of this node's cameras (D75)
+             * @enum {string}
+             */
+            kind: "real" | "simulated";
+            authorized: boolean;
+            detected?: components["schemas"]["Detected"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DeviceInput: {
+            name: string;
+            host: string;
+            ports?: number[];
+            username?: string;
+            /** @description Write-only; omit to keep, empty string to clear */
+            password?: string;
+            /** @description You own the device or are allowed to capture it (RN-17) */
+            authorized: boolean;
+        };
+        Detected: {
+            /** Format: date-time */
+            at: string;
+            reachable: boolean;
+            open_ports: number[];
+            vendor?: string;
+            model?: string;
+            firmware?: string;
+            services: {
+                port: number;
+                /** @enum {string} */
+                proto: "http" | "https" | "rtsp" | "onvif" | "snmp" | "unknown";
+                server?: string;
+                /** @enum {string} */
+                auth?: "basic" | "digest" | "none" | "";
+                note?: string;
+            }[];
         };
         Plugin: {
             id: string;
@@ -2919,6 +3035,153 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Plugin"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Devices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Device"][];
+                    };
+                };
+            };
+        };
+    };
+    createDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceInput"];
+            };
+        };
+        responses: {
+            /** @description Registered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Device */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    probeDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Device with its detection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
                 };
             };
             403: components["responses"]["Problem"];

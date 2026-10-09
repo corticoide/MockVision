@@ -38,6 +38,8 @@ tags:
     description: A camera's simulated SD card or NAS share and the recordings of its events (D68, D69)
   - name: diagnostics
     description: What each camera served, its clients, the requests its profile does not know and its log (D79, D92)
+  - name: scraper
+    description: Devices the user owns or is authorized to capture, read only, compiled into draft profiles (D44, RN-17)
 
 paths:
   /auth/setup:
@@ -310,6 +312,80 @@ paths:
                 enabled: { type: boolean }
       responses:
         "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Plugin" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /devices:
+    get:
+      tags: [scraper]
+      operationId: listDevices
+      summary: Devices registered to capture
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Device" } }
+    post:
+      tags: [scraper]
+      operationId: createDevice
+      summary: Register a device to capture (panel session only)
+      description: |
+        Set `authorized` to confirm you own the device or are allowed to
+        capture it; no probe runs until it is set (RN-17). Credentials are
+        stored encrypted and never returned (RN-18).
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/DeviceInput" } }
+      responses:
+        "201": { description: Registered, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /devices/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [scraper]
+      operationId: getDevice
+      responses:
+        "200": { description: Device, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [scraper]
+      operationId: updateDevice
+      summary: Edit a device (panel session only)
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/DeviceInput" } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [scraper]
+      operationId: deleteDevice
+      summary: Remove a device and its captures (panel session only)
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /devices/{id}/actions/probe:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [scraper]
+      operationId: probeDevice
+      summary: Look at a device read-only and record what it found (panel session only)
+      description: Refused until the device is authorized (RN-17); paced by the node's scrape rate (D72).
+      responses:
+        "200": { description: Device with its detection, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
@@ -1457,6 +1533,7 @@ components:
         job_step_timeout_seconds: { type: integer, minimum: 10, maximum: 3600, description: Bound of each step of a job (D72) }
         node_bridge: { type: boolean, description: "Let the node reach its macvlan cameras through an extra interface (D26); off by default" }
         allow_unsigned_plugins: { type: boolean, description: "Let an admin enable plugins no trusted key signed (D84); turning it off disables them" }
+        scrape_rate_per_second: { type: integer, minimum: 1, maximum: 50, description: "Read-only requests a second the scraper sends a device (D72)" }
     SettingsPatch:
       type: object
       properties:
@@ -1469,6 +1546,7 @@ components:
         job_step_timeout_seconds: { type: integer }
         node_bridge: { type: boolean }
         allow_unsigned_plugins: { type: boolean }
+        scrape_rate_per_second: { type: integer }
     NodeMetrics:
       type: object
       required: [at, cpu_percent, cpu_sustained_percent, mem_total, mem_used, net_interface, net_rx_bps, net_tx_bps, cameras, camera_counts, db, limits]
@@ -1615,6 +1693,52 @@ components:
         key: { type: string }
         kind: { type: string, enum: [added, removed, changed] }
         details: { type: array, items: { type: string }, description: "What changed in it, as path: before → after" }
+    Device:
+      type: object
+      required: [id, name, host, ports, has_password, kind, authorized, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        host: { type: string, description: IP address or host name }
+        ports: { type: array, items: { type: integer } }
+        username: { type: string }
+        has_password: { type: boolean }
+        kind: { type: string, enum: [real, simulated], description: "simulated when the host is one of this node's cameras (D75)" }
+        authorized: { type: boolean }
+        detected: { $ref: "#/components/schemas/Detected" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DeviceInput:
+      type: object
+      required: [name, host, authorized]
+      properties:
+        name: { type: string }
+        host: { type: string }
+        ports: { type: array, items: { type: integer } }
+        username: { type: string }
+        password: { type: string, description: "Write-only; omit to keep, empty string to clear" }
+        authorized: { type: boolean, description: You own the device or are allowed to capture it (RN-17) }
+    Detected:
+      type: object
+      required: [at, open_ports, services, reachable]
+      properties:
+        at: { type: string, format: date-time }
+        reachable: { type: boolean }
+        open_ports: { type: array, items: { type: integer } }
+        vendor: { type: string }
+        model: { type: string }
+        firmware: { type: string }
+        services:
+          type: array
+          items:
+            type: object
+            required: [port, proto]
+            properties:
+              port: { type: integer }
+              proto: { type: string, enum: [http, https, rtsp, onvif, snmp, unknown] }
+              server: { type: string }
+              auth: { type: string, enum: [basic, digest, none, ""] }
+              note: { type: string }
     Plugin:
       type: object
       required: [id, package_id, package, engine, version, role, permissions, sockets, emits, signature_status, sha256, enabled, installed_at]

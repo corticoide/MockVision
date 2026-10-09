@@ -250,6 +250,16 @@ func (s *Server) Handler() http.Handler {
 	panel("POST /api/v1/tokens", s.handleCreateToken)
 	panel("DELETE /api/v1/tokens/{id}", s.handleRevokeToken)
 
+	// The scraper captures devices the user owns or is authorized to
+	// capture, read only (RN-17); a leaked read token cannot register one
+	// or start a capture.
+	auth("GET /api/v1/devices", s.handleListDevices)
+	panel("POST /api/v1/devices", s.handleCreateDevice)
+	auth("GET /api/v1/devices/{id}", s.handleGetDevice)
+	panel("PATCH /api/v1/devices/{id}", s.handleUpdateDevice)
+	panel("DELETE /api/v1/devices/{id}", s.handleDeleteDevice)
+	panel("POST /api/v1/devices/{id}/actions/probe", s.handleProbeDevice)
+
 	auth("GET /api/v1/audit", s.handleListAudit)
 
 	auth("GET /api/v1/jobs", s.handleListJobs)

@@ -518,6 +518,71 @@ func (s *Server) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// --- Devices (scraper) ---
+
+func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
+	list, err := s.svc.ListDevices(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+}
+
+func (s *Server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
+	var in app.DeviceInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	d, err := s.svc.CreateDevice(r.Context(), actor(r), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, d)
+}
+
+func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
+	d, err := s.svc.GetDevice(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
+	var in app.DeviceInput
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	d, err := s.svc.UpdateDevice(r.Context(), actor(r), r.PathValue("id"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.DeleteDevice(r.Context(), actor(r), r.PathValue("id")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleProbeDevice(w http.ResponseWriter, r *http.Request) {
+	d, err := s.svc.ProbeDevice(r.Context(), actor(r), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
 func (s *Server) handleListTrustedKeys(w http.ResponseWriter, r *http.Request) {
 	list, err := s.svc.ListTrustedKeys(r.Context())
 	if err != nil {

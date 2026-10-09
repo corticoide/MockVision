@@ -61,13 +61,13 @@ func (nopPublisher) Forget(string)               {}
 
 // Service is the main service.
 type Service struct {
-	opts    Options
-	log     *slog.Logger
-	store   *store.Store
-	box     *secret.Box
-	lib     *media.Library
+	opts  Options
+	log   *slog.Logger
+	store *store.Store
+	box   *secret.Box
+	lib   *media.Library
 	// engs resolves the built-in engines and the enabled plugins'.
-	engs atomic.Pointer[engineSet]
+	engs    atomic.Pointer[engineSet]
 	rt      netctl.Runtime
 	pub     Publisher
 	node    *telemetry.NodeSampler
