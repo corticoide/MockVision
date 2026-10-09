@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, FileDown, Radar, ScanSearch, Trash2, Wifi } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { ApiError, type DeviceInput, type Found, errorMessage } from "@/api/client";
-import { useCaptures, useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice, usePrograms, useStartCapture } from "@/api/queries";
+import { ApiError, type Capture, type DeviceInput, type Found, errorMessage } from "@/api/client";
+import { useCaptures, useCompileCapture, useCreateDevice, useDeleteDevice, useDevices, useDiscover, useProbeDevice, usePrograms, useStartCapture } from "@/api/queries";
 import { Badge, Mono } from "@/components/badges";
 import { CopyButton } from "@/components/CopyButton";
 import { toast } from "@/components/toast";
@@ -11,6 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useT } from "@/lib/i18n";
+import { navigate } from "@/lib/router";
 
 /** Register a camera the user owns or is authorized to capture, look at it read-only, and compile a draft profile (D44, RN-17). */
 export function ScraperPage() {
@@ -320,7 +321,7 @@ function DiscoverDialog({ onClose, onRegister }: { onClose: () => void; onRegist
   );
 }
 
-function DeviceCaptures({ device }: { device: { id: string; authorized: boolean; receiver_url: string } }) {
+function DeviceCaptures({ device }: { device: { id: string; authorized: boolean; receiver_url: string; detected?: { vendor?: string } | null } }) {
   const t = useT();
   const { data: programs } = usePrograms(device.id);
   const { data: captures } = useCaptures(device.id, true);
@@ -387,7 +388,7 @@ function DeviceCaptures({ device }: { device: { id: string; authorized: boolean;
                   {c.result ? t("{ok} of {n} steps", { ok: c.result.ok, n: c.result.steps }) : "—"}
                 </TD>
                 <TD className="text-right">
-                  {c.status === "done" && !c.draft_profile_id && <CompileButton capture={c} />}
+                  {c.status === "done" && !c.draft_profile_id && <CompileButton capture={c} vendor={device.detected?.vendor} />}
                   {c.draft_profile_id && (
                     <Badge tone="ok" icon={<FileDown />}>
                       {t("Draft profile")}
@@ -403,13 +404,68 @@ function DeviceCaptures({ device }: { device: { id: string; authorized: boolean;
   );
 }
 
-function CompileButton({ capture }: { capture: { id: string } }) {
+function CompileButton({ capture, vendor }: { capture: Capture; vendor?: string }) {
   const t = useT();
-  // Feature 20 wires compilation; the button appears once a capture is done.
-  void capture;
+  const [open, setOpen] = useState(false);
   return (
-    <Button size="sm" variant="ghost" disabled title={t("Compile to a draft profile (coming next)")}>
-      <FileDown /> {t("Compile")}
-    </Button>
+    <>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        <FileDown /> {t("Compile")}
+      </Button>
+      {open && <CompileDialog capture={capture} vendor={vendor} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function CompileDialog({ capture, vendor, onClose }: { capture: Capture; vendor?: string; onClose: () => void }) {
+  const t = useT();
+  const compile = useCompileCapture();
+  const [profileId, setProfileId] = useState("");
+  const [name, setName] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setErrors({});
+    compile.mutate(
+      { id: capture.id, body: { profile_id: profileId.trim(), name: name.trim() || undefined, vendor } },
+      {
+        onSuccess: (res) => {
+          onClose();
+          if (res.profile) {
+            toast(t("Draft profile {id} compiled", { id: `${res.profile.profile_id}@${res.profile.version}` }), "ok");
+            navigate(`/profiles/${res.profile.profile_id}/${encodeURIComponent(res.profile.version)}`);
+          }
+        },
+        onError: (err) => {
+          if (err instanceof ApiError) setErrors(err.fieldErrors());
+          else toast(errorMessage(err), "error");
+        },
+      },
+    );
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={t("Compile to a draft profile")}
+      description={t("Reproduces what the capture recorded, read-only, and redacts the device's address, MAC and serial (RN-18). It installs as a draft you can edit.")}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
+          <Button type="submit" form="compile" variant="primary" disabled={compile.isPending || !profileId.trim()}>
+            {compile.isPending ? t("Compiling…") : t("Compile")}
+          </Button>
+        </>
+      }
+    >
+      <form id="compile" onSubmit={submit} className="flex flex-col gap-3">
+        <Field label={t("Profile ID")} error={errors["profile_id"]} hint={t("vendor/model, in lower case")}>
+          <Input value={profileId} onChange={(e) => setProfileId(e.target.value)} placeholder="acme/cam-x" className="font-mono" autoFocus />
+        </Field>
+        <Field label={t("Name")}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Acme camera X")} />
+        </Field>
+      </form>
+    </Dialog>
   );
 }

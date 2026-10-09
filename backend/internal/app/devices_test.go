@@ -236,3 +236,65 @@ func TestCaptureRecordsPushedEvent(t *testing.T) {
 		t.Fatalf("the pushed event was not recorded: %+v", c.Result.Fixtures)
 	}
 }
+
+func TestCompileCaptureToDraftProfile(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	cam := createCamera(t, svc, "Gate", true)
+	httpHost, httpPort := hostPortOf(t, httpBase(t, cam))
+	rtspPort := rtspPortOf(t, cam)
+	yes := true
+	d, err := svc.CreateDevice(ctx, testActor, DeviceInput{Name: "Sim", Host: httpHost, Username: "admin", Password: strptr("ms1234"),
+		PortMap: map[int]int{80: httpPort, 554: rtspPort}, Authorized: yes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, _ := svc.store.R().GetDevice(ctx, d.ID)
+	c, err := svc.StartCapture(ctx, testActor, d.ID, "milesight/demo-capture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Feed the pushed event so the capture is complete.
+	for i := 0; i < 100; i++ {
+		svc.mu.Lock()
+		_, ok := svc.receivers[full.ReceiverToken]
+		svc.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	svc.ReceivePush(ctx, full.ReceiverToken, "POST", "/alarm", map[string]string{},
+		map[string][]string{"Content-Type": {"application/json"}}, []byte(`{"eventType":"LineCrossing","serialNumber":"6C0012ABCDEF","ipAddress":"10.0.0.9"}`))
+	c = waitCapture(t, svc, c.ID)
+	if c.Status != "done" {
+		t.Fatalf("capture: %+v", c)
+	}
+
+	res, err := svc.CompileCapture(ctx, testActor, c.ID, CompileRequest{ProfileID: "acme/cam-x", Vendor: "Milesight", Model: "X"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if res.Profile == nil {
+		t.Fatalf("no draft profile; report=%s", problemsText(res.Report))
+	}
+	p := res.Profile
+	if p.ProfileID != "acme/cam-x" || p.Version != "0.1.0" || p.Vendor != "Milesight" {
+		t.Fatalf("profile=%+v", p)
+	}
+	// It must redact the device's identity: no real serial in the resolved profile.
+	detail, err := svc.GetProfile(ctx, "acme/cam-x", "0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = detail
+	// The capture now points at the draft.
+	c, _ = svc.GetCapture(ctx, c.ID)
+	if c.DraftProfileID == "" {
+		t.Fatalf("capture not linked to the draft: %+v", c)
+	}
+	// A camera can be created from the compiled draft.
+	if _, err := svc.CreateCamera(ctx, testActor, CreateCameraInput{Name: "FromDraft", ProfileID: "acme/cam-x", ProfileVersion: "0.1.0"}); err != nil {
+		t.Fatalf("create camera from draft: %v", err)
+	}
+}

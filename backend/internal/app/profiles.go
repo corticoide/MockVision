@@ -205,6 +205,7 @@ const (
 	sourceUpload    = "upload"
 	sourceCatalog   = "catalog"
 	sourceDuplicate = "duplicate"
+	sourceCapture   = "capture"
 )
 
 // installPackage installs a validated package as an immutable version

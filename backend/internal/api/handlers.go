@@ -596,6 +596,20 @@ func (s *Server) handleReceivePush(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("OK"))
 }
 
+func (s *Server) handleCompileCapture(w http.ResponseWriter, r *http.Request) {
+	var in app.CompileRequest
+	if err := decode(r, &in); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	res, err := s.svc.CompileCapture(r.Context(), actor(r), r.PathValue("id"), in)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
 func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
 	vendor := r.URL.Query().Get("vendor")
 	if id := r.URL.Query().Get("device"); id != "" {

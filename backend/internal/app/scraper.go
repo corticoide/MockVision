@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -410,4 +411,84 @@ func (s *Service) ReceivePush(ctx context.Context, token, method, path string, q
 	}
 	_ = d
 	return true
+}
+
+// --- Compile (feature 20) ---
+
+// CompileRequest names the draft profile a capture compiles into.
+type CompileRequest struct {
+	ProfileID string `json:"profile_id"`
+	Version   string `json:"version"`
+	Name      string `json:"name"`
+	Vendor    string `json:"vendor"`
+	Model     string `json:"model"`
+}
+
+// CompileResponse is the outcome of compiling a capture: the imported
+// draft profile and any warnings.
+type CompileResponse struct {
+	Profile  *ProfileView `json:"profile,omitempty"`
+	Report   pkg.Report   `json:"report"`
+	Warnings []string     `json:"warnings"`
+}
+
+// CompileCapture turns a finished capture into a draft profile: it
+// reproduces the HTTP routes and the RTSP stream it recorded, declares the
+// pushed event, redacts the device's identity (RN-18) and imports the
+// result as a draft (D75, D77).
+func (s *Service) CompileCapture(ctx context.Context, actor Actor, captureID string, in CompileRequest) (*CompileResponse, error) {
+	c, err := s.store.R().GetCapture(ctx, captureID)
+	if err != nil {
+		return nil, store.NotFound(err)
+	}
+	if c.Status != "done" {
+		return nil, domain.Conflict("status", "the capture is %s; only a finished capture compiles", c.Status)
+	}
+	if !domain.ValidProfileID(in.ProfileID) {
+		return nil, domain.Invalid("profile_id", "must look like vendor/model, in lower case")
+	}
+	version := in.Version
+	if version == "" {
+		version = "0.1.0"
+	}
+	d, err := s.store.R().GetDevice(ctx, c.DeviceID)
+	if err != nil {
+		return nil, store.NotFound(err)
+	}
+	var result scraper.CaptureResult
+	if err := json.Unmarshal([]byte(c.ArtifactsJson), &result); err != nil {
+		return nil, fmt.Errorf("the capture's recordings are unreadable: %w", err)
+	}
+	name := in.Name
+	if name == "" {
+		name = in.ProfileID
+	}
+	compiled, err := scraper.Compile(scraper.CompileInput{
+		ProfileID: in.ProfileID, Version: version, Name: name, Vendor: in.Vendor, Model: in.Model,
+		Username: d.Username, Host: d.Host,
+	}, result)
+	if err != nil {
+		return nil, domain.Invalid("capture", "%v", err)
+	}
+	files := map[string][]byte{"profile.yaml": compiled.ProfileYAML}
+	if len(compiled.FixturesYAML) > 0 {
+		files["fixtures/captured.yaml"] = compiled.FixturesYAML
+	}
+	data, err := pkg.Pack(in.ProfileID, version, pkg.Provenance{Source: "captured", CapturedAt: time.Now().Format("2006-01-02")}, files)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.importAs(ctx, actor, pkg.FileName(in.ProfileID, version), data, sourceCapture)
+	if err != nil {
+		return nil, err
+	}
+	if res.Profile != nil {
+		prof, perr := s.store.R().GetProfileByRef(ctx, db.GetProfileByRefParams{ProfileID: in.ProfileID, Version: version})
+		if perr == nil {
+			_ = s.store.W().FinishCapture(ctx, db.FinishCaptureParams{ID: captureID, Status: c.Status, ArtifactsJson: c.ArtifactsJson,
+				DraftProfileID: sql.NullString{String: prof.ID, Valid: true}, FinishedAt: c.FinishedAt})
+		}
+	}
+	s.audit(ctx, actor, "scraper.compile", "capture", captureID, map[string]any{"profile": in.ProfileID, "version": version})
+	return &CompileResponse{Profile: res.Profile, Report: res.Report, Warnings: compiled.Warnings}, nil
 }

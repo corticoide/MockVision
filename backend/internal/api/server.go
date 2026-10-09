@@ -260,6 +260,7 @@ func (s *Server) Handler() http.Handler {
 	panel("POST /api/v1/devices/{id}/captures", s.handleStartCapture)
 	auth("GET /api/v1/devices/{id}/captures", s.handleListCaptures)
 	auth("GET /api/v1/captures/{id}", s.handleGetCapture)
+	panel("POST /api/v1/captures/{id}/actions/compile", s.handleCompileCapture)
 	for _, m := range []string{"POST", "PUT", "GET"} {
 		pub(m+" /api/v1/scraper/receive/{token}", s.handleReceivePush)
 	}

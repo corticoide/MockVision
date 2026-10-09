@@ -581,6 +581,18 @@ export function useDeleteDevice() {
   });
 }
 
+/** Compiles a finished capture into a draft profile (D75). */
+export function useCompileCapture() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: { profile_id: string; version?: string; name?: string; vendor?: string; model?: string } }) =>
+      unwrap(await api.POST("/captures/{id}/actions/compile", { params: { path: { id } }, body })),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.profiles });
+    },
+  });
+}
+
 /** Looks for cameras on the LAN read-only (RN-17). */
 export function useDiscover() {
   return useMutation({

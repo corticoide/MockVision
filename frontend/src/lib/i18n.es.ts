@@ -1233,7 +1233,11 @@ export const es: Record<string, string> = {
   "Program": "Programa",
   "{ok} of {n} steps": "{ok} de {n} pasos",
   "Draft profile": "Perfil borrador",
-  "Compile to a draft profile (coming next)": "Compilar a un perfil borrador (próximamente)",
   "Compile": "Compilar",
   "Event receiver URL (point the camera's alarm here):": "URL del receptor de eventos (apuntá acá la alarma de la cámara):",
+  "Draft profile {id} compiled": "Perfil borrador {id} compilado",
+  "Compile to a draft profile": "Compilar a un perfil borrador",
+  "Reproduces what the capture recorded, read-only, and redacts the device's address, MAC and serial (RN-18). It installs as a draft you can edit.": "Reproduce lo que grabó la captura, de solo lectura, y oculta la dirección, la MAC y la serie del equipo (RN-18). Se instala como un borrador que podés editar.",
+  "Compiling…": "Compilando…",
+  "Acme camera X": "Cámara Acme X",
 };

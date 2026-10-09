@@ -409,6 +409,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/captures/{id}/actions/compile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compile a finished capture into a draft profile (panel session only)
+         * @description Reproduces the HTTP routes and the RTSP stream the capture
+         *     recorded, declares the pushed event, redacts the device's address,
+         *     MAC and serial (RN-18), and imports the result as a draft (D75).
+         */
+        post: operations["compileCapture"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/scraper/actions/discover": {
         parameters: {
             query?: never;
@@ -1671,7 +1695,7 @@ export interface components {
              * @description catalog: shipped in the binary, read only
              * @enum {string}
              */
-            source?: "upload" | "catalog" | "duplicate";
+            source?: "upload" | "catalog" | "duplicate" | "capture";
             /** @description The parent the profile was resolved with */
             extends?: string;
             archived: boolean;
@@ -3347,6 +3371,48 @@ export interface operations {
                 };
             };
             404: components["responses"]["Problem"];
+        };
+    };
+    compileCapture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description vendor/model, lower case */
+                    profile_id: string;
+                    /** @description default 0.1.0 */
+                    version?: string;
+                    name?: string;
+                    vendor?: string;
+                    model?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Draft profile compiled */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        profile?: components["schemas"]["Profile"];
+                        report: components["schemas"]["ImportReport"];
+                        warnings: string[];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     discover: {

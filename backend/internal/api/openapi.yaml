@@ -409,6 +409,46 @@ paths:
       responses:
         "200": { description: Capture with its recordings, content: { application/json: { schema: { $ref: "#/components/schemas/Capture" } } } }
         "404": { $ref: "#/components/responses/Problem" }
+  /captures/{id}/actions/compile:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [scraper]
+      operationId: compileCapture
+      summary: Compile a finished capture into a draft profile (panel session only)
+      description: |
+        Reproduces the HTTP routes and the RTSP stream the capture
+        recorded, declares the pushed event, redacts the device's address,
+        MAC and serial (RN-18), and imports the result as a draft (D75).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_id]
+              properties:
+                profile_id: { type: string, description: "vendor/model, lower case" }
+                version: { type: string, description: "default 0.1.0" }
+                name: { type: string }
+                vendor: { type: string }
+                model: { type: string }
+      responses:
+        "201":
+          description: Draft profile compiled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [report, warnings]
+                properties:
+                  profile: { $ref: "#/components/schemas/Profile" }
+                  report: { $ref: "#/components/schemas/ImportReport" }
+                  warnings: { type: array, items: { type: string } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /scraper/actions/discover:
     post:
       tags: [scraper]
@@ -1773,7 +1813,7 @@ components:
         level: { type: string, enum: [draft, documented, captured, verified] }
         signature_status: { type: string, enum: [official, trusted, unsigned, invalid] }
         signer: { type: string, description: The trusted key that signed the package }
-        source: { type: string, enum: [upload, catalog, duplicate], description: "catalog: shipped in the binary, read only" }
+        source: { type: string, enum: [upload, catalog, duplicate, capture], description: "catalog: shipped in the binary, read only" }
         extends: { type: string, description: The parent the profile was resolved with, pinned }
         archived: { type: boolean }
         camera_count: { type: integer }
