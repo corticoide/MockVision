@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/bluenviron/gortsplib/v5 v5.6.6
-	github.com/bluenviron/mediacommon/v2 v2.9.5
+	github.com/bluenviron/mediacommon/v2 v2.9.6
 	github.com/coder/websocket v1.8.15
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pion/rtp v1.10.5
